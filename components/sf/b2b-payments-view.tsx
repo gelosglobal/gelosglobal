@@ -52,23 +52,26 @@ import { formatGhs } from '@/lib/dtc-orders'
 
 type CollectionRow = {
   id: string
+  outletName: string
+  invoiceNumber: string
   amountGhs: number
-  collectedAt: string
-  note: string | null
-  outletName: string | null
+  paidGhs: number
+  balanceGhs: number
+  dueAt: string | null
   repName: string | null
+  status: 'paid' | 'overdue' | 'open'
+  notes: string | null
   createdAt: string
+  updatedAt: string
 }
 
 type B2bPaymentsKpis = {
-  periodDays: number
-  periodStart: string
-  periodEnd: string
   invoicedGhs: number
-  collectedGhs: number
+  paidGhs: number
   outstandingGhs: number
+  overdueGhs: number
   collectionRatePct: number | null
-  totalLoggedEntries: number
+  totalInvoices: number
 }
 
 const PERIOD_OPTIONS = [7, 14, 30, 60, 90] as const
@@ -81,17 +84,20 @@ function dateToIsoNoon(value: string): string | undefined {
   return new Date(y, m - 1, d, 12, 0, 0).toISOString()
 }
 
-function isoToDateInput(iso: string): string {
+function isoToDateInput(iso: string | null): string {
+  if (!iso) return ''
   return iso.slice(0, 10)
 }
 
 function emptyForm() {
   return {
-    amountGhs: '',
-    collectedDate: new Date().toISOString().slice(0, 10),
     outletName: '',
+    invoiceNumber: '',
+    amountGhs: '',
+    paidGhs: '',
+    dueDate: '',
     repName: '',
-    note: '',
+    notes: '',
   }
 }
 
@@ -124,10 +130,10 @@ export function B2bPaymentsView() {
       }
       if (!res.ok) throw new Error('Failed to load')
       const data = (await res.json()) as {
-        collections: CollectionRow[]
+        invoices: CollectionRow[]
         kpis: B2bPaymentsKpis
       }
-      setCollections(data.collections)
+      setCollections(data.invoices)
       setKpis(data.kpis)
     } catch {
       toast.error('Could not load B2B payments')
@@ -145,37 +151,51 @@ export function B2bPaymentsView() {
     if (!q) return collections
     return collections.filter(
       (c) =>
+        c.outletName.toLowerCase().includes(q) ||
+        c.invoiceNumber.toLowerCase().includes(q) ||
         String(c.amountGhs).includes(q) ||
-        (c.outletName?.toLowerCase().includes(q) ?? false) ||
+        String(c.paidGhs).includes(q) ||
+        String(c.balanceGhs).includes(q) ||
         (c.repName?.toLowerCase().includes(q) ?? false) ||
-        (c.note?.toLowerCase().includes(q) ?? false),
+        (c.notes?.toLowerCase().includes(q) ?? false) ||
+        c.status.toLowerCase().includes(q),
     )
   }, [collections, query])
 
   function openEdit(c: CollectionRow) {
     setEditId(c.id)
     setEditForm({
+      outletName: c.outletName,
+      invoiceNumber: c.invoiceNumber,
       amountGhs: String(c.amountGhs),
-      collectedDate: isoToDateInput(c.collectedAt),
-      outletName: c.outletName ?? '',
+      paidGhs: String(c.paidGhs),
+      dueDate: isoToDateInput(c.dueAt),
       repName: c.repName ?? '',
-      note: c.note ?? '',
+      notes: c.notes ?? '',
     })
     setEditOpen(true)
   }
 
   async function submitCreate(e: React.FormEvent) {
     e.preventDefault()
-    const amt = Number(form.amountGhs)
-    if (!Number.isFinite(amt) || amt <= 0) {
-      toast.error('Enter a valid amount')
+    const outletName = form.outletName.trim()
+    const invoiceNumber = form.invoiceNumber.trim()
+    if (!outletName || !invoiceNumber) {
+      toast.error('Outlet and invoice are required')
       return
     }
-    const collectedAt = dateToIsoNoon(form.collectedDate)
-    if (!collectedAt) {
-      toast.error('Pick a collection date')
+    const amountGhs = Number(form.amountGhs)
+    const paidGhs = form.paidGhs.trim() === '' ? 0 : Number(form.paidGhs)
+    if (
+      !Number.isFinite(amountGhs) ||
+      amountGhs < 0 ||
+      !Number.isFinite(paidGhs) ||
+      paidGhs < 0
+    ) {
+      toast.error('Enter valid numbers for amount and paid')
       return
     }
+    const dueAt = form.dueDate.trim() ? dateToIsoNoon(form.dueDate) : undefined
     setCreating(true)
     try {
       const res = await fetch('/api/sf/b2b-payments', {
@@ -183,11 +203,13 @@ export function B2bPaymentsView() {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amountGhs: amt,
-          collectedAt,
-          outletName: form.outletName.trim() || undefined,
+          outletName,
+          invoiceNumber,
+          amountGhs,
+          paidGhs,
+          dueAt,
           repName: form.repName.trim() || undefined,
-          note: form.note.trim() || undefined,
+          notes: form.notes.trim() || undefined,
         }),
       })
       if (res.status === 401) {
@@ -195,12 +217,12 @@ export function B2bPaymentsView() {
         return
       }
       if (!res.ok) throw new Error('Create failed')
-      toast.success('Collection logged')
+      toast.success('Invoice saved')
       setCreateOpen(false)
       setForm(emptyForm())
       void load()
     } catch {
-      toast.error('Could not log collection')
+      toast.error('Could not save invoice')
     } finally {
       setCreating(false)
     }
@@ -209,16 +231,24 @@ export function B2bPaymentsView() {
   async function submitEdit(e: React.FormEvent) {
     e.preventDefault()
     if (!editId) return
-    const amt = Number(editForm.amountGhs)
-    if (!Number.isFinite(amt) || amt <= 0) {
-      toast.error('Enter a valid amount')
+    const outletName = editForm.outletName.trim()
+    const invoiceNumber = editForm.invoiceNumber.trim()
+    if (!outletName || !invoiceNumber) {
+      toast.error('Outlet and invoice are required')
       return
     }
-    const collectedAt = dateToIsoNoon(editForm.collectedDate)
-    if (!collectedAt) {
-      toast.error('Pick a collection date')
+    const amountGhs = Number(editForm.amountGhs)
+    const paidGhs = editForm.paidGhs.trim() === '' ? 0 : Number(editForm.paidGhs)
+    if (
+      !Number.isFinite(amountGhs) ||
+      amountGhs < 0 ||
+      !Number.isFinite(paidGhs) ||
+      paidGhs < 0
+    ) {
+      toast.error('Enter valid numbers for amount and paid')
       return
     }
+    const dueAt = editForm.dueDate.trim() ? dateToIsoNoon(editForm.dueDate) : null
     setEditing(true)
     try {
       const res = await fetch(`/api/sf/b2b-payments/${editId}`, {
@@ -226,12 +256,13 @@ export function B2bPaymentsView() {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amountGhs: amt,
-          collectedAt,
-          outletName:
-            editForm.outletName.trim() === '' ? null : editForm.outletName.trim(),
+          outletName,
+          invoiceNumber,
+          amountGhs,
+          paidGhs,
+          dueAt,
           repName: editForm.repName.trim() === '' ? null : editForm.repName.trim(),
-          note: editForm.note.trim() === '' ? null : editForm.note.trim(),
+          notes: editForm.notes.trim() === '' ? null : editForm.notes.trim(),
         }),
       })
       if (res.status === 401) {
@@ -275,24 +306,28 @@ export function B2bPaymentsView() {
       return
     }
     const header = [
-      'amountGhs',
-      'collectedAt',
-      'outletName',
-      'repName',
-      'note',
-      'createdAt',
+      'outlet',
+      'invoice',
+      'amount',
+      'paid',
+      'balance',
+      'due',
+      'rep',
+      'status',
     ]
     const esc = (s: string) => `"${s.replace(/"/g, '""')}"`
     const lines = [
       header.join(','),
       ...collections.map((c) =>
         [
+          esc(c.outletName),
+          esc(c.invoiceNumber),
           c.amountGhs,
-          c.collectedAt,
-          c.outletName ? esc(c.outletName) : '',
+          c.paidGhs,
+          c.balanceGhs,
+          c.dueAt ?? '',
           c.repName ? esc(c.repName) : '',
-          c.note ? esc(c.note) : '',
-          c.createdAt,
+          c.status,
         ].join(','),
       ),
     ]
@@ -300,7 +335,7 @@ export function B2bPaymentsView() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `b2b-cash-collections-${new Date().toISOString().slice(0, 10)}.csv`
+    a.download = `b2b-invoices-${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
     toast.success('Download started')
@@ -310,7 +345,7 @@ export function B2bPaymentsView() {
     <div className="flex min-h-0 flex-col">
       <SfPageHeader
         title="B2B Payments"
-        description="Top-line KPIs use a rolling window: Invoiced = B2B portal orders, Collected = logged trade cash, Outstanding = manual AR from Finance Layer. Collection rate is collected ÷ invoiced. Log cash below; portal orders come from the Orders Engine."
+        description="Invoice ledger for B2B receivables. Track amount, paid, balance, due dates, and rep attribution."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-2">
@@ -353,75 +388,90 @@ export function B2bPaymentsView() {
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5">
                   <Plus className="h-4 w-4" />
-                  Log collection
+                  Add invoice
                 </Button>
               </DialogTrigger>
               <DialogContent className="max-h-[min(90vh,40rem)] overflow-y-auto sm:max-w-lg">
                 <form onSubmit={submitCreate}>
                   <DialogHeader>
-                    <DialogTitle>Log B2B cash collection</DialogTitle>
+                    <DialogTitle>Add B2B invoice</DialogTitle>
                     <DialogDescription>
-                      Record cash or equivalent collected at an outlet. Same data as Finance Layer →
-                      Log B2B cash.
+                      Create an invoice row with amount, paid, balance, due date, and rep.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4 py-4">
                     <div className="space-y-2">
-                      <Label htmlFor="b2b-amt">Amount (GHS)</Label>
+                      <Label htmlFor="b2b-outlet">Outlet</Label>
                       <Input
-                        id="b2b-amt"
-                        inputMode="decimal"
-                        value={form.amountGhs}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, amountGhs: e.target.value }))
-                        }
-                        placeholder="0.00"
+                        id="b2b-outlet"
+                        value={form.outletName}
+                        onChange={(e) => setForm((f) => ({ ...f, outletName: e.target.value }))}
+                        placeholder="Customer / store name"
                         required
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="b2b-date">Collection date</Label>
+                      <Label htmlFor="b2b-invoice">Invoice</Label>
                       <Input
-                        id="b2b-date"
-                        type="date"
-                        value={form.collectedDate}
+                        id="b2b-invoice"
+                        value={form.invoiceNumber}
                         onChange={(e) =>
-                          setForm((f) => ({ ...f, collectedDate: e.target.value }))
+                          setForm((f) => ({ ...f, invoiceNumber: e.target.value }))
                         }
+                        placeholder="INV-000123"
                         required
                       />
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
-                        <Label htmlFor="b2b-outlet">Outlet (optional)</Label>
+                        <Label htmlFor="b2b-amt">Amount (GHS)</Label>
                         <Input
-                          id="b2b-outlet"
-                          value={form.outletName}
-                          onChange={(e) =>
-                            setForm((f) => ({ ...f, outletName: e.target.value }))
-                          }
-                          placeholder="Customer / store name"
+                          id="b2b-amt"
+                          inputMode="decimal"
+                          value={form.amountGhs}
+                          onChange={(e) => setForm((f) => ({ ...f, amountGhs: e.target.value }))}
+                          placeholder="0.00"
+                          required
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="b2b-rep">Rep (optional)</Label>
+                        <Label htmlFor="b2b-paid">Paid (GHS)</Label>
+                        <Input
+                          id="b2b-paid"
+                          inputMode="decimal"
+                          value={form.paidGhs}
+                          onChange={(e) => setForm((f) => ({ ...f, paidGhs: e.target.value }))}
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="b2b-due">Due date</Label>
+                        <Input
+                          id="b2b-due"
+                          type="date"
+                          value={form.dueDate}
+                          onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="b2b-rep">Rep</Label>
                         <Input
                           id="b2b-rep"
                           value={form.repName}
-                          onChange={(e) =>
-                            setForm((f) => ({ ...f, repName: e.target.value }))
-                          }
-                          placeholder="Who collected"
+                          onChange={(e) => setForm((f) => ({ ...f, repName: e.target.value }))}
+                          placeholder="Owner / collector"
                         />
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="b2b-note">Note</Label>
+                      <Label htmlFor="b2b-note">Notes</Label>
                       <Textarea
                         id="b2b-note"
-                        value={form.note}
-                        onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
-                        placeholder="Invoice ref, payment type…"
+                        value={form.notes}
+                        onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+                        placeholder="Context, payment method, disputes…"
                         rows={3}
                         className="resize-y"
                       />
@@ -438,7 +488,7 @@ export function B2bPaymentsView() {
                           Saving
                         </>
                       ) : (
-                        'Save'
+                        'Save invoice'
                       )}
                     </Button>
                   </DialogFooter>
@@ -459,16 +509,16 @@ export function B2bPaymentsView() {
                   {formatGhs(kpis.invoicedGhs)}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  B2B portal orders · last {kpis.periodDays} days
+                  Total invoice amount
                 </p>
               </Card>
               <Card className="p-4">
-                <p className="text-xs font-medium uppercase text-muted-foreground">Collected</p>
+                <p className="text-xs font-medium uppercase text-muted-foreground">Paid</p>
                 <p className="mt-1 text-xl font-bold tabular-nums sm:text-2xl">
-                  {formatGhs(kpis.collectedGhs)}
+                  {formatGhs(kpis.paidGhs)}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Logged trade cash · same window
+                  Sum of paid across invoices
                 </p>
               </Card>
               <Card className="p-4">
@@ -493,15 +543,13 @@ export function B2bPaymentsView() {
                     : '—'}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {kpis.invoicedGhs > 0
-                    ? 'Collected ÷ invoiced'
-                    : 'No portal invoicing in this window'}
+                  Paid ÷ invoiced
                 </p>
               </Card>
             </div>
             <p className="text-xs text-muted-foreground">
-              Cash ledger: {kpis.totalLoggedEntries}{' '}
-              {kpis.totalLoggedEntries === 1 ? 'entry' : 'entries'} logged (all time).
+              Invoice ledger: {kpis.totalInvoices}{' '}
+              {kpis.totalInvoices === 1 ? 'invoice' : 'invoices'} tracked (all time).
             </p>
           </div>
         ) : null}
@@ -512,7 +560,7 @@ export function B2bPaymentsView() {
           </Label>
           <Input
             id="b2b-search"
-            placeholder="Amount, outlet, rep, note…"
+            placeholder="Outlet, invoice, amount, rep, status…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -526,11 +574,11 @@ export function B2bPaymentsView() {
           ) : collections.length === 0 ? (
             <Empty className="border-0 py-16">
               <EmptyHeader>
-                <EmptyTitle>No cash collections yet</EmptyTitle>
+                <EmptyTitle>No invoices yet</EmptyTitle>
                 <EmptyDescription>
-                  Log trade receipts here or from Finance Layer. Rows are stored in MongoDB{' '}
+                  Add invoices here to track receivables. Rows are stored in MongoDB{' '}
                   <code className="rounded bg-muted px-1 py-0.5 text-xs">
-                    b2b_cash_collections
+                    sf_b2b_invoices
                   </code>
                   .
                 </EmptyDescription>
@@ -540,34 +588,43 @@ export function B2bPaymentsView() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Outlet</TableHead>
+                  <TableHead>Invoice</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="hidden sm:table-cell">Collected</TableHead>
-                  <TableHead className="hidden md:table-cell">Outlet</TableHead>
+                  <TableHead className="text-right">Paid</TableHead>
+                  <TableHead className="text-right">Balance</TableHead>
+                  <TableHead className="hidden lg:table-cell text-right">Due</TableHead>
                   <TableHead className="hidden lg:table-cell">Rep</TableHead>
-                  <TableHead className="hidden xl:table-cell">Note</TableHead>
+                  <TableHead>Status</TableHead>
                   <TableHead className="w-[88px] text-right" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.map((c) => (
                   <TableRow key={c.id}>
-                    <TableCell className="text-right font-semibold tabular-nums">
+                    <TableCell className="font-medium">{c.outletName}</TableCell>
+                    <TableCell className="font-mono text-xs font-medium">{c.invoiceNumber}</TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">
                       {formatGhs(c.amountGhs)}
-                      <div className="text-xs font-normal text-muted-foreground sm:hidden">
-                        {format(new Date(c.collectedAt), 'd MMM yyyy')}
-                      </div>
                     </TableCell>
-                    <TableCell className="hidden text-sm text-muted-foreground sm:table-cell">
-                      {format(new Date(c.collectedAt), 'd MMM yyyy')}
+                    <TableCell className="text-right tabular-nums">{formatGhs(c.paidGhs)}</TableCell>
+                    <TableCell className="text-right font-semibold tabular-nums">
+                      {formatGhs(c.balanceGhs)}
                     </TableCell>
-                    <TableCell className="hidden md:table-cell">
-                      {c.outletName ?? '—'}
+                    <TableCell className="hidden lg:table-cell text-right text-sm text-muted-foreground tabular-nums">
+                      {c.dueAt ? format(new Date(c.dueAt), 'd MMM yyyy') : '—'}
                     </TableCell>
-                    <TableCell className="hidden text-muted-foreground lg:table-cell">
+                    <TableCell className="hidden lg:table-cell text-muted-foreground">
                       {c.repName ?? '—'}
                     </TableCell>
-                    <TableCell className="hidden max-w-[220px] truncate text-sm text-muted-foreground xl:table-cell">
-                      {c.note ?? '—'}
+                    <TableCell>
+                      {c.status === 'paid' ? (
+                        <span className="text-emerald-600">Paid</span>
+                      ) : c.status === 'overdue' ? (
+                        <span className="text-destructive">Overdue</span>
+                      ) : (
+                        <span className="text-muted-foreground">Open</span>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-0.5">
@@ -577,7 +634,7 @@ export function B2bPaymentsView() {
                           size="icon"
                           className="h-8 w-8"
                           onClick={() => openEdit(c)}
-                          aria-label="Edit collection"
+                          aria-label="Edit invoice"
                         >
                           <Pencil className="h-4 w-4" />
                         </Button>
@@ -587,7 +644,7 @@ export function B2bPaymentsView() {
                           size="icon"
                           className="h-8 w-8 text-destructive hover:text-destructive"
                           onClick={() => void remove(c.id)}
-                          aria-label="Delete collection"
+                          aria-label="Delete invoice"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -611,43 +668,61 @@ export function B2bPaymentsView() {
         <DialogContent className="max-h-[min(90vh,40rem)] overflow-y-auto sm:max-w-lg">
           <form onSubmit={submitEdit}>
             <DialogHeader>
-              <DialogTitle>Edit collection</DialogTitle>
-              <DialogDescription>Correct amount, date, or attribution.</DialogDescription>
+              <DialogTitle>Edit invoice</DialogTitle>
+              <DialogDescription>Update amount, paid, due date, or attribution.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="edit-b2b-amt">Amount (GHS)</Label>
+                <Label htmlFor="edit-b2b-outlet">Outlet</Label>
                 <Input
-                  id="edit-b2b-amt"
-                  inputMode="decimal"
-                  value={editForm.amountGhs}
-                  onChange={(e) =>
-                    setEditForm((f) => ({ ...f, amountGhs: e.target.value }))
-                  }
+                  id="edit-b2b-outlet"
+                  value={editForm.outletName}
+                  onChange={(e) => setEditForm((f) => ({ ...f, outletName: e.target.value }))}
                   required
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="edit-b2b-date">Collection date</Label>
+                <Label htmlFor="edit-b2b-invoice">Invoice</Label>
                 <Input
-                  id="edit-b2b-date"
-                  type="date"
-                  value={editForm.collectedDate}
+                  id="edit-b2b-invoice"
+                  value={editForm.invoiceNumber}
                   onChange={(e) =>
-                    setEditForm((f) => ({ ...f, collectedDate: e.target.value }))
+                    setEditForm((f) => ({ ...f, invoiceNumber: e.target.value }))
                   }
                   required
                 />
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="edit-b2b-outlet">Outlet</Label>
+                  <Label htmlFor="edit-b2b-amt">Amount (GHS)</Label>
                   <Input
-                    id="edit-b2b-outlet"
-                    value={editForm.outletName}
+                    id="edit-b2b-amt"
+                    inputMode="decimal"
+                    value={editForm.amountGhs}
+                    onChange={(e) => setEditForm((f) => ({ ...f, amountGhs: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-b2b-paid">Paid (GHS)</Label>
+                  <Input
+                    id="edit-b2b-paid"
+                    inputMode="decimal"
+                    value={editForm.paidGhs}
                     onChange={(e) =>
-                      setEditForm((f) => ({ ...f, outletName: e.target.value }))
+                      setEditForm((f) => ({ ...f, paidGhs: e.target.value }))
                     }
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-b2b-due">Due date</Label>
+                  <Input
+                    id="edit-b2b-due"
+                    type="date"
+                    value={editForm.dueDate}
+                    onChange={(e) => setEditForm((f) => ({ ...f, dueDate: e.target.value }))}
                     placeholder="Clear to remove"
                   />
                 </div>
@@ -656,19 +731,17 @@ export function B2bPaymentsView() {
                   <Input
                     id="edit-b2b-rep"
                     value={editForm.repName}
-                    onChange={(e) =>
-                      setEditForm((f) => ({ ...f, repName: e.target.value }))
-                    }
+                    onChange={(e) => setEditForm((f) => ({ ...f, repName: e.target.value }))}
                     placeholder="Clear to remove"
                   />
                 </div>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="edit-b2b-note">Note</Label>
+                <Label htmlFor="edit-b2b-note">Notes</Label>
                 <Textarea
                   id="edit-b2b-note"
-                  value={editForm.note}
-                  onChange={(e) => setEditForm((f) => ({ ...f, note: e.target.value }))}
+                  value={editForm.notes}
+                  onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))}
                   rows={3}
                   className="resize-y"
                 />

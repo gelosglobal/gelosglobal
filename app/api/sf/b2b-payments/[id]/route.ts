@@ -1,7 +1,10 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
-import { deleteB2BCashCollection, updateB2BCashCollection } from '@/lib/dtc-finance'
 import { getMongo } from '@/lib/mongodb'
-import { serializeB2bCashCollection } from '@/lib/sf-b2b-payments'
+import {
+  deleteSfB2bInvoice,
+  serializeSfB2bInvoice,
+  updateSfB2bInvoice,
+} from '@/lib/sf-b2b-invoices'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { ObjectId } from 'mongodb'
@@ -11,11 +14,13 @@ export const runtime = 'nodejs'
 
 const patchBodySchema = z
   .object({
-    amountGhs: z.coerce.number().positive().max(1_000_000_000).optional(),
-    collectedAt: z.coerce.date().optional(),
-    note: z.string().trim().max(2000).nullable().optional(),
-    outletName: z.string().trim().max(200).nullable().optional(),
+    outletName: z.string().trim().min(1).max(200).optional(),
+    invoiceNumber: z.string().trim().min(1).max(64).optional(),
+    amountGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+    paidGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+    dueAt: z.coerce.date().nullable().optional(),
     repName: z.string().trim().max(120).nullable().optional(),
+    notes: z.string().trim().max(2000).nullable().optional(),
   })
   .refine((d) => Object.keys(d).length > 0, { message: 'No fields to update' })
 
@@ -56,14 +61,14 @@ export async function PATCH(
   }
 
   const { db } = getMongo()
-  const updated = await updateB2BCashCollection(db, new ObjectId(id), parsed.data)
+  const updated = await updateSfB2bInvoice(db, new ObjectId(id), parsed.data)
   if (!updated) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
   return NextResponse.json({
     ok: true,
-    collection: serializeB2bCashCollection(updated),
+    invoice: serializeSfB2bInvoice(updated),
   })
 }
 
@@ -82,7 +87,7 @@ export async function DELETE(
   }
 
   const { db } = getMongo()
-  const ok = await deleteB2BCashCollection(db, new ObjectId(id))
+  const ok = await deleteSfB2bInvoice(db, new ObjectId(id))
   if (!ok) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }

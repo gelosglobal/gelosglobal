@@ -1,17 +1,11 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
-import {
-  createB2BCashCollection,
-  getOrCreateFinanceConfig,
-  listB2BCashCollections,
-  sumB2BCashCollections,
-  sumB2BPortalOrderRevenue,
-} from '@/lib/dtc-finance'
 import { getMongo } from '@/lib/mongodb'
 import {
-  buildB2bPaymentsKpis,
-  serializeB2bCashCollection,
-} from '@/lib/sf-b2b-payments'
-import { subDays } from 'date-fns'
+  computeInvoiceKpis,
+  createSfB2bInvoice,
+  listSfB2bInvoices,
+  serializeSfB2bInvoice,
+} from '@/lib/sf-b2b-invoices'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -19,11 +13,13 @@ import { z } from 'zod'
 export const runtime = 'nodejs'
 
 const postBodySchema = z.object({
-  amountGhs: z.coerce.number().positive().max(1_000_000_000),
-  collectedAt: z.coerce.date().optional(),
-  note: z.string().trim().max(2000).optional(),
-  outletName: z.string().trim().max(200).optional(),
+  outletName: z.string().trim().min(1).max(200),
+  invoiceNumber: z.string().trim().min(1).max(64),
+  amountGhs: z.coerce.number().min(0).max(1_000_000_000),
+  paidGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  dueAt: z.coerce.date().optional(),
   repName: z.string().trim().max(120).optional(),
+  notes: z.string().trim().max(2000).optional(),
 })
 
 function parsePeriodDays(url: URL): number {
@@ -46,29 +42,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const periodDays = parsePeriodDays(new URL(request.url))
-  const now = new Date()
-  const since = subDays(now, periodDays)
-
   const { db } = getMongo()
-  const [rows, config, invoicedGhs, collectedGhs] = await Promise.all([
-    listB2BCashCollections(db),
-    getOrCreateFinanceConfig(db),
-    sumB2BPortalOrderRevenue(db, since, now),
-    sumB2BCashCollections(db, since, now),
-  ])
-
-  const kpis = buildB2bPaymentsKpis({
-    periodDays,
-    now,
-    invoicedGhs,
-    collectedGhs,
-    outstandingGhs: config.b2bOutstandingGhs,
-    totalLoggedEntries: rows.length,
-  })
+  const now = new Date()
+  const rows = await listSfB2bInvoices(db)
+  const kpis = computeInvoiceKpis(rows, now)
 
   return NextResponse.json({
-    collections: rows.map(serializeB2bCashCollection),
+    invoices: rows.map((r) => serializeSfB2bInvoice(r, now)),
     kpis,
   })
 }
@@ -96,16 +76,18 @@ export async function POST(request: Request) {
 
   const d = parsed.data
   const { db } = getMongo()
-  const doc = await createB2BCashCollection(db, {
-    amountGhs: d.amountGhs,
-    collectedAt: d.collectedAt ?? new Date(),
-    note: d.note,
+  const doc = await createSfB2bInvoice(db, {
     outletName: d.outletName,
+    invoiceNumber: d.invoiceNumber,
+    amountGhs: d.amountGhs,
+    paidGhs: d.paidGhs ?? 0,
+    dueAt: d.dueAt,
     repName: d.repName,
+    notes: d.notes,
   })
 
   return NextResponse.json(
-    { ok: true, collection: serializeB2bCashCollection(doc) },
+    { ok: true, invoice: serializeSfB2bInvoice(doc) },
     { status: 201 },
   )
 }
