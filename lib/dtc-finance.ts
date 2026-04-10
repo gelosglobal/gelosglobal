@@ -28,6 +28,10 @@ export type B2BCashCollectionDoc = {
   amountGhs: number
   collectedAt: Date
   note?: string
+  /** Trade outlet / customer name (optional; SF B2B payments). */
+  outletName?: string
+  /** Field rep who logged the collection (optional). */
+  repName?: string
   createdAt: Date
 }
 
@@ -119,19 +123,113 @@ export async function sumB2BCashCollections(
   return rows[0]?.total ?? 0
 }
 
+/** B2B portal channel order revenue in the window (sell-in / invoiced via portal). */
+export async function sumB2BPortalOrderRevenue(
+  db: Db,
+  since: Date,
+  until: Date,
+): Promise<number> {
+  const rows = await db
+    .collection(DTC_ORDERS_COLLECTION)
+    .aggregate<{ total: number }>([
+      {
+        $match: {
+          channel: 'B2B portal',
+          orderedAt: { $gte: since, $lte: until },
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$totalAmount' } } },
+    ])
+    .toArray()
+  return rows[0]?.total ?? 0
+}
+
+export async function listB2BCashCollections(
+  db: Db,
+  opts?: { limit?: number },
+): Promise<B2BCashCollectionDoc[]> {
+  const limit = Math.min(Math.max(opts?.limit ?? 5000, 1), 20_000)
+  const rows = await b2bCashCollection(db)
+    .find({})
+    .sort({ collectedAt: -1 })
+    .limit(limit)
+    .toArray()
+  return rows.map((r) => r as B2BCashCollectionDoc)
+}
+
 export async function createB2BCashCollection(
   db: Db,
-  input: { amountGhs: number; collectedAt: Date; note?: string },
+  input: {
+    amountGhs: number
+    collectedAt: Date
+    note?: string
+    outletName?: string
+    repName?: string
+  },
 ): Promise<B2BCashCollectionDoc> {
   const now = new Date()
   const doc: WithoutId<B2BCashCollectionDoc> = {
     amountGhs: input.amountGhs,
     collectedAt: input.collectedAt,
     note: input.note?.trim() || undefined,
+    outletName: input.outletName?.trim() || undefined,
+    repName: input.repName?.trim() || undefined,
     createdAt: now,
   }
   const res = await b2bCashCollection(db).insertOne(doc)
   return { _id: res.insertedId, ...doc }
+}
+
+export type UpdateB2BCashCollectionInput = Partial<{
+  amountGhs: number
+  collectedAt: Date
+  note: string | null
+  outletName: string | null
+  repName: string | null
+}>
+
+export async function updateB2BCashCollection(
+  db: Db,
+  id: ObjectId,
+  patch: UpdateB2BCashCollectionInput,
+): Promise<B2BCashCollectionDoc | null> {
+  const $set: Record<string, unknown> = {}
+  if (patch.amountGhs !== undefined) {
+    $set.amountGhs = Math.max(0, Math.min(1_000_000_000, patch.amountGhs))
+  }
+  if (patch.collectedAt !== undefined) $set.collectedAt = patch.collectedAt
+  if (patch.note !== undefined) {
+    $set.note =
+      patch.note === null || patch.note === '' ? null : patch.note.trim()
+  }
+  if (patch.outletName !== undefined) {
+    $set.outletName =
+      patch.outletName === null || patch.outletName === ''
+        ? null
+        : patch.outletName.trim()
+  }
+  if (patch.repName !== undefined) {
+    $set.repName =
+      patch.repName === null || patch.repName === ''
+        ? null
+        : patch.repName.trim()
+  }
+  if (Object.keys($set).length === 0) return null
+
+  const res = await b2bCashCollection(db).findOneAndUpdate(
+    { _id: id },
+    { $set },
+    { returnDocument: 'after' },
+  )
+  return res as B2BCashCollectionDoc | null
+}
+
+export async function deleteB2BCashCollection(
+  db: Db,
+  id: ObjectId,
+): Promise<boolean> {
+  const r = await b2bCashCollection(db).deleteOne({ _id: id })
+  return r.deletedCount === 1
 }
 
 export type PaymentSplitRow = {

@@ -46,13 +46,13 @@ export function HomeDashboard() {
           >
             Manager Dashboard
           </Button>
-          <Button
+          {/* <Button
             type="button"
             onClick={() => setView('rep')}
             variant={view === 'rep' ? 'default' : 'outline'}
           >
             Rep View
-          </Button>
+          </Button> */}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">

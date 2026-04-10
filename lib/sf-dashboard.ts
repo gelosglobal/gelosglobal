@@ -60,7 +60,10 @@ export type SfPosmTaskDoc = {
   outletName: string
   status: SfPosmTaskStatus
   dueAt?: Date
+  notes?: string
   createdAt: Date
+  /** Set on create/update; older rows may omit. */
+  updatedAt?: Date
 }
 
 export type SfSettingsDoc = {

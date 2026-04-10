@@ -1,138 +1,503 @@
 'use client'
 
+import Link from 'next/link'
+import { useCallback, useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
+import { format, formatDistanceToNow } from 'date-fns'
+import type { LucideIcon } from 'lucide-react'
+import {
+  AlertTriangle,
+  Banknote,
+  BarChart3,
+  Bell,
+  CalendarClock,
+  CreditCard,
+  Footprints,
+  Inbox,
+  LayoutGrid,
+  Loader2,
+  Map,
+  MapPin,
+  Package,
+  PieChart,
+  RefreshCw,
+  ShoppingBag,
+  ShoppingCart,
+  Store,
+  Target,
+  TrendingUp,
+  Wallet,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import {
+  Bar,
+  BarChart,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { AlertTriangle, TrendingUp } from 'lucide-react'
+import { formatGhs } from '@/lib/dtc-orders'
 
-const dashboardData = {
-  kpis: [
-    { label: 'Total Revenue', value: 'GHS 13,154', subtitle: 'DTC + B2B', color: 'border-blue-600' },
-    { label: 'DTC Revenue', value: 'GHS 254', subtitle: 'sell-out', color: 'border-purple-600' },
-    { label: 'B2B Collected', value: 'GHS 12,900', subtitle: 'Trade channels', color: 'border-green-600' },
-    { label: 'B2B Outstanding', value: 'GHS 8,500', subtitle: '1 overdue', color: 'border-red-600' },
-    { label: 'ROAS', value: '0.12x', subtitle: 'on mktg spend', color: 'border-teal-600' },
-    { label: 'SF Contribution', value: '98%', subtitle: 'of total revenue', color: 'border-indigo-600' }
-  ],
-  revenueData: [
-    { channel: 'DTC', percentage: 2, fill: '#7c3aed' },
-    { channel: 'SF', percentage: 98, fill: '#2563eb' }
-  ],
-  alerts: [
-    { id: 1, icon: 'stock', text: '[DTC] Low Stock: Gelos Charcoal Toothpaste — 25 units · 14d remaining' },
-    { id: 2, icon: 'stock', text: '[DTC] Low Stock: Gelos Flosser — 19 units · 14d remaining' },
-    { id: 3, icon: 'stock', text: '[DTC] Low Stock: Gelos Whitening Kit — 11 units · 12d remaining' },
-    { id: 4, icon: 'stock', text: '[SF] Low Stock: Gelos Gold 1L — 80 Cases' },
-    { id: 5, icon: 'stock', text: '[SF] Low Stock: Gelos Fresh 250ml — 15 Cases' },
-    { id: 6, icon: 'stock', text: '[SF] Low Stock: Gelos Lite 330ml — 45 Cases' },
-    { id: 7, icon: 'payment', text: '[B2B] Overdue: Kwame Stores · INV-002 · GHS 2,200' }
-  ],
-  recentOrders: [
-    { id: 'ORD-001', store: 'Elite Pharmacy', amount: 'GHS 450', time: '2 hours ago' },
-    { id: 'ORD-002', store: 'Kwame Supermarket', amount: 'GHS 1,200', time: '4 hours ago' }
-  ],
-  recentVisits: [
-    { id: 'VST-001', outlet: 'Accra Mall', rep: 'John Mensah', time: '1 hour ago' },
-    { id: 'VST-002', outlet: 'Marina Stores', rep: 'Ama Osei', time: '2 hours ago' }
-  ]
+const FINANCE_DAYS = 30
+
+type SfDashboardPayload = {
+  generatedAt: string
+  primaryRegionLabel: string
+  kpis: {
+    activeOutlets: number
+    visits7d: number
+    b2bSellIn7d: number
+    collections7d: number
+    targetAttainmentPct: number | null
+    monthlyTargetGhs: number
+    mtdSellInGhs: number
+    mtdCollectionsGhs: number
+    openPosmTasks: number
+  }
+  upcomingVisits: Array<{
+    id: string
+    outlet: string
+    rep: string
+    scheduledAt: string
+  }>
+  repPulse: Array<{ rep: string; visits: number; sellInGhs: number }>
+  alerts: Array<{ id: string; severity: 'high' | 'medium'; text: string }>
+}
+
+type FinancePayload = {
+  periodDays: number
+  dtcRevenue: number
+  b2bCollected: number
+  totalRevenue: number
+  marketingSpendGhs: number
+  netProfit: number
+  b2bOutstandingGhs: number
+}
+
+type OrderRow = {
+  id: string
+  orderNumber: string
+  customer: string
+  channel: string
+  totalAmount: number
+  orderedAt: string
+}
+
+const QUICK_LINKS: { href: string; label: string; icon: typeof Package }[] = [
+  { href: '/dtc/orders-engine', label: 'Orders Engine', icon: Package },
+  { href: '/dtc/finance-layer', label: 'Finance Layer', icon: BarChart3 },
+  { href: '/dtc/inventory', label: 'DTC Inventory', icon: Package },
+  { href: '/sf/dashboard', label: 'SF Dashboard', icon: Target },
+  { href: '/sf/shop-visits', label: 'Shop Visits', icon: Store },
+  { href: '/sf/outlet-scouting', label: 'Outlet Scouting', icon: Map },
+  { href: '/sf/outlet-scout-map', label: 'Scout Map', icon: MapPin },
+  { href: '/sf/posm-tracker', label: 'POSM Tracker', icon: Target },
+  { href: '/sf/b2b-payments', label: 'B2B Payments', icon: CreditCard },
+]
+
+function alertBorderClass(sev: 'high' | 'medium') {
+  return sev === 'high' ? 'border-l-red-600' : 'border-l-amber-600'
+}
+
+function MasterKpiCard({
+  borderAccent,
+  icon: Icon,
+  iconWrapClass,
+  iconClass,
+  label,
+  value,
+  subtitle,
+}: {
+  borderAccent: string
+  icon: LucideIcon
+  iconWrapClass: string
+  iconClass: string
+  label: string
+  value: ReactNode
+  subtitle: ReactNode
+}) {
+  return (
+    <Card
+      className={`border-l-4 ${borderAccent} border-r-0 border-t-0 border-b-0 p-6`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {label}
+          </p>
+          <p className="mt-2 text-3xl font-bold tabular-nums text-foreground">{value}</p>
+          <p className="mt-2 text-xs text-muted-foreground">{subtitle}</p>
+        </div>
+        <div className={`shrink-0 rounded-xl p-3 ${iconWrapClass}`}>
+          <Icon className={`h-6 w-6 ${iconClass}`} />
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function SectionCardTitle({
+  icon: Icon,
+  children,
+}: {
+  icon: LucideIcon
+  children: ReactNode
+}) {
+  return (
+    <h3 className="mb-4 flex items-center gap-2 text-sm font-bold uppercase tracking-widest text-foreground">
+      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
+        <Icon className="h-4 w-4 text-muted-foreground" />
+      </span>
+      {children}
+    </h3>
+  )
 }
 
 export function ManagerDashboard() {
+  const [loading, setLoading] = useState(true)
+  const [sf, setSf] = useState<SfDashboardPayload | null>(null)
+  const [finance, setFinance] = useState<FinancePayload | null>(null)
+  const [orders, setOrders] = useState<OrderRow[]>([])
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [sfRes, finRes, ordRes] = await Promise.all([
+        fetch('/api/sf/dashboard', { credentials: 'include' }),
+        fetch(`/api/dtc/finance-layer?days=${FINANCE_DAYS}`, {
+          credentials: 'include',
+        }),
+        fetch('/api/dtc/orders', { credentials: 'include' }),
+      ])
+
+      if (sfRes.status === 401 || finRes.status === 401 || ordRes.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+
+      if (!sfRes.ok || !finRes.ok || !ordRes.ok) {
+        throw new Error('One or more requests failed')
+      }
+
+      const sfJson = (await sfRes.json()) as SfDashboardPayload
+      const finJson = (await finRes.json()) as FinancePayload
+      const ordJson = (await ordRes.json()) as { orders: OrderRow[] }
+
+      setSf(sfJson)
+      setFinance(finJson)
+      setOrders(ordJson.orders ?? [])
+    } catch {
+      toast.error('Could not load master dashboard data')
+      setSf(null)
+      setFinance(null)
+      setOrders([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const totalRev = finance?.totalRevenue ?? 0
+  const dtcPct =
+    totalRev > 0 && finance
+      ? Math.min(100, Math.round((finance.dtcRevenue / totalRev) * 1000) / 10)
+      : 0
+  const b2bPct =
+    totalRev > 0 && finance
+      ? Math.min(100, Math.round((finance.b2bCollected / totalRev) * 1000) / 10)
+      : 0
+
+  const revenueBarData = [
+    { channel: 'DTC', percentage: dtcPct, fill: '#7c3aed' },
+    { channel: 'B2B collected', percentage: b2bPct, fill: '#2563eb' },
+  ]
+
+  const roasX =
+    finance && finance.marketingSpendGhs > 0
+      ? `${Math.min(999, Math.round((finance.totalRevenue / finance.marketingSpendGhs) * 10) / 10)}x`
+      : '—'
+
+  const recentOrders = orders.slice(0, 6)
+  const upcoming = sf?.upcomingVisits.slice(0, 6) ?? []
+  const alerts = sf?.alerts.slice(0, 10) ?? []
+
+  const headerDate = format(new Date(), 'd MMM yyyy')
+
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="border-b border-border bg-card px-6 py-4 flex justify-between items-start">
+    <div className="flex h-full flex-col">
+      <div className="flex items-start justify-between gap-4 border-b border-border bg-card px-4 py-4 sm:px-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Master Dashboard</h1>
-          <p className="text-sm text-muted-foreground mt-1">Command Center</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Live roll-up from Finance Layer ({FINANCE_DAYS}d), Sales Force, and DTC orders
+          </p>
         </div>
-        <p className="text-sm text-muted-foreground">10 Apr 2026</p>
+        <div className="flex shrink-0 items-center gap-2">
+          <p className="hidden text-sm text-muted-foreground sm:block">{headerDate}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            disabled={loading}
+            onClick={() => void load()}
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {/* KPI Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {dashboardData.kpis.map((kpi, idx) => (
-            <Card key={idx} className={`p-6 border-l-4 ${kpi.color} border-r-0 border-t-0 border-b-0`}>
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">{kpi.label}</p>
-              <p className="text-3xl font-bold text-foreground mt-2">{kpi.value}</p>
-              <p className="text-xs text-muted-foreground mt-2">{kpi.subtitle}</p>
-            </Card>
-          ))}
+      <div className="flex-1 space-y-6 overflow-y-auto p-4 sm:p-6">
+        {loading && !sf && !finance ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-24 text-muted-foreground">
+            <Loader2 className="h-10 w-10 animate-spin" />
+            <p className="text-sm">Loading live metrics…</p>
+          </div>
+        ) : null}
+
+        <Card className="p-4">
+          <p className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-muted">
+              <LayoutGrid className="h-3.5 w-3.5" />
+            </span>
+            Jump to
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {QUICK_LINKS.map(({ href, label, icon: Icon }) => (
+              <Button key={href} variant="outline" size="sm" className="gap-1.5" asChild>
+                <Link href={href}>
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </Link>
+              </Button>
+            ))}
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <MasterKpiCard
+            borderAccent="border-l-blue-600"
+            icon={Wallet}
+            iconWrapClass="bg-blue-600/10"
+            iconClass="text-blue-600"
+            label="Total revenue"
+            value={finance ? formatGhs(finance.totalRevenue) : '—'}
+            subtitle={`Last ${finance?.periodDays ?? FINANCE_DAYS} days · DTC + B2B collected`}
+          />
+          <MasterKpiCard
+            borderAccent="border-l-purple-600"
+            icon={ShoppingBag}
+            iconWrapClass="bg-purple-600/10"
+            iconClass="text-purple-600"
+            label="DTC revenue"
+            value={finance ? formatGhs(finance.dtcRevenue) : '—'}
+            subtitle="Excludes B2B portal orders"
+          />
+          <MasterKpiCard
+            borderAccent="border-l-green-600"
+            icon={Banknote}
+            iconWrapClass="bg-green-600/10"
+            iconClass="text-green-600"
+            label="B2B collected"
+            value={finance ? formatGhs(finance.b2bCollected) : '—'}
+            subtitle="Portal + logged trade cash"
+          />
+          <MasterKpiCard
+            borderAccent="border-l-red-600"
+            icon={CreditCard}
+            iconWrapClass="bg-red-600/10"
+            iconClass="text-red-600"
+            label="B2B outstanding"
+            value={finance ? formatGhs(finance.b2bOutstandingGhs) : '—'}
+            subtitle="Manual AR · Finance Layer"
+          />
+          <MasterKpiCard
+            borderAccent="border-l-indigo-600"
+            icon={Footprints}
+            iconWrapClass="bg-indigo-600/10"
+            iconClass="text-indigo-600"
+            label="SF field (7d)"
+            value={sf ? sf.kpis.visits7d : '—'}
+            subtitle={
+              <>
+                Visits · {sf ? formatGhs(sf.kpis.collections7d) : '—'} cash ·{' '}
+                {sf ? `${sf.kpis.openPosmTasks} open POSM` : '—'}
+              </>
+            }
+          />
+          <MasterKpiCard
+            borderAccent="border-l-teal-600"
+            icon={TrendingUp}
+            iconWrapClass="bg-teal-600/10"
+            iconClass="text-teal-600"
+            label="Net profit · ROAS hint"
+            value={finance ? formatGhs(finance.netProfit) : '—'}
+            subtitle={
+              <>
+                Net (period) · Revenue ÷ mktg spend ≈ {roasX}
+              </>
+            }
+          />
         </div>
 
-        {/* Revenue Split */}
         <Card className="p-6">
-          <h3 className="text-sm font-semibold text-foreground uppercase tracking-wide mb-6">Revenue Split — DTC vs Sales Force</h3>
-          <ResponsiveContainer width="100%" height={60}>
-            <BarChart data={dashboardData.revenueData} layout="vertical" margin={{ top: 0, right: 40, left: 0, bottom: 0 }}>
-              <XAxis type="number" hide={true} domain={[0, 100]} />
-              <Bar dataKey="percentage" fill="#2563eb" radius={[0, 4, 4, 0]} />
-              <Tooltip 
-                formatter={(value) => `${value}%`}
-                contentStyle={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: '6px' }}
+          <h3 className="mb-6 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-foreground">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
+              <PieChart className="h-4 w-4 text-muted-foreground" />
+            </span>
+            Revenue split — DTC vs B2B collected
+          </h3>
+          <ResponsiveContainer width="100%" height={72}>
+            <BarChart
+              data={revenueBarData}
+              layout="vertical"
+              margin={{ top: 0, right: 40, left: 0, bottom: 0 }}
+            >
+              <XAxis type="number" hide domain={[0, 100]} />
+              <YAxis type="category" dataKey="channel" width={112} tick={{ fontSize: 12 }} />
+              <Bar dataKey="percentage" radius={[0, 4, 4, 0]}>
+                {revenueBarData.map((entry) => (
+                  <Cell key={entry.channel} fill={entry.fill} />
+                ))}
+              </Bar>
+              <Tooltip
+                formatter={(value: number) => [`${value}%`, 'Share of total revenue']}
+                contentStyle={{
+                  backgroundColor: 'var(--card)',
+                  border: '1px solid var(--border)',
+                  borderRadius: '6px',
+                }}
               />
             </BarChart>
           </ResponsiveContainer>
-          <div className="flex justify-between mt-4 text-xs text-muted-foreground">
+          <div className="mt-4 flex justify-between text-xs text-muted-foreground">
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-purple-600 rounded-sm"></div>
-              <span>DTC 2%</span>
+              <div className="h-3 w-3 rounded-sm bg-purple-600" />
+              <span>DTC {dtcPct}%</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-blue-600 rounded-sm"></div>
-              <span>SF 98%</span>
+              <div className="h-3 w-3 rounded-sm bg-blue-600" />
+              <span>B2B collected {b2bPct}%</span>
             </div>
           </div>
         </Card>
 
-        {/* Alerts Section */}
         <div>
-          <div className="flex items-center gap-2 mb-4">
-            <AlertTriangle className="h-5 w-5 text-red-600" />
-            <h3 className="text-sm font-bold text-foreground uppercase tracking-widest">Alerts</h3>
+          <div className="mb-4 flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
+            <h3 className="text-sm font-bold uppercase tracking-widest text-foreground">
+              Alerts
+            </h3>
+            {sf?.primaryRegionLabel ? (
+              <Badge variant="outline" className="font-normal">
+                {sf.primaryRegionLabel}
+              </Badge>
+            ) : null}
           </div>
-          <div className="space-y-2">
-            {dashboardData.alerts.map((alert) => (
-              <Card key={alert.id} className="p-4 border-l-4 border-l-red-600 border-r-0 border-t-0 border-b-0">
-                <p className="text-sm text-foreground">{alert.text}</p>
-              </Card>
-            ))}
-          </div>
+          {alerts.length === 0 ? (
+            <Card className="flex items-start gap-3 p-6 text-sm text-muted-foreground">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+                <Inbox className="h-4 w-4" />
+              </span>
+              <span>No SF, stock, or finance alerts right now.</span>
+            </Card>
+          ) : (
+            <div className="space-y-2">
+              {alerts.map((alert) => (
+                <Card
+                  key={alert.id}
+                  className={`border-l-4 border-r-0 border-t-0 border-b-0 p-4 ${alertBorderClass(alert.severity)}`}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                      <span
+                        className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                          alert.severity === 'high'
+                            ? 'bg-destructive/10 text-destructive'
+                            : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                        }`}
+                      >
+                        <Bell className="h-4 w-4" />
+                      </span>
+                      <p className="text-sm text-foreground">{alert.text}</p>
+                    </div>
+                    <Badge variant={alert.severity === 'high' ? 'destructive' : 'secondary'}>
+                      {alert.severity}
+                    </Badge>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Recent Activity */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Recent DTC Orders */}
-          <Card className="p-6 border-l-4 border-l-purple-600 border-r-0 border-t-0 border-b-0">
-            <h3 className="text-sm font-bold text-foreground uppercase tracking-widest mb-4">Recent DTC Orders</h3>
-            <div className="space-y-3">
-              {dashboardData.recentOrders.map((order) => (
-                <div key={order.id} className="flex items-center justify-between pb-3 border-b border-border last:border-0">
-                  <div>
-                    <p className="font-medium text-foreground text-sm">{order.store}</p>
-                    <p className="text-xs text-muted-foreground">{order.time}</p>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <Card className="border-l-4 border-l-purple-600 border-r-0 border-t-0 border-b-0 p-6">
+            <SectionCardTitle icon={ShoppingCart}>Recent DTC orders</SectionCardTitle>
+            {recentOrders.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No orders yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {recentOrders.map((order) => (
+                  <div
+                    key={order.id}
+                    className="flex items-center justify-between gap-2 border-b border-border pb-3 last:border-0"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {order.customer}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {order.channel} ·{' '}
+                        {formatDistanceToNow(new Date(order.orderedAt), {
+                          addSuffix: true,
+                        })}
+                      </p>
+                    </div>
+                    <p className="shrink-0 font-semibold tabular-nums text-foreground">
+                      {formatGhs(order.totalAmount)}
+                    </p>
                   </div>
-                  <p className="font-semibold text-foreground">{order.amount}</p>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </Card>
 
-          {/* Recent B2B Visits */}
-          <Card className="p-6 border-l-4 border-l-blue-600 border-r-0 border-t-0 border-b-0">
-            <h3 className="text-sm font-bold text-foreground uppercase tracking-widest mb-4">Recent B2B Visits</h3>
-            <div className="space-y-3">
-              {dashboardData.recentVisits.map((visit) => (
-                <div key={visit.id} className="flex items-center justify-between pb-3 border-b border-border last:border-0">
-                  <div>
-                    <p className="font-medium text-foreground text-sm">{visit.outlet}</p>
-                    <p className="text-xs text-muted-foreground">{visit.rep}</p>
+          <Card className="border-l-4 border-l-blue-600 border-r-0 border-t-0 border-b-0 p-6">
+            <SectionCardTitle icon={CalendarClock}>Upcoming shop visits</SectionCardTitle>
+            {upcoming.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No scheduled visits from today onward on the SF dashboard.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {upcoming.map((visit) => (
+                  <div
+                    key={visit.id}
+                    className="flex items-center justify-between gap-2 border-b border-border pb-3 last:border-0"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {visit.outlet}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{visit.rep}</p>
+                    </div>
+                    <p className="shrink-0 text-xs text-muted-foreground">
+                      {format(new Date(visit.scheduledAt), 'd MMM')}
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground">{visit.time}</p>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </Card>
         </div>
       </div>

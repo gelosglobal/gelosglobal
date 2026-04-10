@@ -11,6 +11,8 @@ const postSchema = z.object({
   amountGhs: z.coerce.number().positive().max(1_000_000_000),
   collectedAt: z.coerce.date().optional(),
   note: z.string().trim().max(500).optional(),
+  outletName: z.string().trim().max(200).optional(),
+  repName: z.string().trim().max(120).optional(),
 })
 
 async function requireSession() {
@@ -46,6 +48,8 @@ export async function POST(request: Request) {
     amountGhs: parsed.data.amountGhs,
     collectedAt: parsed.data.collectedAt ?? new Date(),
     note: parsed.data.note,
+    outletName: parsed.data.outletName,
+    repName: parsed.data.repName,
   })
 
   return NextResponse.json({

@@ -16,18 +16,32 @@ export const runtime = 'nodejs'
 const statusEnum = z.enum(['lead', 'qualified', 'in_review', 'won', 'lost'])
 const priorityEnum = z.enum(['low', 'medium', 'high'])
 
-const postBodySchema = z.object({
-  name: z.string().trim().min(1).max(200),
-  area: z.string().trim().min(1).max(200),
-  contactName: z.string().trim().max(120).optional(),
-  contactPhone: z.string().trim().max(40).optional(),
-  notes: z.string().trim().max(2000).optional(),
-  estimatedMonthlyVolumeGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
-  status: statusEnum.default('lead'),
-  priority: priorityEnum.default('medium'),
-  scoutedBy: z.string().trim().min(1).max(120),
-  scoutedAt: z.coerce.date().optional(),
-})
+const postBodySchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    area: z.string().trim().min(1).max(200),
+    contactName: z.string().trim().max(120).optional(),
+    contactPhone: z.string().trim().max(40).optional(),
+    notes: z.string().trim().max(2000).optional(),
+    estimatedMonthlyVolumeGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+    status: statusEnum.default('lead'),
+    priority: priorityEnum.default('medium'),
+    scoutedBy: z.string().trim().min(1).max(120),
+    scoutedAt: z.coerce.date().optional(),
+    latitude: z.coerce.number().min(-90).max(90).optional(),
+    longitude: z.coerce.number().min(-180).max(180).optional(),
+  })
+  .superRefine((d, ctx) => {
+    const hasL = d.latitude !== undefined
+    const hasG = d.longitude !== undefined
+    if (hasL !== hasG) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Provide both latitude and longitude, or neither',
+        path: ['latitude'],
+      })
+    }
+  })
 
 async function requireSession() {
   await ensureAuthMongo()
@@ -81,17 +95,20 @@ export async function POST(request: Request) {
   }
 
   const { db } = getMongo()
+  const d = parsed.data
   const doc = await createScoutedOutlet(db, {
-    name: parsed.data.name,
-    area: parsed.data.area,
-    contactName: parsed.data.contactName,
-    contactPhone: parsed.data.contactPhone,
-    notes: parsed.data.notes,
-    estimatedMonthlyVolumeGhs: parsed.data.estimatedMonthlyVolumeGhs,
-    status: parsed.data.status,
-    priority: parsed.data.priority,
-    scoutedBy: parsed.data.scoutedBy,
-    scoutedAt: parsed.data.scoutedAt ?? new Date(),
+    name: d.name,
+    area: d.area,
+    contactName: d.contactName,
+    contactPhone: d.contactPhone,
+    notes: d.notes,
+    estimatedMonthlyVolumeGhs: d.estimatedMonthlyVolumeGhs,
+    status: d.status,
+    priority: d.priority,
+    scoutedBy: d.scoutedBy,
+    scoutedAt: d.scoutedAt ?? new Date(),
+    latitude: d.latitude,
+    longitude: d.longitude,
   })
 
   const all = await listScoutedOutlets(db)

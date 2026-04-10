@@ -19,6 +19,9 @@ export type SfScoutedOutletDoc = {
   priority: ScoutPriority
   scoutedBy: string
   scoutedAt: Date
+  /** WGS84 — set from map geocode or manual PATCH. */
+  latitude?: number
+  longitude?: number
   createdAt: Date
   updatedAt: Date
 }
@@ -35,6 +38,8 @@ export type SfScoutedOutletJson = {
   priority: ScoutPriority
   scoutedBy: string
   scoutedAt: string
+  latitude: number | null
+  longitude: number | null
   createdAt: string
   updatedAt: string
 }
@@ -52,6 +57,12 @@ export function serializeScoutedOutlet(doc: SfScoutedOutletDoc): SfScoutedOutlet
     priority: doc.priority,
     scoutedBy: doc.scoutedBy,
     scoutedAt: doc.scoutedAt.toISOString(),
+    latitude:
+      doc.latitude != null && Number.isFinite(doc.latitude) ? doc.latitude : null,
+    longitude:
+      doc.longitude != null && Number.isFinite(doc.longitude)
+        ? doc.longitude
+        : null,
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
   }
@@ -107,6 +118,8 @@ export type CreateScoutedOutletInput = {
   priority: ScoutPriority
   scoutedBy: string
   scoutedAt: Date
+  latitude?: number
+  longitude?: number
 }
 
 export async function createScoutedOutlet(
@@ -125,6 +138,8 @@ export async function createScoutedOutlet(
     priority: input.priority,
     scoutedBy: input.scoutedBy.trim(),
     scoutedAt: input.scoutedAt,
+    latitude: input.latitude,
+    longitude: input.longitude,
     createdAt: now,
     updatedAt: now,
   }
@@ -143,6 +158,8 @@ export type UpdateScoutedOutletInput = Partial<{
   priority: ScoutPriority
   scoutedBy: string
   scoutedAt: Date
+  latitude: number | null
+  longitude: number | null
 }>
 
 export async function updateScoutedOutlet(
@@ -176,6 +193,8 @@ export async function updateScoutedOutlet(
   if (patch.priority !== undefined) $set.priority = patch.priority
   if (patch.scoutedBy !== undefined) $set.scoutedBy = patch.scoutedBy.trim()
   if (patch.scoutedAt !== undefined) $set.scoutedAt = patch.scoutedAt
+  if (patch.latitude !== undefined) $set.latitude = patch.latitude
+  if (patch.longitude !== undefined) $set.longitude = patch.longitude
 
   const res = await collection(db).findOneAndUpdate(
     { _id: id },

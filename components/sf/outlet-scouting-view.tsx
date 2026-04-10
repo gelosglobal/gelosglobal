@@ -52,6 +52,8 @@ type OutletRow = {
   priority: ScoutPriority
   scoutedBy: string
   scoutedAt: string
+  latitude: number | null
+  longitude: number | null
   createdAt: string
   updatedAt: string
 }

@@ -1,12 +1,12 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
-import {
-  computeScoutingStats,
-  deleteScoutedOutlet,
-  listScoutedOutlets,
-  serializeScoutedOutlet,
-  updateScoutedOutlet,
-} from '@/lib/sf-outlet-scouting'
 import { getMongo } from '@/lib/mongodb'
+import {
+  computePosmTaskStats,
+  deletePosmTask,
+  listPosmTasks,
+  serializePosmTask,
+  updatePosmTask,
+} from '@/lib/sf-posm-tasks'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { ObjectId } from 'mongodb'
@@ -14,39 +14,15 @@ import { z } from 'zod'
 
 export const runtime = 'nodejs'
 
-const statusEnum = z.enum(['lead', 'qualified', 'in_review', 'won', 'lost'])
-const priorityEnum = z.enum(['low', 'medium', 'high'])
+const statusEnum = z.enum(['open', 'done'])
 
 const patchBodySchema = z
   .object({
-    name: z.string().trim().min(1).max(200).optional(),
-    area: z.string().trim().min(1).max(200).optional(),
-    contactName: z.string().trim().max(120).nullable().optional(),
-    contactPhone: z.string().trim().max(40).nullable().optional(),
-    notes: z.string().trim().max(2000).nullable().optional(),
-    estimatedMonthlyVolumeGhs: z.coerce
-      .number()
-      .min(0)
-      .max(1_000_000_000)
-      .nullable()
-      .optional(),
+    title: z.string().trim().min(1).max(200).optional(),
+    outletName: z.string().trim().min(1).max(200).optional(),
     status: statusEnum.optional(),
-    priority: priorityEnum.optional(),
-    scoutedBy: z.string().trim().min(1).max(120).optional(),
-    scoutedAt: z.coerce.date().optional(),
-    latitude: z.coerce.number().min(-90).max(90).nullable().optional(),
-    longitude: z.coerce.number().min(-180).max(180).nullable().optional(),
-  })
-  .superRefine((d, ctx) => {
-    const hasL = d.latitude !== undefined
-    const hasG = d.longitude !== undefined
-    if (hasL !== hasG) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Provide both latitude and longitude, or clear both with null',
-        path: ['latitude'],
-      })
-    }
+    dueAt: z.coerce.date().nullable().optional(),
+    notes: z.string().trim().max(5000).nullable().optional(),
   })
   .refine((d) => Object.keys(d).length > 0, { message: 'No fields to update' })
 
@@ -87,15 +63,15 @@ export async function PATCH(
   }
 
   const { db } = getMongo()
-  const updated = await updateScoutedOutlet(db, new ObjectId(id), parsed.data)
+  const updated = await updatePosmTask(db, new ObjectId(id), parsed.data)
   if (!updated) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  const all = await listScoutedOutlets(db)
-  const stats = computeScoutingStats(all)
+  const all = await listPosmTasks(db)
+  const stats = computePosmTaskStats(all, new Date())
   return NextResponse.json({
-    outlet: serializeScoutedOutlet(updated),
+    task: serializePosmTask(updated),
     stats,
   })
 }
@@ -115,12 +91,12 @@ export async function DELETE(
   }
 
   const { db } = getMongo()
-  const ok = await deleteScoutedOutlet(db, new ObjectId(id))
+  const ok = await deletePosmTask(db, new ObjectId(id))
   if (!ok) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  const all = await listScoutedOutlets(db)
-  const stats = computeScoutingStats(all)
+  const all = await listPosmTasks(db)
+  const stats = computePosmTaskStats(all, new Date())
   return NextResponse.json({ ok: true, stats })
 }
