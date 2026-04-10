@@ -97,7 +97,10 @@ const QUICK_LINKS: { href: string; label: string; icon: typeof Package }[] = [
   { href: '/sf/outlet-scouting', label: 'Outlet Scouting', icon: Map },
   { href: '/sf/outlet-scout-map', label: 'Scout Map', icon: MapPin },
   { href: '/sf/posm-tracker', label: 'POSM Tracker', icon: Target },
+  { href: '/sf/inventory', label: 'SF Inventory', icon: Package },
   { href: '/sf/b2b-payments', label: 'B2B Payments', icon: CreditCard },
+  { href: '/sf/targets', label: 'Targets & Quotas', icon: Target },
+  { href: '/sf/reports', label: 'SF Reports', icon: BarChart3 },
 ]
 
 function alertBorderClass(sev: 'high' | 'medium') {
