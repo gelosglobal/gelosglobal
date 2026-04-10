@@ -15,16 +15,21 @@ const globalForMongo = globalThis as typeof globalThis & {
 }
 
 function createMongo(): { client: MongoClient; db: Db } {
-  const client = new MongoClient(mongodbUri)
+  const client = new MongoClient(mongodbUri, {
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: 15_000,
+    connectTimeoutMS: 15_000,
+  })
   return { client, db: client.db(dbName) }
 }
 
+/**
+ * Single cached client for dev and production (required on Vercel serverless
+ * to avoid exhausting connections and to reuse TLS handshakes).
+ */
 export function getMongo(): { client: MongoClient; db: Db } {
-  if (process.env.NODE_ENV === 'development') {
-    if (!globalForMongo.__gelosMongo) {
-      globalForMongo.__gelosMongo = createMongo()
-    }
-    return globalForMongo.__gelosMongo
+  if (!globalForMongo.__gelosMongo) {
+    globalForMongo.__gelosMongo = createMongo()
   }
-  return createMongo()
+  return globalForMongo.__gelosMongo
 }
