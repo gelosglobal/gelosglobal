@@ -101,6 +101,7 @@ const QUICK_LINKS: { href: string; label: string; icon: typeof Package }[] = [
   { href: '/sf/b2b-payments', label: 'B2B Payments', icon: CreditCard },
   { href: '/sf/targets', label: 'Targets & Quotas', icon: Target },
   { href: '/sf/reports', label: 'SF Reports', icon: BarChart3 },
+  { href: '/sf/leaderboard', label: 'Rep Leaderboard', icon: BarChart3 },
 ]
 
 function alertBorderClass(sev: 'high' | 'medium') {

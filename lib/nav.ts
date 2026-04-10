@@ -51,7 +51,7 @@ export const salesForceNavItems: NavItemConfig[] = [
   { label: 'SF Inventory', href: '/sf/inventory', icon: Box },
   { label: 'B2B Payments', href: '/sf/b2b-payments', icon: CreditCard },
   { label: 'Targets & Quotas', href: '/sf/targets', icon: Target },
-  { label: 'Rep Leaderboard', icon: BarChart3 },
+  { label: 'Rep Leaderboard', href: '/sf/leaderboard', icon: BarChart3 },
   { label: 'SF Reports', href: '/sf/reports', icon: BarChart3 },
   { label: 'Outlet Scout Map', href: '/sf/outlet-scout-map', icon: MapPin },
 ]
@@ -64,6 +64,7 @@ const pathTitleEntries: [string, string][] = [
   ['/sf/inventory', 'SF Inventory'],
   ['/sf/b2b-payments', 'B2B Payments'],
   ['/sf/targets', 'Targets & Quotas'],
+  ['/sf/leaderboard', 'Rep Leaderboard'],
   ['/sf/reports', 'SF Reports'],
   ['/sf/outlet-scout-map', 'Outlet Scout Map'],
   ['/sf', 'Sales Force'],
