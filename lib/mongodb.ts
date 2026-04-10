@@ -16,20 +16,52 @@ const globalForMongo = globalThis as typeof globalThis & {
 
 function createMongo(): { client: MongoClient; db: Db } {
   const client = new MongoClient(mongodbUri, {
-    maxPoolSize: 10,
+    maxPoolSize: 5,
+    minPoolSize: 0,
+    maxIdleTimeMS: 55_000,
     serverSelectionTimeoutMS: 15_000,
     connectTimeoutMS: 15_000,
   })
   return { client, db: client.db(dbName) }
 }
 
-/**
- * Single cached client for dev and production (required on Vercel serverless
- * to avoid exhausting connections and to reuse TLS handshakes).
- */
 export function getMongo(): { client: MongoClient; db: Db } {
   if (!globalForMongo.__gelosMongo) {
     globalForMongo.__gelosMongo = createMongo()
   }
   return globalForMongo.__gelosMongo
+}
+
+async function destroyCachedMongo(): Promise<void> {
+  const cached = globalForMongo.__gelosMongo
+  globalForMongo.__gelosMongo = undefined
+  if (!cached) return
+  try {
+    await cached.client.close()
+  } catch {
+    /* ignore close errors on dead topology */
+  }
+}
+
+/**
+ * Ping the cached client; if the topology was closed (common on Vercel after idle),
+ * drop the client and open a new one. Returns true if a new client was created.
+ */
+export async function ensureMongoAlive(): Promise<boolean> {
+  if (!globalForMongo.__gelosMongo) {
+    globalForMongo.__gelosMongo = createMongo()
+    await globalForMongo.__gelosMongo.client.connect()
+    return true
+  }
+
+  const { client } = globalForMongo.__gelosMongo
+  try {
+    await client.db('admin').command({ ping: 1 }, { timeoutMS: 5000 })
+    return false
+  } catch {
+    await destroyCachedMongo()
+    globalForMongo.__gelosMongo = createMongo()
+    await globalForMongo.__gelosMongo.client.connect()
+    return true
+  }
 }
