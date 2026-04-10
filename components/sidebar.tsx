@@ -21,6 +21,9 @@ export function Sidebar() {
     if (pathname.startsWith('/dtc')) {
       setExpandedSections((prev) => new Set(prev).add('DTC / SELL-OUT'))
     }
+    if (pathname.startsWith('/sf')) {
+      setExpandedSections((prev) => new Set(prev).add('SALES FORCE'))
+    }
   }, [pathname])
 
   const toggleSection = (label: string) => {
@@ -38,7 +41,7 @@ export function Sidebar() {
         <div className="mb-1">
           <h2 className="text-xl font-bold tracking-wide text-white">GELOS</h2>
           <p className="text-xs font-semibold uppercase tracking-widest text-amber-400">
-            Full Operating System v2
+            for staffs
           </p>
         </div>
       </div>

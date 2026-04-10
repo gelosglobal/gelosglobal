@@ -44,9 +44,9 @@ export const dtcNavItems: NavItemConfig[] = [
 ]
 
 export const salesForceNavItems: NavItemConfig[] = [
-  { label: 'SF Dashboard', href: '/', icon: Home },
-  { label: 'Outlet Scouting', icon: Map },
-  { label: 'Shop Visits', icon: Store },
+  { label: 'SF Dashboard', href: '/sf/dashboard', icon: Home },
+  { label: 'Outlet Scouting', href: '/sf/outlet-scouting', icon: Map },
+  { label: 'Shop Visits', href: '/sf/shop-visits', icon: Store },
   { label: 'POSM Tracker', icon: Activity },
   { label: 'SF Inventory', icon: Box },
   { label: 'B2B Payments', icon: CreditCard },
@@ -57,6 +57,10 @@ export const salesForceNavItems: NavItemConfig[] = [
 ]
 
 const pathTitleEntries: [string, string][] = [
+  ['/sf/dashboard', 'SF Dashboard'],
+  ['/sf/outlet-scouting', 'Outlet Scouting'],
+  ['/sf/shop-visits', 'Shop Visits'],
+  ['/sf', 'Sales Force'],
   ['/dtc/orders-engine', 'Orders Engine'],
   ['/dtc/customer-intelligence', 'Customer Intelligence'],
   ['/dtc/inventory', 'DTC Inventory'],
@@ -69,6 +73,7 @@ export function getMobileNavTitle(pathname: string): string {
   for (const [path, title] of pathTitleEntries) {
     if (pathname === path) return title
   }
+  if (pathname.startsWith('/sf/')) return 'Sales Force'
   if (pathname === '/') return 'Master Dashboard'
   return 'GELOS'
 }
