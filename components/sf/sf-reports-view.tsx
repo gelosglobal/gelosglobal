@@ -173,7 +173,7 @@ export function SfReportsView() {
   return (
     <div className="flex min-h-0 flex-col">
       <SfPageHeader
-        title="SF Reports"
+        title="Retail Reports"
         description="A reporting hub for field activity. Uses completed shop visits (sf_visits) to compute rep performance and outlet coverage."
         actions={
           <div className="flex flex-wrap items-center gap-2">
