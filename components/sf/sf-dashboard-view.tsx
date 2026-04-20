@@ -300,7 +300,7 @@ export function SfDashboardView() {
   return (
     <div className="flex min-h-0 flex-col">
       <SfPageHeader
-        title="SF Dashboard"
+        title="Retail Dashboard"
         description="Live roll-up from outlets, field visits, POSM tasks, DTC B2B portal orders, logged collections, finance receivables, and inventory health."
         actions={
           <div className="flex flex-wrap gap-2">
@@ -468,7 +468,7 @@ export function SfDashboardView() {
                     <EmptyHeader>
                       <EmptyTitle>No rep activity</EmptyTitle>
                       <EmptyDescription>
-                        Completed visits in the selected range with a rep name will roll up here.
+                        Page activity in the selected range will roll up here.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -480,8 +480,6 @@ export function SfDashboardView() {
                         <TableHead className="hidden md:table-cell">Last page</TableHead>
                         <TableHead className="hidden lg:table-cell text-right">Last seen</TableHead>
                         <TableHead className="text-right">Activity</TableHead>
-                        <TableHead className="text-right">Visits</TableHead>
-                        <TableHead className="text-right">Sell-in logged</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -498,10 +496,6 @@ export function SfDashboardView() {
                           </TableCell>
                           <TableCell className="text-right tabular-nums text-muted-foreground">
                             {r.activityCount}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">{r.visits}</TableCell>
-                          <TableCell className="text-right font-medium tabular-nums">
-                            {formatGhs(r.sellInGhs)}
                           </TableCell>
                         </TableRow>
                       ))}

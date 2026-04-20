@@ -319,57 +319,70 @@ export async function computeSfDashboardSnapshot(
     lastPageTitle: null,
   }))
 
-  // Attach page activity (last seen + last page) per rep.
-  const repNames = repPulse.map((r) => r.rep).filter((r) => r && r !== 'Unknown')
-  if (repNames.length > 0) {
-    const [activityAgg, lastAgg] = await Promise.all([
-      db
-        .collection(REP_ACTIVITY_COLLECTION)
-        .aggregate<{ rep: string; count: number }>([
-          {
-            $match: {
-              repName: { $in: repNames },
-              visitedAt: { $gte: rangeStart, $lte: rangeEnd },
-            },
+  // Attach page activity (last seen + last page) per rep. Also include reps who have activity
+  // but zero completed visits in the selected range.
+  const [activityAgg, lastAgg] = await Promise.all([
+    db
+      .collection(REP_ACTIVITY_COLLECTION)
+      .aggregate<{ rep: string; count: number }>([
+        { $match: { visitedAt: { $gte: rangeStart, $lte: rangeEnd } } },
+        { $group: { _id: '$repName', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 30 },
+        { $project: { _id: 0, rep: '$_id', count: 1 } },
+      ])
+      .toArray(),
+    db
+      .collection(REP_ACTIVITY_COLLECTION)
+      .aggregate<{ rep: string; visitedAt: Date; pageTitle: string }>([
+        { $match: { visitedAt: { $gte: rangeStart, $lte: rangeEnd } } },
+        { $sort: { visitedAt: -1 } },
+        {
+          $group: {
+            _id: '$repName',
+            visitedAt: { $first: '$visitedAt' },
+            pageTitle: { $first: '$pageTitle' },
           },
-          { $group: { _id: '$repName', count: { $sum: 1 } } },
-          { $project: { _id: 0, rep: '$_id', count: 1 } },
-        ])
-        .toArray(),
-      db
-        .collection(REP_ACTIVITY_COLLECTION)
-        .aggregate<{ rep: string; visitedAt: Date; pageTitle: string }>([
-          { $match: { repName: { $in: repNames } } },
-          { $sort: { visitedAt: -1 } },
-          {
-            $group: {
-              _id: '$repName',
-              visitedAt: { $first: '$visitedAt' },
-              pageTitle: { $first: '$pageTitle' },
-            },
-          },
-          {
-            $project: {
-              _id: 0,
-              rep: '$_id',
-              visitedAt: 1,
-              pageTitle: 1,
-            },
-          },
-        ])
-        .toArray(),
-    ])
+        },
+        { $project: { _id: 0, rep: '$_id', visitedAt: 1, pageTitle: 1 } },
+      ])
+      .toArray(),
+  ])
 
-    const activityCountByRep = new Map(activityAgg.map((r) => [r.rep, r.count]))
-    const lastByRep = new Map(lastAgg.map((r) => [r.rep, r]))
+  const activityCountByRep = new Map(activityAgg.map((r) => [r.rep, r.count]))
+  const lastByRep = new Map(lastAgg.map((r) => [r.rep, r]))
 
-    for (const row of repPulse) {
-      row.activityCount = activityCountByRep.get(row.rep) ?? 0
-      const last = lastByRep.get(row.rep)
-      row.lastSeenAt = last?.visitedAt ? last.visitedAt.toISOString() : null
-      row.lastPageTitle = last?.pageTitle ?? null
+  // Merge repPulse (from visits) with reps present in activity.
+  const visitByRep = new Map(repPulse.map((r) => [r.rep, r]))
+  for (const a of activityAgg) {
+    if (!visitByRep.has(a.rep)) {
+      const base: SfDashboardRepRow = {
+        rep: a.rep || 'Unknown',
+        visits: 0,
+        sellInGhs: 0,
+        activityCount: 0,
+        lastSeenAt: null,
+        lastPageTitle: null,
+      }
+      repPulse.push(base)
+      visitByRep.set(base.rep, base)
     }
   }
+
+  for (const row of repPulse) {
+    row.activityCount = activityCountByRep.get(row.rep) ?? 0
+    const last = lastByRep.get(row.rep)
+    row.lastSeenAt = last?.visitedAt ? last.visitedAt.toISOString() : null
+    row.lastPageTitle = last?.pageTitle ?? null
+  }
+
+  // Keep the table focused: sort by activity, then sell-in, then visits.
+  repPulse.sort(
+    (a, b) =>
+      (b.activityCount ?? 0) - (a.activityCount ?? 0) ||
+      (b.sellInGhs ?? 0) - (a.sellInGhs ?? 0) ||
+      (b.visits ?? 0) - (a.visits ?? 0),
+  )
 
   const alerts: SfDashboardAlert[] = []
 

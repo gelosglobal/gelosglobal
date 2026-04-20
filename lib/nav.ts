@@ -49,7 +49,7 @@ export const sellInNavItems: NavItemConfig[] = [
 ]
 
 export const salesForceNavItems: NavItemConfig[] = [
-  { label: 'SF Dashboard', href: '/sf/dashboard', icon: Home },
+  { label: 'Retail Dashboard', href: '/sf/dashboard', icon: Home },
   { label: 'Outlet Scouting', href: '/sf/outlet-scouting', icon: Map },
   { label: 'Shop Visits', href: '/sf/shop-visits', icon: Store },
   { label: 'Orders Engine', href: '/sf/orders-engine', icon: ShoppingCart },
@@ -58,13 +58,13 @@ export const salesForceNavItems: NavItemConfig[] = [
   { label: 'B2B Payments', href: '/sf/b2b-payments', icon: CreditCard },
   { label: 'Targets & Quotas', href: '/sf/targets', icon: Target },
   { label: 'Rep Leaderboard', href: '/sf/leaderboard', icon: BarChart3 },
-  { label: 'SF Reports', href: '/sf/reports', icon: BarChart3 },
+  { label: 'Retail Reports', href: '/sf/reports', icon: BarChart3 },
   { label: 'Outlet Scout Map', href: '/sf/outlet-scout-map', icon: MapPin },
 ]
 
 const pathTitleEntries: [string, string][] = [
   ['/sell-in', 'Sell-in'],
-  ['/sf/dashboard', 'SF Dashboard'],
+  ['/sf/dashboard', 'Retail Dashboard'],
   ['/sf/outlet-scouting', 'Outlet Scouting'],
   ['/sf/shop-visits', 'Shop Visits'],
   ['/sf/orders-engine', 'Orders Engine'],
@@ -73,7 +73,7 @@ const pathTitleEntries: [string, string][] = [
   ['/sf/b2b-payments', 'B2B Payments'],
   ['/sf/targets', 'Targets & Quotas'],
   ['/sf/leaderboard', 'Rep Leaderboard'],
-  ['/sf/reports', 'SF Reports'],
+  ['/sf/reports', 'Retail Reports'],
   ['/sf/outlet-scout-map', 'Outlet Scout Map'],
   ['/sf', 'Retail'],
   ['/dtc/dashboard', 'DTC Dashboard'],
