@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { ChevronDown, Home, LogOut } from 'lucide-react'
@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { signOut, useSession } from '@/lib/auth-client'
 import { Button } from '@/components/ui/button'
 import { dtcNavItems, salesForceNavItems, sellInNavItems } from '@/lib/nav'
+import { getUserAccess } from '@/lib/access'
 
 export function Sidebar() {
   const router = useRouter()
@@ -16,6 +17,8 @@ export function Sidebar() {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
     () => new Set(['RETAIL']),
   )
+
+  const access = useMemo(() => getUserAccess((session as any) ?? null), [session])
 
   useEffect(() => {
     if (pathname.startsWith('/dtc')) {
@@ -49,22 +52,25 @@ export function Sidebar() {
         </div>
       </div>
 
-      <div className="px-4 py-3">
-        <Link
-          href="/"
-          className={cn(
-            'flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition',
-            pathname === '/'
-              ? 'bg-blue-600 text-white shadow-lg'
-              : 'bg-slate-700/50 text-white hover:bg-slate-600',
-          )}
-        >
-          <Home className="h-4 w-4" />
-          Master Dashboard
-        </Link>
-      </div>
+      {access.sections.has('master') ? (
+        <div className="px-4 py-3">
+          <Link
+            href="/"
+            className={cn(
+              'flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition',
+              pathname === '/'
+                ? 'bg-blue-600 text-white shadow-lg'
+                : 'bg-slate-700/50 text-white hover:bg-slate-600',
+            )}
+          >
+            <Home className="h-4 w-4" />
+            Master Dashboard
+          </Link>
+        </div>
+      ) : null}
 
       <div className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
+        {access.sections.has('dtc') ? (
         <div>
           <button
             type="button"
@@ -103,7 +109,9 @@ export function Sidebar() {
             </div>
           )}
         </div>
+        ) : null}
 
+        {access.sections.has('retail') ? (
         <div>
           <button
             type="button"
@@ -153,7 +161,9 @@ export function Sidebar() {
             </div>
           )}
         </div>
+        ) : null}
 
+        {access.sections.has('sell-in') ? (
         <div>
           <button
             type="button"
@@ -192,6 +202,7 @@ export function Sidebar() {
             </div>
           )}
         </div>
+        ) : null}
       </div>
 
       <div className="space-y-3 border-t border-slate-700 p-4">

@@ -2,6 +2,7 @@ import { auth, ensureAuthMongo } from '@/lib/auth'
 import { DashboardShell } from '@/components/dashboard-shell'
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
+import { canAccessPath, getUserAccess } from '@/lib/access'
 
 export default async function DtcLayout({
   children,
@@ -14,6 +15,10 @@ export default async function DtcLayout({
   })
   if (!session) {
     redirect('/sign-in')
+  }
+  const access = getUserAccess(session as any)
+  if (!canAccessPath(access, '/dtc')) {
+    redirect(access.homePath)
   }
   return <DashboardShell>{children}</DashboardShell>
 }
