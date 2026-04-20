@@ -11,6 +11,8 @@ export type SfInventoryDoc = {
   outlet: string
   /** Optional rep/merchandiser who last counted / owns the outlet. */
   repName?: string
+  costGhs?: number
+  priceGhs?: number
   onHand: number
   safetyStock: number
   /** Optional demand rate to estimate days of cover. */
@@ -27,6 +29,8 @@ export type SfInventoryJson = {
   name: string
   outlet: string
   repName?: string
+  costGhs: number | null
+  priceGhs: number | null
   onHand: number
   safetyStock: number
   dailyDemand: number
@@ -45,6 +49,8 @@ export function serializeSfInventoryItem(doc: SfInventoryDoc): SfInventoryJson {
     name: doc.name,
     outlet: doc.outlet,
     repName: doc.repName,
+    costGhs: typeof doc.costGhs === 'number' && Number.isFinite(doc.costGhs) ? doc.costGhs : null,
+    priceGhs: typeof doc.priceGhs === 'number' && Number.isFinite(doc.priceGhs) ? doc.priceGhs : null,
     onHand: doc.onHand,
     safetyStock: doc.safetyStock,
     dailyDemand: doc.dailyDemand,
@@ -74,9 +80,11 @@ export type CreateSfInventoryInput = {
   name: string
   outlet: string
   repName?: string
+  costGhs?: number
+  priceGhs?: number
   onHand: number
   safetyStock: number
-  dailyDemand: number
+  dailyDemand?: number
   lastCountedAt?: Date
 }
 
@@ -90,9 +98,11 @@ export async function createSfInventoryItem(
     name: input.name.trim(),
     outlet: input.outlet.trim(),
     repName: input.repName?.trim() || undefined,
+    costGhs: input.costGhs,
+    priceGhs: input.priceGhs,
     onHand: input.onHand,
     safetyStock: input.safetyStock,
-    dailyDemand: input.dailyDemand,
+    dailyDemand: input.dailyDemand ?? 0,
     lastCountedAt: input.lastCountedAt,
     createdAt: now,
     updatedAt: now,
@@ -105,6 +115,8 @@ export type UpdateSfInventoryInput = Partial<{
   name: string
   outlet: string
   repName: string | null
+  costGhs: number | null
+  priceGhs: number | null
   onHand: number
   safetyStock: number
   dailyDemand: number
@@ -120,6 +132,8 @@ export async function updateSfInventoryItem(
   if (patch.name !== undefined) $set.name = patch.name.trim()
   if (patch.outlet !== undefined) $set.outlet = patch.outlet.trim()
   if (patch.repName !== undefined) $set.repName = patch.repName ? patch.repName.trim() : undefined
+  if (patch.costGhs !== undefined) $set.costGhs = patch.costGhs ?? undefined
+  if (patch.priceGhs !== undefined) $set.priceGhs = patch.priceGhs ?? undefined
   if (patch.onHand !== undefined) $set.onHand = patch.onHand
   if (patch.safetyStock !== undefined) $set.safetyStock = patch.safetyStock
   if (patch.dailyDemand !== undefined) $set.dailyDemand = patch.dailyDemand

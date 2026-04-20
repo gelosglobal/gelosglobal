@@ -23,6 +23,7 @@ export type NavItemConfig = {
 }
 
 export const dtcNavItems: NavItemConfig[] = [
+  { label: 'DTC Dashboard', href: '/dtc/dashboard', icon: Home },
   { label: 'Orders Engine', href: '/dtc/orders-engine', icon: ShoppingCart },
   {
     label: 'Customer Intelligence',
@@ -43,12 +44,17 @@ export const dtcNavItems: NavItemConfig[] = [
   { label: 'Finance Layer', href: '/dtc/finance-layer', icon: Landmark },
 ]
 
+export const sellInNavItems: NavItemConfig[] = [
+  { label: 'Sell-in', href: '/sell-in', icon: TrendingUp },
+]
+
 export const salesForceNavItems: NavItemConfig[] = [
   { label: 'SF Dashboard', href: '/sf/dashboard', icon: Home },
   { label: 'Outlet Scouting', href: '/sf/outlet-scouting', icon: Map },
   { label: 'Shop Visits', href: '/sf/shop-visits', icon: Store },
+  { label: 'Orders Engine', href: '/sf/orders-engine', icon: ShoppingCart },
   { label: 'POSM Tracker', href: '/sf/posm-tracker', icon: Activity },
-  { label: 'SF Inventory', href: '/sf/inventory', icon: Box },
+  { label: 'Retail Inventory', href: '/sf/inventory', icon: Box },
   { label: 'B2B Payments', href: '/sf/b2b-payments', icon: CreditCard },
   { label: 'Targets & Quotas', href: '/sf/targets', icon: Target },
   { label: 'Rep Leaderboard', href: '/sf/leaderboard', icon: BarChart3 },
@@ -57,17 +63,20 @@ export const salesForceNavItems: NavItemConfig[] = [
 ]
 
 const pathTitleEntries: [string, string][] = [
+  ['/sell-in', 'Sell-in'],
   ['/sf/dashboard', 'SF Dashboard'],
   ['/sf/outlet-scouting', 'Outlet Scouting'],
   ['/sf/shop-visits', 'Shop Visits'],
+  ['/sf/orders-engine', 'Orders Engine'],
   ['/sf/posm-tracker', 'POSM Tracker'],
-  ['/sf/inventory', 'SF Inventory'],
+  ['/sf/inventory', 'Retail Inventory'],
   ['/sf/b2b-payments', 'B2B Payments'],
   ['/sf/targets', 'Targets & Quotas'],
   ['/sf/leaderboard', 'Rep Leaderboard'],
   ['/sf/reports', 'SF Reports'],
   ['/sf/outlet-scout-map', 'Outlet Scout Map'],
-  ['/sf', 'Sales Force'],
+  ['/sf', 'Retail'],
+  ['/dtc/dashboard', 'DTC Dashboard'],
   ['/dtc/orders-engine', 'Orders Engine'],
   ['/dtc/customer-intelligence', 'Customer Intelligence'],
   ['/dtc/inventory', 'DTC Inventory'],
@@ -80,7 +89,8 @@ export function getMobileNavTitle(pathname: string): string {
   for (const [path, title] of pathTitleEntries) {
     if (pathname === path) return title
   }
-  if (pathname.startsWith('/sf/')) return 'Sales Force'
+  if (pathname.startsWith('/sell-in')) return 'Sell-in'
+  if (pathname.startsWith('/sf/')) return 'Retail'
   if (pathname === '/') return 'Master Dashboard'
   return 'GELOS'
 }

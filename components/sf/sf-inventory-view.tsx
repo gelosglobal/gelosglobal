@@ -35,6 +35,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { StockHealth } from '@/lib/dtc-inventory'
+import { formatGhs } from '@/lib/dtc-orders'
 
 type InventoryRow = {
   id: string
@@ -42,6 +43,8 @@ type InventoryRow = {
   name: string
   outlet: string
   repName?: string
+  costGhs: number | null
+  priceGhs: number | null
   onHand: number
   safetyStock: number
   dailyDemand: number
@@ -83,18 +86,20 @@ export function SfInventoryView() {
     name: string
     outlet: string
     repName: string
+    costGhs: string
+    priceGhs: string
     onHand: string
     safetyStock: string
-    dailyDemand: string
     lastCountedAt: string
   }>({
     sku: '',
     name: '',
     outlet: '',
     repName: '',
+    costGhs: '',
+    priceGhs: '',
     onHand: '',
     safetyStock: '',
-    dailyDemand: '',
     lastCountedAt: '',
   })
 
@@ -105,9 +110,10 @@ export function SfInventoryView() {
     name: '',
     outlet: '',
     repName: '',
+    costGhs: '',
+    priceGhs: '',
     onHand: '',
     safetyStock: '',
-    dailyDemand: '',
     lastCountedAt: '',
   })
 
@@ -127,7 +133,7 @@ export function SfInventoryView() {
       setItems(data.items)
       setStats(data.stats)
     } catch {
-      toast.error('Could not load SF inventory')
+      toast.error('Could not load retail inventory')
     } finally {
       setLoading(false)
     }
@@ -165,9 +171,10 @@ export function SfInventoryView() {
       name: row.name,
       outlet: row.outlet,
       repName: row.repName ?? '',
+      costGhs: row.costGhs != null ? String(row.costGhs) : '',
+      priceGhs: row.priceGhs != null ? String(row.priceGhs) : '',
       onHand: String(row.onHand),
       safetyStock: String(row.safetyStock),
-      dailyDemand: String(row.dailyDemand),
       lastCountedAt: row.lastCountedAt ? row.lastCountedAt.slice(0, 16) : '',
     })
     setEditOpen(true)
@@ -186,16 +193,17 @@ export function SfInventoryView() {
 
     const onHand = Number(editForm.onHand)
     const safetyStock = Number(editForm.safetyStock)
-    const dailyDemand = Number(editForm.dailyDemand)
-    if (
-      !Number.isFinite(onHand) ||
-      !Number.isFinite(safetyStock) ||
-      !Number.isFinite(dailyDemand) ||
-      onHand < 0 ||
-      safetyStock < 0 ||
-      dailyDemand < 0
-    ) {
+    const costGhs = editForm.costGhs.trim() === '' ? null : Number(editForm.costGhs)
+    const priceGhs = editForm.priceGhs.trim() === '' ? null : Number(editForm.priceGhs)
+    if (!Number.isFinite(onHand) || !Number.isFinite(safetyStock) || onHand < 0 || safetyStock < 0) {
       toast.error('Enter valid numbers for stock fields')
+      return
+    }
+    if (
+      (costGhs !== null && (!Number.isFinite(costGhs) || costGhs < 0)) ||
+      (priceGhs !== null && (!Number.isFinite(priceGhs) || priceGhs < 0))
+    ) {
+      toast.error('Enter valid numbers for cost and price')
       return
     }
 
@@ -209,9 +217,10 @@ export function SfInventoryView() {
           name,
           outlet,
           repName: editForm.repName.trim() ? editForm.repName.trim() : null,
+          costGhs,
+          priceGhs,
           onHand,
           safetyStock,
-          dailyDemand,
           lastCountedAt: editForm.lastCountedAt
             ? new Date(editForm.lastCountedAt).toISOString()
             : null,
@@ -248,16 +257,22 @@ export function SfInventoryView() {
 
     const onHand = Number(createForm.onHand)
     const safetyStock = Number(createForm.safetyStock)
-    const dailyDemand = Number(createForm.dailyDemand)
+    const costGhs = createForm.costGhs.trim() === '' ? undefined : Number(createForm.costGhs)
+    const priceGhs = createForm.priceGhs.trim() === '' ? undefined : Number(createForm.priceGhs)
     if (
       !Number.isFinite(onHand) ||
       !Number.isFinite(safetyStock) ||
-      !Number.isFinite(dailyDemand) ||
       onHand < 0 ||
-      safetyStock < 0 ||
-      dailyDemand < 0
+      safetyStock < 0
     ) {
       toast.error('Enter valid numbers for stock fields')
+      return
+    }
+    if (
+      (costGhs !== undefined && (!Number.isFinite(costGhs) || costGhs < 0)) ||
+      (priceGhs !== undefined && (!Number.isFinite(priceGhs) || priceGhs < 0))
+    ) {
+      toast.error('Enter valid numbers for cost and price')
       return
     }
 
@@ -272,9 +287,10 @@ export function SfInventoryView() {
           name,
           outlet,
           repName: createForm.repName.trim() || undefined,
+          costGhs,
+          priceGhs,
           onHand,
           safetyStock,
-          dailyDemand,
           lastCountedAt: createForm.lastCountedAt
             ? new Date(createForm.lastCountedAt).toISOString()
             : undefined,
@@ -296,9 +312,10 @@ export function SfInventoryView() {
         name: '',
         outlet: '',
         repName: '',
+        costGhs: '',
+        priceGhs: '',
         onHand: '',
         safetyStock: '',
-        dailyDemand: '',
         lastCountedAt: '',
       })
       void load()
@@ -319,6 +336,8 @@ export function SfInventoryView() {
       'repName',
       'sku',
       'name',
+      'costGhs',
+      'priceGhs',
       'onHand',
       'safetyStock',
       'dailyDemand',
@@ -335,6 +354,8 @@ export function SfInventoryView() {
           `"${(r.repName ?? '').replace(/"/g, '""')}"`,
           r.sku,
           `"${r.name.replace(/"/g, '""')}"`,
+          r.costGhs ?? '',
+          r.priceGhs ?? '',
           r.onHand,
           r.safetyStock,
           r.dailyDemand,
@@ -358,7 +379,7 @@ export function SfInventoryView() {
   return (
     <div className="flex min-h-0 flex-col">
       <SfPageHeader
-        title="SF Inventory"
+        title="Retail Inventory"
         description="Outlet-level stock counts captured by the field team. Track on-hand, safety stock, and (optional) days of cover."
         actions={
           <div className="flex flex-wrap items-center gap-2">
@@ -460,28 +481,44 @@ export function SfInventoryView() {
                         />
                       </div>
                     </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="sf-counted">Last counted (optional)</Label>
+                      <Input
+                        id="sf-counted"
+                        type="datetime-local"
+                        value={createForm.lastCountedAt}
+                        onChange={(e) =>
+                          setCreateForm((f) => ({ ...f, lastCountedAt: e.target.value }))
+                        }
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Velocity (daily demand) is auto-calculated from Retail Orders.
+                      </p>
+                    </div>
+
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
-                        <Label htmlFor="sf-demand">Daily demand (optional)</Label>
+                        <Label htmlFor="sf-cost">Cost (GHS)</Label>
                         <Input
-                          id="sf-demand"
+                          id="sf-cost"
                           inputMode="decimal"
-                          value={createForm.dailyDemand}
+                          value={createForm.costGhs}
                           onChange={(e) =>
-                            setCreateForm((f) => ({ ...f, dailyDemand: e.target.value }))
+                            setCreateForm((f) => ({ ...f, costGhs: e.target.value }))
                           }
-                          placeholder="0"
+                          placeholder="0.00"
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="sf-counted">Last counted (optional)</Label>
+                        <Label htmlFor="sf-price">Price (GHS)</Label>
                         <Input
-                          id="sf-counted"
-                          type="datetime-local"
-                          value={createForm.lastCountedAt}
+                          id="sf-price"
+                          inputMode="decimal"
+                          value={createForm.priceGhs}
                           onChange={(e) =>
-                            setCreateForm((f) => ({ ...f, lastCountedAt: e.target.value }))
+                            setCreateForm((f) => ({ ...f, priceGhs: e.target.value }))
                           }
+                          placeholder="0.00"
                         />
                       </div>
                     </div>
@@ -597,6 +634,8 @@ export function SfInventoryView() {
                   <TableHead className="hidden lg:table-cell">Rep</TableHead>
                   <TableHead>SKU</TableHead>
                   <TableHead>Product</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Cost</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Price</TableHead>
                   <TableHead className="text-right">On hand</TableHead>
                   <TableHead className="hidden text-right sm:table-cell">Days cover</TableHead>
                   <TableHead>Health</TableHead>
@@ -612,6 +651,12 @@ export function SfInventoryView() {
                     </TableCell>
                     <TableCell className="font-mono text-xs font-medium">{row.sku}</TableCell>
                     <TableCell className="font-medium">{row.name}</TableCell>
+                    <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
+                      {row.costGhs == null ? '—' : formatGhs(row.costGhs)}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
+                      {row.priceGhs == null ? '—' : formatGhs(row.priceGhs)}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">{row.onHand}</TableCell>
                     <TableCell className="hidden text-right tabular-nums sm:table-cell">
                       {row.daysCover === null ? '—' : `${row.daysCover}d`}
@@ -709,28 +754,40 @@ export function SfInventoryView() {
                     />
                   </div>
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sf-edit-counted">Last counted</Label>
+                  <Input
+                    id="sf-edit-counted"
+                    type="datetime-local"
+                    value={editForm.lastCountedAt}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, lastCountedAt: e.target.value }))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Velocity (daily demand) is auto-calculated from Retail Orders.
+                  </p>
+                </div>
+
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="sf-edit-demand">Daily demand</Label>
+                    <Label htmlFor="sf-edit-cost">Cost (GHS)</Label>
                     <Input
-                      id="sf-edit-demand"
+                      id="sf-edit-cost"
                       inputMode="decimal"
-                      value={editForm.dailyDemand}
-                      onChange={(e) =>
-                        setEditForm((f) => ({ ...f, dailyDemand: e.target.value }))
-                      }
-                      placeholder="0"
+                      value={editForm.costGhs}
+                      onChange={(e) => setEditForm((f) => ({ ...f, costGhs: e.target.value }))}
+                      placeholder="0.00"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="sf-edit-counted">Last counted</Label>
+                    <Label htmlFor="sf-edit-price">Price (GHS)</Label>
                     <Input
-                      id="sf-edit-counted"
-                      type="datetime-local"
-                      value={editForm.lastCountedAt}
-                      onChange={(e) =>
-                        setEditForm((f) => ({ ...f, lastCountedAt: e.target.value }))
-                      }
+                      id="sf-edit-price"
+                      inputMode="decimal"
+                      value={editForm.priceGhs}
+                      onChange={(e) => setEditForm((f) => ({ ...f, priceGhs: e.target.value }))}
+                      placeholder="0.00"
                     />
                   </div>
                 </div>

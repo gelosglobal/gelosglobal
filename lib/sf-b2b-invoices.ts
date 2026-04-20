@@ -3,12 +3,21 @@ import { ObjectId } from 'mongodb'
 
 export const SF_B2B_INVOICES_COLLECTION = 'sf_b2b_invoices'
 
+export type SfB2bInvoiceItem = {
+  name: string
+  sku?: string
+  qty: number
+  unitPriceGhs: number
+}
+
 export type SfB2bInvoiceDoc = {
   _id: ObjectId
   outletName: string
   invoiceNumber: string
   amountGhs: number
+  discountGhs?: number
   paidGhs: number
+  items?: SfB2bInvoiceItem[]
   dueAt?: Date
   repName?: string
   notes?: string
@@ -23,8 +32,10 @@ export type SfB2bInvoiceJson = {
   outletName: string
   invoiceNumber: string
   amountGhs: number
+  discountGhs: number
   paidGhs: number
   balanceGhs: number
+  items: SfB2bInvoiceItem[]
   dueAt: string | null
   repName: string | null
   status: SfB2bInvoiceStatus
@@ -33,8 +44,15 @@ export type SfB2bInvoiceJson = {
   updatedAt: string
 }
 
-function statusFor(doc: Pick<SfB2bInvoiceDoc, 'amountGhs' | 'paidGhs' | 'dueAt'>, now: Date) {
-  const balance = Math.max(0, (doc.amountGhs ?? 0) - (doc.paidGhs ?? 0))
+function statusFor(
+  doc: Pick<SfB2bInvoiceDoc, 'amountGhs' | 'paidGhs' | 'dueAt' | 'discountGhs'>,
+  now: Date,
+) {
+  const amount = Number(doc.amountGhs) || 0
+  const discount = Math.max(0, Math.min(amount, Number(doc.discountGhs) || 0))
+  const net = Math.max(0, amount - discount)
+  const paid = Number(doc.paidGhs) || 0
+  const balance = Math.max(0, net - paid)
   if (balance <= 0) return { status: 'paid' as const, balanceGhs: 0 }
   if (doc.dueAt && doc.dueAt.getTime() < now.getTime()) {
     return { status: 'overdue' as const, balanceGhs: balance }
@@ -49,8 +67,10 @@ export function serializeSfB2bInvoice(doc: SfB2bInvoiceDoc, now = new Date()): S
     outletName: doc.outletName,
     invoiceNumber: doc.invoiceNumber,
     amountGhs: doc.amountGhs,
+    discountGhs: Number.isFinite(doc.discountGhs as number) ? (doc.discountGhs as number) : 0,
     paidGhs: doc.paidGhs,
     balanceGhs,
+    items: Array.isArray(doc.items) ? doc.items : [],
     dueAt: doc.dueAt ? doc.dueAt.toISOString() : null,
     repName: doc.repName ?? null,
     status,
@@ -77,7 +97,9 @@ export type CreateSfB2bInvoiceInput = {
   outletName: string
   invoiceNumber: string
   amountGhs: number
+  discountGhs?: number
   paidGhs: number
+  items?: SfB2bInvoiceItem[]
   dueAt?: Date
   repName?: string
   notes?: string
@@ -88,11 +110,19 @@ export async function createSfB2bInvoice(
   input: CreateSfB2bInvoiceInput,
 ): Promise<SfB2bInvoiceDoc> {
   const now = new Date()
+  const discount = Math.max(0, Math.min(input.amountGhs, input.discountGhs ?? 0))
   const doc: WithoutId<SfB2bInvoiceDoc> = {
     outletName: input.outletName.trim(),
     invoiceNumber: input.invoiceNumber.trim(),
     amountGhs: input.amountGhs,
+    discountGhs: discount > 0 ? discount : undefined,
     paidGhs: input.paidGhs,
+    items: input.items?.map((it) => ({
+      name: it.name.trim(),
+      sku: it.sku?.trim() ? it.sku.trim() : undefined,
+      qty: it.qty,
+      unitPriceGhs: it.unitPriceGhs,
+    })),
     dueAt: input.dueAt,
     repName: input.repName?.trim() || undefined,
     notes: input.notes?.trim() || undefined,
@@ -107,7 +137,9 @@ export type UpdateSfB2bInvoiceInput = Partial<{
   outletName: string
   invoiceNumber: string
   amountGhs: number
+  discountGhs: number | null
   paidGhs: number
+  items: SfB2bInvoiceItem[] | null
   dueAt: Date | null
   repName: string | null
   notes: string | null
@@ -122,7 +154,19 @@ export async function updateSfB2bInvoice(
   if (patch.outletName !== undefined) $set.outletName = patch.outletName.trim()
   if (patch.invoiceNumber !== undefined) $set.invoiceNumber = patch.invoiceNumber.trim()
   if (patch.amountGhs !== undefined) $set.amountGhs = patch.amountGhs
+  if (patch.discountGhs !== undefined) $set.discountGhs = patch.discountGhs ?? undefined
   if (patch.paidGhs !== undefined) $set.paidGhs = patch.paidGhs
+  if (patch.items !== undefined) {
+    $set.items =
+      patch.items == null
+        ? undefined
+        : patch.items.map((it) => ({
+            name: it.name.trim(),
+            sku: it.sku?.trim() ? it.sku.trim() : undefined,
+            qty: it.qty,
+            unitPriceGhs: it.unitPriceGhs,
+          }))
+  }
   if (patch.dueAt !== undefined) $set.dueAt = patch.dueAt ?? undefined
   if (patch.repName !== undefined) $set.repName = patch.repName ? patch.repName.trim() : undefined
   if (patch.notes !== undefined) $set.notes = patch.notes ? patch.notes.trim() : undefined
@@ -146,9 +190,11 @@ export function computeInvoiceKpis(rows: SfB2bInvoiceDoc[], now = new Date()) {
   let balance = 0
   let overdue = 0
   for (const r of rows) {
-    amount += r.amountGhs
+    const discount = Math.max(0, Math.min(r.amountGhs, r.discountGhs ?? 0))
+    const net = Math.max(0, r.amountGhs - discount)
+    amount += net
     paid += r.paidGhs
-    const b = Math.max(0, r.amountGhs - r.paidGhs)
+    const b = Math.max(0, net - r.paidGhs)
     balance += b
     if (b > 0 && r.dueAt && r.dueAt.getTime() < now.getTime()) overdue += b
   }

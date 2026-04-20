@@ -42,6 +42,8 @@ type InventoryRow = {
   sku: string
   name: string
   warehouse: string
+  costGhs: number | null
+  priceGhs: number | null
   onHand: number
   safetyStock: number
   dailyDemand: number
@@ -89,17 +91,19 @@ export function DtcInventoryView() {
     sku: string
     name: string
     warehouse: string
+    costGhs: string
+    priceGhs: string
     onHand: string
     safetyStock: string
-    dailyDemand: string
     inTransitValue: string
   }>({
     sku: '',
     name: '',
     warehouse: WAREHOUSE_PRESETS[0],
+    costGhs: '',
+    priceGhs: '',
     onHand: '',
     safetyStock: '',
-    dailyDemand: '',
     inTransitValue: '',
   })
 
@@ -109,9 +113,10 @@ export function DtcInventoryView() {
   const [editForm, setEditForm] = useState({
     name: '',
     warehouse: '',
+    costGhs: '',
+    priceGhs: '',
     onHand: '',
     safetyStock: '',
-    dailyDemand: '',
     inTransitValue: '',
   })
 
@@ -170,9 +175,10 @@ export function DtcInventoryView() {
     setEditForm({
       name: row.name,
       warehouse: row.warehouse,
+      costGhs: row.costGhs == null ? '' : String(row.costGhs),
+      priceGhs: row.priceGhs == null ? '' : String(row.priceGhs),
       onHand: String(row.onHand),
       safetyStock: String(row.safetyStock),
-      dailyDemand: String(row.dailyDemand),
       inTransitValue: String(row.inTransitValue),
     })
     setEditOpen(true)
@@ -181,9 +187,10 @@ export function DtcInventoryView() {
   async function handleEditSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!editRow) return
+    const costGhs = editForm.costGhs.trim() === '' ? null : Number(editForm.costGhs)
+    const priceGhs = editForm.priceGhs.trim() === '' ? null : Number(editForm.priceGhs)
     const onHand = Number(editForm.onHand)
     const safetyStock = Number(editForm.safetyStock)
-    const dailyDemand = Number(editForm.dailyDemand)
     const inTransitValue = Number(editForm.inTransitValue)
     const name = editForm.name.trim()
     const warehouse = editForm.warehouse.trim()
@@ -192,13 +199,13 @@ export function DtcInventoryView() {
       return
     }
     if (
+      (costGhs !== null && (!Number.isFinite(costGhs) || costGhs < 0)) ||
+      (priceGhs !== null && (!Number.isFinite(priceGhs) || priceGhs < 0)) ||
       !Number.isFinite(onHand) ||
       !Number.isFinite(safetyStock) ||
-      !Number.isFinite(dailyDemand) ||
       !Number.isFinite(inTransitValue) ||
       onHand < 0 ||
       safetyStock < 0 ||
-      dailyDemand < 0 ||
       inTransitValue < 0
     ) {
       toast.error('Enter valid numbers for stock fields')
@@ -213,9 +220,10 @@ export function DtcInventoryView() {
         body: JSON.stringify({
           name,
           warehouse,
+          costGhs,
+          priceGhs,
           onHand,
           safetyStock,
-          dailyDemand,
           inTransitValue,
         }),
       })
@@ -290,14 +298,16 @@ export function DtcInventoryView() {
       toast.error('SKU and product name are required')
       return
     }
+    const costGhs = createForm.costGhs.trim() === '' ? undefined : Number(createForm.costGhs)
+    const priceGhs = createForm.priceGhs.trim() === '' ? undefined : Number(createForm.priceGhs)
     const onHand = Number(createForm.onHand)
     const safetyStock = Number(createForm.safetyStock)
-    const dailyDemand = Number(createForm.dailyDemand)
     const inTransitValue = Number(createForm.inTransitValue)
     if (
+      (costGhs !== undefined && (!Number.isFinite(costGhs) || costGhs < 0)) ||
+      (priceGhs !== undefined && (!Number.isFinite(priceGhs) || priceGhs < 0)) ||
       !Number.isFinite(onHand) ||
       !Number.isFinite(safetyStock) ||
-      !Number.isFinite(dailyDemand) ||
       !Number.isFinite(inTransitValue)
     ) {
       toast.error('Enter valid numbers for stock fields')
@@ -313,9 +323,10 @@ export function DtcInventoryView() {
           sku,
           name,
           warehouse: createForm.warehouse,
+          costGhs,
+          priceGhs,
           onHand,
           safetyStock,
-          dailyDemand,
           inTransitValue,
         }),
       })
@@ -334,9 +345,10 @@ export function DtcInventoryView() {
         sku: '',
         name: '',
         warehouse: WAREHOUSE_PRESETS[0],
+        costGhs: '',
+        priceGhs: '',
         onHand: '',
         safetyStock: '',
-        dailyDemand: '',
         inTransitValue: '',
       })
       void load()
@@ -431,6 +443,32 @@ export function DtcInventoryView() {
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
+                        <Label htmlFor="inv-cost">Cost (GHS)</Label>
+                        <Input
+                          id="inv-cost"
+                          inputMode="decimal"
+                          value={createForm.costGhs}
+                          onChange={(e) =>
+                            setCreateForm((f) => ({ ...f, costGhs: e.target.value }))
+                          }
+                          placeholder="Optional"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="inv-price">Price (GHS)</Label>
+                        <Input
+                          id="inv-price"
+                          inputMode="decimal"
+                          value={createForm.priceGhs}
+                          onChange={(e) =>
+                            setCreateForm((f) => ({ ...f, priceGhs: e.target.value }))
+                          }
+                          placeholder="Optional"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
                         <Label htmlFor="inv-on">On hand (units)</Label>
                         <Input
                           id="inv-on"
@@ -455,34 +493,20 @@ export function DtcInventoryView() {
                         />
                       </div>
                     </div>
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label htmlFor="inv-dem">Daily demand (units/day)</Label>
-                        <Input
-                          id="inv-dem"
-                          inputMode="decimal"
-                          value={createForm.dailyDemand}
-                          onChange={(e) =>
-                            setCreateForm((f) => ({ ...f, dailyDemand: e.target.value }))
-                          }
-                          placeholder="8.5"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="inv-transit">In transit (GHS)</Label>
-                        <Input
-                          id="inv-transit"
-                          inputMode="decimal"
-                          value={createForm.inTransitValue}
-                          onChange={(e) =>
-                            setCreateForm((f) => ({
-                              ...f,
-                              inTransitValue: e.target.value,
-                            }))
-                          }
-                          placeholder="0"
-                        />
-                      </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="inv-transit">In transit (GHS)</Label>
+                      <Input
+                        id="inv-transit"
+                        inputMode="decimal"
+                        value={createForm.inTransitValue}
+                        onChange={(e) =>
+                          setCreateForm((f) => ({
+                            ...f,
+                            inTransitValue: e.target.value,
+                          }))
+                        }
+                        placeholder="0"
+                      />
                     </div>
                   </div>
                   <DialogFooter>
@@ -569,7 +593,7 @@ export function DtcInventoryView() {
 
         <Card className="p-0">
           <div className="border-b border-border px-4 py-3 sm:px-6">
-            <h2 className="text-sm font-semibold uppercase tracking-wide">Stock positions</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-wide">DTC Inventory</h2>
           </div>
           {loading ? (
             <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -592,32 +616,114 @@ export function DtcInventoryView() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>SKU</TableHead>
                   <TableHead>Product</TableHead>
-                  <TableHead className="hidden md:table-cell">Warehouse</TableHead>
-                  <TableHead className="text-right">On hand</TableHead>
-                  <TableHead className="hidden text-right sm:table-cell">Days cover</TableHead>
-                  <TableHead>In transit</TableHead>
-                  <TableHead>Health</TableHead>
+                  <TableHead className="hidden sm:table-cell">SKU</TableHead>
+                  <TableHead className="hidden lg:table-cell text-right">Cost</TableHead>
+                  <TableHead className="hidden lg:table-cell text-right">Price</TableHead>
+                  <TableHead className="hidden lg:table-cell text-right">Margin</TableHead>
+                  <TableHead>Stock</TableHead>
+                  <TableHead className="hidden md:table-cell text-center">Reorder</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Velocity</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Days Left</TableHead>
+                  <TableHead className="text-right">Status</TableHead>
                   <TableHead className="w-[52px] text-right" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.map((row) => (
                   <TableRow key={row.id}>
-                    <TableCell className="font-mono text-xs font-medium">{row.sku}</TableCell>
                     <TableCell className="font-medium">{row.name}</TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">
-                      {row.warehouse}
+                    <TableCell className="hidden sm:table-cell font-mono text-xs font-medium text-muted-foreground">
+                      {row.sku}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{row.onHand}</TableCell>
-                    <TableCell className="hidden text-right tabular-nums sm:table-cell">
-                      {row.daysCover === null ? '—' : `${row.daysCover}d`}
+                    <TableCell className="hidden lg:table-cell text-right tabular-nums text-sm">
+                      {row.costGhs == null ? '—' : formatGhs(row.costGhs)}
                     </TableCell>
-                    <TableCell className="tabular-nums text-sm">
-                      {formatGhs(row.inTransitValue)}
+                    <TableCell className="hidden lg:table-cell text-right tabular-nums text-sm">
+                      {row.priceGhs == null ? '—' : formatGhs(row.priceGhs)}
                     </TableCell>
-                    <TableCell>{healthBadge(row.health)}</TableCell>
+                    <TableCell className="hidden lg:table-cell text-right tabular-nums text-sm">
+                      {(() => {
+                        if (row.costGhs == null || row.priceGhs == null || row.priceGhs <= 0) {
+                          return <span className="text-muted-foreground">—</span>
+                        }
+                        const pct = ((row.priceGhs - row.costGhs) / row.priceGhs) * 100
+                        const cls =
+                          pct >= 50
+                            ? 'text-emerald-600'
+                            : pct >= 25
+                              ? 'text-amber-600'
+                              : 'text-destructive'
+                        return <span className={cls}>{Math.round(pct * 10) / 10}%</span>
+                      })()}
+                    </TableCell>
+                    <TableCell>
+                      <div className="min-w-[150px]">
+                        <div className="flex items-center justify-between">
+                          <span
+                            className={`text-sm font-semibold tabular-nums ${
+                              row.health === 'ok'
+                                ? 'text-emerald-600'
+                                : row.health === 'low'
+                                  ? 'text-amber-600'
+                                  : 'text-destructive'
+                            }`}
+                          >
+                            {row.onHand}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {row.safetyStock > 0 ? `/${row.safetyStock}` : ''}
+                          </span>
+                        </div>
+                        <div className="mt-2 h-1.5 w-full rounded-full bg-muted">
+                          {(() => {
+                            const denom =
+                              row.safetyStock > 0 ? row.safetyStock : Math.max(1, row.onHand)
+                            const pct = Math.min(100, Math.round((row.onHand / denom) * 100))
+                            const barClass =
+                              row.health === 'ok'
+                                ? 'bg-emerald-600'
+                                : row.health === 'low'
+                                  ? 'bg-amber-600'
+                                  : 'bg-destructive'
+                            return (
+                              <div
+                                className={`h-1.5 rounded-full ${barClass}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            )
+                          })()}
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell text-center tabular-nums text-sm text-muted-foreground">
+                      {row.safetyStock}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell text-right tabular-nums text-sm text-muted-foreground">
+                      {row.dailyDemand > 0 ? `${Math.round(row.dailyDemand * 10) / 10}/day` : '—'}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell text-right tabular-nums text-sm">
+                      {row.daysCover === null ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <span className={row.daysCover <= 10 ? 'text-amber-600' : 'text-emerald-600'}>
+                          {row.daysCover}d
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {row.health === 'ok' ? (
+                        <Badge className="bg-emerald-600/10 text-emerald-700 hover:bg-emerald-600/10 dark:text-emerald-400">
+                          OK
+                        </Badge>
+                      ) : row.health === 'low' ? (
+                        <Badge className="bg-rose-600/10 text-rose-700 hover:bg-rose-600/10 dark:text-rose-400">
+                          Low Stock
+                        </Badge>
+                      ) : (
+                        <Badge variant="destructive">Critical</Badge>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">
                       <Button
                         type="button"
@@ -681,6 +787,32 @@ export function DtcInventoryView() {
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
+                    <Label htmlFor="edit-cost">Cost (GHS)</Label>
+                    <Input
+                      id="edit-cost"
+                      inputMode="decimal"
+                      value={editForm.costGhs}
+                      onChange={(e) =>
+                        setEditForm((f) => ({ ...f, costGhs: e.target.value }))
+                      }
+                      placeholder="Optional"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-price">Price (GHS)</Label>
+                    <Input
+                      id="edit-price"
+                      inputMode="decimal"
+                      value={editForm.priceGhs}
+                      onChange={(e) =>
+                        setEditForm((f) => ({ ...f, priceGhs: e.target.value }))
+                      }
+                      placeholder="Optional"
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
                     <Label htmlFor="edit-on">On hand</Label>
                     <Input
                       id="edit-on"
@@ -703,32 +835,19 @@ export function DtcInventoryView() {
                     />
                   </div>
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-dem">Daily demand</Label>
-                    <Input
-                      id="edit-dem"
-                      inputMode="decimal"
-                      value={editForm.dailyDemand}
-                      onChange={(e) =>
-                        setEditForm((f) => ({ ...f, dailyDemand: e.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-transit">In transit (GHS)</Label>
-                    <Input
-                      id="edit-transit"
-                      inputMode="decimal"
-                      value={editForm.inTransitValue}
-                      onChange={(e) =>
-                        setEditForm((f) => ({
-                          ...f,
-                          inTransitValue: e.target.value,
-                        }))
-                      }
-                    />
-                  </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-transit">In transit (GHS)</Label>
+                  <Input
+                    id="edit-transit"
+                    inputMode="decimal"
+                    value={editForm.inTransitValue}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        inTransitValue: e.target.value,
+                      }))
+                    }
+                  />
                 </div>
               </div>
             ) : null}

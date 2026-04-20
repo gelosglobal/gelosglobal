@@ -3,7 +3,6 @@ import { ObjectId } from 'mongodb'
 import { startOfDay, startOfMonth, subDays } from 'date-fns'
 import {
   getOrCreateFinanceConfig,
-  sumB2BCashCollections,
 } from '@/lib/dtc-finance'
 import {
   computeStockHealth,
@@ -11,6 +10,8 @@ import {
   type DtcInventoryDoc,
 } from '@/lib/dtc-inventory'
 import { DTC_ORDERS_COLLECTION } from '@/lib/dtc-orders'
+import { SF_B2B_INVOICES_COLLECTION } from '@/lib/sf-b2b-invoices'
+import { REP_ACTIVITY_COLLECTION } from '@/lib/rep-activity'
 
 export const SF_OUTLETS_COLLECTION = 'sf_outlets'
 export const SF_VISITS_COLLECTION = 'sf_visits'
@@ -90,16 +91,21 @@ export type SfDashboardRepRow = {
   rep: string
   visits: number
   sellInGhs: number
+  activityCount: number
+  lastSeenAt: string | null
+  lastPageTitle: string | null
 }
 
 export type SfDashboardSnapshot = {
   generatedAt: string
+  rangeStart: string
+  rangeEnd: string
   primaryRegionLabel: string
   kpis: {
     activeOutlets: number
-    visits7d: number
-    b2bSellIn7d: number
-    collections7d: number
+    visits: number
+    b2bSellInGhs: number
+    collectionsGhs: number
     targetAttainmentPct: number | null
     monthlyTargetGhs: number
     mtdSellInGhs: number
@@ -126,6 +132,24 @@ async function sumB2BPortalRevenue(
         },
       },
       { $group: { _id: null, t: { $sum: '$totalAmount' } } },
+    ])
+    .toArray()
+  return rows[0]?.t ?? 0
+}
+
+async function sumB2bPaymentsPaid(db: Db, since: Date, until: Date): Promise<number> {
+  const rows = await db
+    .collection(SF_B2B_INVOICES_COLLECTION)
+    .aggregate<{ t: number }>([
+      {
+        $match: {
+          $or: [
+            { updatedAt: { $gte: since, $lte: until } },
+            { createdAt: { $gte: since, $lte: until } },
+          ],
+        },
+      },
+      { $group: { _id: null, t: { $sum: { $ifNull: ['$paidGhs', 0] } } } },
     ])
     .toArray()
   return rows[0]?.t ?? 0
@@ -184,9 +208,11 @@ function posmCollection(db: Db) {
 
 export async function computeSfDashboardSnapshot(
   db: Db,
+  input?: { rangeStart?: Date; rangeEnd?: Date },
 ): Promise<SfDashboardSnapshot> {
   const now = new Date()
-  const since7 = subDays(now, 7)
+  const rangeEnd = input?.rangeEnd ?? now
+  const rangeStart = input?.rangeStart ?? subDays(rangeEnd, 7)
   const monthStart = startOfMonth(now)
   const dayStart = startOfDay(now)
 
@@ -198,9 +224,9 @@ export async function computeSfDashboardSnapshot(
 
   let [
     activeOutlets,
-    visits7d,
-    b2bSellIn7d,
-    collections7d,
+    visits,
+    b2bSellInGhs,
+    collectionsGhs,
     mtdSellIn,
     mtdCollections,
     upcomingDocs,
@@ -211,12 +237,12 @@ export async function computeSfDashboardSnapshot(
     outletsCollection(db).countDocuments({ isActive: true }),
     visitsCollection(db).countDocuments({
       status: 'completed',
-      visitedAt: { $gte: since7, $lte: now },
+      visitedAt: { $gte: rangeStart, $lte: rangeEnd },
     }),
-    sumB2BPortalRevenue(db, since7, now),
-    sumB2BCashCollections(db, since7, now),
+    sumB2BPortalRevenue(db, rangeStart, rangeEnd),
+    sumB2bPaymentsPaid(db, rangeStart, rangeEnd),
     sumB2BPortalRevenue(db, monthStart, now),
-    sumB2BCashCollections(db, monthStart, now),
+    sumB2bPaymentsPaid(db, monthStart, now),
     visitsCollection(db)
       .find({
         status: 'scheduled',
@@ -234,7 +260,7 @@ export async function computeSfDashboardSnapshot(
         {
           $match: {
             status: 'completed',
-            visitedAt: { $gte: since7, $lte: now },
+            visitedAt: { $gte: rangeStart, $lte: rangeEnd },
           },
         },
         {
@@ -288,7 +314,62 @@ export async function computeSfDashboardSnapshot(
     rep: r._id || 'Unknown',
     visits: r.visits,
     sellInGhs: r.sellIn,
+    activityCount: 0,
+    lastSeenAt: null,
+    lastPageTitle: null,
   }))
+
+  // Attach page activity (last seen + last page) per rep.
+  const repNames = repPulse.map((r) => r.rep).filter((r) => r && r !== 'Unknown')
+  if (repNames.length > 0) {
+    const [activityAgg, lastAgg] = await Promise.all([
+      db
+        .collection(REP_ACTIVITY_COLLECTION)
+        .aggregate<{ rep: string; count: number }>([
+          {
+            $match: {
+              repName: { $in: repNames },
+              visitedAt: { $gte: rangeStart, $lte: rangeEnd },
+            },
+          },
+          { $group: { _id: '$repName', count: { $sum: 1 } } },
+          { $project: { _id: 0, rep: '$_id', count: 1 } },
+        ])
+        .toArray(),
+      db
+        .collection(REP_ACTIVITY_COLLECTION)
+        .aggregate<{ rep: string; visitedAt: Date; pageTitle: string }>([
+          { $match: { repName: { $in: repNames } } },
+          { $sort: { visitedAt: -1 } },
+          {
+            $group: {
+              _id: '$repName',
+              visitedAt: { $first: '$visitedAt' },
+              pageTitle: { $first: '$pageTitle' },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              rep: '$_id',
+              visitedAt: 1,
+              pageTitle: 1,
+            },
+          },
+        ])
+        .toArray(),
+    ])
+
+    const activityCountByRep = new Map(activityAgg.map((r) => [r.rep, r.count]))
+    const lastByRep = new Map(lastAgg.map((r) => [r.rep, r]))
+
+    for (const row of repPulse) {
+      row.activityCount = activityCountByRep.get(row.rep) ?? 0
+      const last = lastByRep.get(row.rep)
+      row.lastSeenAt = last?.visitedAt ? last.visitedAt.toISOString() : null
+      row.lastPageTitle = last?.pageTitle ?? null
+    }
+  }
 
   const alerts: SfDashboardAlert[] = []
 
@@ -324,12 +405,14 @@ export async function computeSfDashboardSnapshot(
 
   return {
     generatedAt: now.toISOString(),
+    rangeStart: rangeStart.toISOString(),
+    rangeEnd: rangeEnd.toISOString(),
     primaryRegionLabel: settings.primaryRegionLabel,
     kpis: {
       activeOutlets,
-      visits7d,
-      b2bSellIn7d,
-      collections7d,
+      visits,
+      b2bSellInGhs,
+      collectionsGhs,
       targetAttainmentPct,
       monthlyTargetGhs: settings.monthlyTargetGhs,
       mtdSellInGhs: mtdSellIn,

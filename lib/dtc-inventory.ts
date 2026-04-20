@@ -10,10 +10,14 @@ export type DtcInventoryDoc = {
   sku: string
   name: string
   warehouse: string
+  /** Unit cost in GHS (optional; used for margin display). */
+  costGhs?: number
+  /** Unit selling price in GHS (optional; used for margin display). */
+  priceGhs?: number
   onHand: number
   safetyStock: number
   /** Average units sold per day — used to estimate days of cover. */
-  dailyDemand: number
+  dailyDemand?: number
   /** Pipeline value in GHS (open PO / inbound). */
   inTransitValue: number
   createdAt: Date
@@ -25,6 +29,8 @@ export type DtcInventoryJson = {
   sku: string
   name: string
   warehouse: string
+  costGhs: number | null
+  priceGhs: number | null
   onHand: number
   safetyStock: number
   dailyDemand: number
@@ -56,15 +62,18 @@ export function computeDaysCover(
 }
 
 export function serializeInventoryItem(doc: DtcInventoryDoc): DtcInventoryJson {
-  const daysCover = computeDaysCover(doc.onHand, doc.dailyDemand)
+  const dailyDemand = Number.isFinite(doc.dailyDemand as number) ? (doc.dailyDemand as number) : 0
+  const daysCover = computeDaysCover(doc.onHand, dailyDemand)
   return {
     id: doc._id.toHexString(),
     sku: doc.sku,
     name: doc.name,
     warehouse: doc.warehouse,
+    costGhs: typeof doc.costGhs === 'number' ? doc.costGhs : null,
+    priceGhs: typeof doc.priceGhs === 'number' ? doc.priceGhs : null,
     onHand: doc.onHand,
     safetyStock: doc.safetyStock,
-    dailyDemand: doc.dailyDemand,
+    dailyDemand,
     daysCover,
     health: computeStockHealth(doc.onHand, doc.safetyStock),
     inTransitValue: doc.inTransitValue,
@@ -90,9 +99,11 @@ export type CreateDtcInventoryInput = {
   sku: string
   name: string
   warehouse: string
+  costGhs?: number
+  priceGhs?: number
   onHand: number
   safetyStock: number
-  dailyDemand: number
+  dailyDemand?: number
   inTransitValue: number
 }
 
@@ -105,6 +116,8 @@ export async function createDtcInventoryItem(
     sku: input.sku.trim().toUpperCase(),
     name: input.name.trim(),
     warehouse: input.warehouse.trim(),
+    costGhs: input.costGhs,
+    priceGhs: input.priceGhs,
     onHand: input.onHand,
     safetyStock: input.safetyStock,
     dailyDemand: input.dailyDemand,
@@ -119,6 +132,8 @@ export async function createDtcInventoryItem(
 export type UpdateDtcInventoryInput = Partial<{
   name: string
   warehouse: string
+  costGhs: number | null
+  priceGhs: number | null
   onHand: number
   safetyStock: number
   dailyDemand: number
@@ -133,6 +148,8 @@ export async function updateDtcInventoryItem(
   const $set: Record<string, unknown> = { updatedAt: new Date() }
   if (patch.name !== undefined) $set.name = patch.name.trim()
   if (patch.warehouse !== undefined) $set.warehouse = patch.warehouse.trim()
+  if (patch.costGhs !== undefined) $set.costGhs = patch.costGhs ?? undefined
+  if (patch.priceGhs !== undefined) $set.priceGhs = patch.priceGhs ?? undefined
   if (patch.onHand !== undefined) $set.onHand = patch.onHand
   if (patch.safetyStock !== undefined) $set.safetyStock = patch.safetyStock
   if (patch.dailyDemand !== undefined) $set.dailyDemand = patch.dailyDemand

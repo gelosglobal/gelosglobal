@@ -12,9 +12,10 @@ const patchBodySchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   outlet: z.string().trim().min(1).max(160).optional(),
   repName: z.string().trim().min(1).max(120).nullable().optional(),
+  costGhs: z.coerce.number().min(0).max(1_000_000_000).nullable().optional(),
+  priceGhs: z.coerce.number().min(0).max(1_000_000_000).nullable().optional(),
   onHand: z.coerce.number().int().min(0).max(100_000_000).optional(),
   safetyStock: z.coerce.number().int().min(0).max(100_000_000).optional(),
-  dailyDemand: z.coerce.number().min(0).max(1_000_000).optional(),
   lastCountedAt: z.string().datetime().nullable().optional(),
 })
 

@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { format, formatDistanceToNow } from 'date-fns'
+import { format, formatDistanceToNow, startOfDay, startOfMonth } from 'date-fns'
 import type { LucideIcon } from 'lucide-react'
 import {
   AlertTriangle,
@@ -41,18 +41,37 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { formatGhs } from '@/lib/dtc-orders'
 
-const FINANCE_DAYS = 30
+type RangePreset = '24h' | '7d' | '30d' | 'today' | 'mtd' | 'custom'
 
 type SfDashboardPayload = {
   generatedAt: string
+  rangeStart: string
+  rangeEnd: string
   primaryRegionLabel: string
   kpis: {
     activeOutlets: number
-    visits7d: number
-    b2bSellIn7d: number
-    collections7d: number
+    visits: number
+    b2bSellInGhs: number
+    collectionsGhs: number
     targetAttainmentPct: number | null
     monthlyTargetGhs: number
     mtdSellInGhs: number
@@ -71,8 +90,12 @@ type SfDashboardPayload = {
 
 type FinancePayload = {
   periodDays: number
+  periodStart?: string
+  periodEnd?: string
   dtcRevenue: number
   b2bCollected: number
+  b2bInvoiceRevenue?: number
+  b2bInvoicePaidGhs?: number
   totalRevenue: number
   marketingSpendGhs: number
   netProfit: number
@@ -97,7 +120,7 @@ const QUICK_LINKS: { href: string; label: string; icon: typeof Package }[] = [
   { href: '/sf/outlet-scouting', label: 'Outlet Scouting', icon: Map },
   { href: '/sf/outlet-scout-map', label: 'Scout Map', icon: MapPin },
   { href: '/sf/posm-tracker', label: 'POSM Tracker', icon: Target },
-  { href: '/sf/inventory', label: 'SF Inventory', icon: Package },
+  { href: '/sf/inventory', label: 'Retail Inventory', icon: Package },
   { href: '/sf/b2b-payments', label: 'B2B Payments', icon: CreditCard },
   { href: '/sf/targets', label: 'Targets & Quotas', icon: Target },
   { href: '/sf/reports', label: 'SF Reports', icon: BarChart3 },
@@ -168,12 +191,79 @@ export function ManagerDashboard() {
   const [finance, setFinance] = useState<FinancePayload | null>(null)
   const [orders, setOrders] = useState<OrderRow[]>([])
 
+  const [rangePreset, setRangePreset] = useState<RangePreset>('30d')
+  const [customOpen, setCustomOpen] = useState(false)
+  const [rangeStart, setRangeStart] = useState<string>(() => {
+    const end = new Date()
+    const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000)
+    return start.toISOString().slice(0, 16)
+  })
+  const [rangeEnd, setRangeEnd] = useState<string>(() => new Date().toISOString().slice(0, 16))
+  const [customDraft, setCustomDraft] = useState(() => ({ start: rangeStart, end: rangeEnd }))
+
+  function toIso(value: string): string | undefined {
+    const v = value.trim()
+    if (!v) return undefined
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return undefined
+    return d.toISOString()
+  }
+
+  function applyPreset(preset: Exclude<RangePreset, 'custom'>) {
+    const end = new Date()
+    let start: Date
+    if (preset === '24h') start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
+    else if (preset === '7d') start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000)
+    else if (preset === '30d') start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000)
+    else if (preset === 'today') start = startOfDay(end)
+    else start = startOfMonth(end)
+    const s = start.toISOString().slice(0, 16)
+    const e = end.toISOString().slice(0, 16)
+    setRangeStart(s)
+    setRangeEnd(e)
+    setCustomDraft({ start: s, end: e })
+  }
+
+  function openCustom() {
+    setCustomDraft({ start: rangeStart, end: rangeEnd })
+    setCustomOpen(true)
+  }
+
+  function saveCustom() {
+    const s = toIso(customDraft.start)
+    const e = toIso(customDraft.end)
+    if (!s || !e) {
+      toast.error('Pick a valid start and end date/time')
+      return
+    }
+    if (new Date(s).getTime() > new Date(e).getTime()) {
+      toast.error('Start must be before end')
+      return
+    }
+    setRangeStart(customDraft.start)
+    setRangeEnd(customDraft.end)
+    setCustomOpen(false)
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
+      const startIso = toIso(rangeStart)
+      const endIso = toIso(rangeEnd)
+      const sfQs = new URLSearchParams()
+      const finQs = new URLSearchParams()
+      if (startIso && endIso) {
+        sfQs.set('start', startIso)
+        sfQs.set('end', endIso)
+        finQs.set('start', startIso)
+        finQs.set('end', endIso)
+      }
+
       const [sfRes, finRes, ordRes] = await Promise.all([
-        fetch('/api/sf/dashboard', { credentials: 'include' }),
-        fetch(`/api/dtc/finance-layer?days=${FINANCE_DAYS}`, {
+        fetch(`/api/sf/dashboard${sfQs.toString() ? `?${sfQs.toString()}` : ''}`, {
+          credentials: 'include',
+        }),
+        fetch(`/api/dtc/finance-layer${finQs.toString() ? `?${finQs.toString()}` : ''}`, {
           credentials: 'include',
         }),
         fetch('/api/dtc/orders', { credentials: 'include' }),
@@ -203,7 +293,7 @@ export function ManagerDashboard() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [rangeEnd, rangeStart])
 
   useEffect(() => {
     void load()
@@ -234,6 +324,12 @@ export function ManagerDashboard() {
   const alerts = sf?.alerts.slice(0, 10) ?? []
 
   const headerDate = format(new Date(), 'd MMM yyyy')
+  const rangeLabel = (() => {
+    const s = toIso(rangeStart)
+    const e = toIso(rangeEnd)
+    if (!s || !e) return null
+    return `${format(new Date(s), 'd MMM · HH:mm')} → ${format(new Date(e), 'd MMM · HH:mm')}`
+  })()
 
   return (
     <div className="flex h-full flex-col">
@@ -241,11 +337,35 @@ export function ManagerDashboard() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">Master Dashboard</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Live roll-up from Finance Layer ({FINANCE_DAYS}d), Sales Force, and DTC orders
+            Live roll-up from Finance Layer, Sales Force, and DTC orders
           </p>
+          {rangeLabel ? (
+            <p className="mt-1 text-xs text-muted-foreground">{rangeLabel}</p>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <p className="hidden text-sm text-muted-foreground sm:block">{headerDate}</p>
+          <Select
+            value={rangePreset}
+            onValueChange={(v) => {
+              const p = v as RangePreset
+              setRangePreset(p)
+              if (p === 'custom') openCustom()
+              else applyPreset(p)
+            }}
+          >
+            <SelectTrigger className="h-9 w-[170px]">
+              <SelectValue placeholder="Range" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="24h">Last 24 hours</SelectItem>
+              <SelectItem value="7d">Last 7 days</SelectItem>
+              <SelectItem value="30d">Last 30 days</SelectItem>
+              <SelectItem value="today">Today</SelectItem>
+              <SelectItem value="mtd">This month</SelectItem>
+              <SelectItem value="custom">Custom…</SelectItem>
+            </SelectContent>
+          </Select>
           <Button
             type="button"
             variant="outline"
@@ -295,7 +415,11 @@ export function ManagerDashboard() {
             iconClass="text-blue-600"
             label="Total revenue"
             value={finance ? formatGhs(finance.totalRevenue) : '—'}
-            subtitle={`Last ${finance?.periodDays ?? FINANCE_DAYS} days · DTC + B2B collected`}
+            subtitle={
+              finance
+                ? `Last ${finance.periodDays} days · DTC + B2B collected = ${formatGhs(finance.totalRevenue)}`
+                : `DTC + B2B collected`
+            }
           />
           <MasterKpiCard
             borderAccent="border-l-purple-600"
@@ -312,8 +436,8 @@ export function ManagerDashboard() {
             iconWrapClass="bg-green-600/10"
             iconClass="text-green-600"
             label="B2B collected"
-            value={finance ? formatGhs(finance.b2bCollected) : '—'}
-            subtitle="Portal + logged trade cash"
+            value={finance ? formatGhs(finance.b2bInvoicePaidGhs ?? 0) : '—'}
+            subtitle="Sum of paid across invoices"
           />
           <MasterKpiCard
             borderAccent="border-l-red-600"
@@ -329,11 +453,11 @@ export function ManagerDashboard() {
             icon={Footprints}
             iconWrapClass="bg-indigo-600/10"
             iconClass="text-indigo-600"
-            label="SF field (7d)"
-            value={sf ? sf.kpis.visits7d : '—'}
+            label="SF field"
+            value={sf ? sf.kpis.visits : '—'}
             subtitle={
               <>
-                Visits · {sf ? formatGhs(sf.kpis.collections7d) : '—'} cash ·{' '}
+                Visits · {sf ? formatGhs(sf.kpis.collectionsGhs) : '—'} paid ·{' '}
                 {sf ? `${sf.kpis.openPosmTasks} open POSM` : '—'}
               </>
             }
@@ -505,6 +629,50 @@ export function ManagerDashboard() {
           </Card>
         </div>
       </div>
+
+      <Dialog open={customOpen} onOpenChange={setCustomOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Custom range</DialogTitle>
+            <DialogDescription>Pick a start and end date/time.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="master-custom-start">From</Label>
+              <Input
+                id="master-custom-start"
+                type="datetime-local"
+                value={customDraft.start}
+                onChange={(e) => setCustomDraft((d) => ({ ...d, start: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="master-custom-end">To</Label>
+              <Input
+                id="master-custom-end"
+                type="datetime-local"
+                value={customDraft.end}
+                onChange={(e) => setCustomDraft((d) => ({ ...d, end: e.target.value }))}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setCustomOpen(false)
+                if (rangePreset === 'custom') setRangePreset('30d')
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="button" onClick={saveCustom}>
+              Apply
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -12,12 +12,21 @@ import { z } from 'zod'
 
 export const runtime = 'nodejs'
 
+const itemSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  sku: z.string().trim().max(80).optional(),
+  qty: z.coerce.number().int().min(1).max(1_000_000),
+  unitPriceGhs: z.coerce.number().min(0).max(1_000_000_000),
+})
+
 const patchBodySchema = z
   .object({
     outletName: z.string().trim().min(1).max(200).optional(),
     invoiceNumber: z.string().trim().min(1).max(64).optional(),
     amountGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+    discountGhs: z.coerce.number().min(0).max(1_000_000_000).nullable().optional(),
     paidGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+    items: z.array(itemSchema).max(200).nullable().optional(),
     dueAt: z.coerce.date().nullable().optional(),
     repName: z.string().trim().max(120).nullable().optional(),
     notes: z.string().trim().max(2000).nullable().optional(),

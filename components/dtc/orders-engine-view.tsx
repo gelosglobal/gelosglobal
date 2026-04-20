@@ -43,6 +43,7 @@ type OrderRow = {
   channel: string
   paymentMethod: 'cash' | 'momo' | 'card' | 'bank_transfer' | 'pay_on_delivery'
   items: { sku?: string; name: string; qty: number; unitPrice: number }[]
+  discountGhs: number
   totalAmount: number
   currency: 'GHS'
   status: OrderStatus
@@ -107,6 +108,7 @@ export function OrdersEngineView() {
     orderedAt: toDatetimeLocalValue(new Date()),
     paymentMethod: 'momo' as PaymentMethod,
     status: 'processing' as OrderStatus,
+    discountGhs: '',
     items: [
       { sku: '', name: '', qty: '1', unitPrice: '' } satisfies DraftItem,
     ],
@@ -151,7 +153,7 @@ export function OrdersEngineView() {
     )
   }, [orders, filter])
 
-  const computedTotal = useMemo(() => {
+  const computedSubtotal = useMemo(() => {
     return form.items.reduce((sum, item) => {
       const qty = Number.parseInt(item.qty, 10)
       const unit = Number.parseFloat(item.unitPrice)
@@ -160,6 +162,38 @@ export function OrdersEngineView() {
       return sum + qty * unit
     }, 0)
   }, [form.items])
+
+  const computedDiscount = useMemo(() => {
+    const d = Number.parseFloat(form.discountGhs)
+    if (!Number.isFinite(d) || d <= 0) return 0
+    return Math.min(computedSubtotal, d)
+  }, [computedSubtotal, form.discountGhs])
+
+  const computedTotal = useMemo(() => {
+    return Math.max(0, computedSubtotal - computedDiscount)
+  }, [computedDiscount, computedSubtotal])
+
+  async function removeOrder(order: Pick<OrderRow, 'id' | 'orderNumber'>) {
+    if (!window.confirm(`Remove order ${order.orderNumber}? This cannot be undone.`)) return
+    try {
+      const res = await fetch(`/api/dtc/orders/${order.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (res.status === 401) {
+        toast.error('Session expired')
+        return
+      }
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error ?? 'Could not remove order')
+      }
+      toast.success('Order removed')
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to remove order')
+    }
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
@@ -195,6 +229,12 @@ export function OrdersEngineView() {
       toast.error('Each item must have a valid unit price')
       return
     }
+    const discountGhs =
+      form.discountGhs.trim() === '' ? undefined : Number.parseFloat(form.discountGhs)
+    if (discountGhs !== undefined && (!Number.isFinite(discountGhs) || discountGhs < 0)) {
+      toast.error('Enter a valid discount amount')
+      return
+    }
     setSubmitting(true)
     try {
       const res = await fetch('/api/dtc/orders', {
@@ -207,6 +247,7 @@ export function OrdersEngineView() {
           orderedAt: new Date(form.orderedAt).toISOString(),
           paymentMethod: form.paymentMethod,
           items,
+          discountGhs,
           status: form.status,
         }),
       })
@@ -226,6 +267,7 @@ export function OrdersEngineView() {
         orderedAt: toDatetimeLocalValue(new Date()),
         paymentMethod: 'momo',
         status: 'processing',
+        discountGhs: '',
         items: [{ sku: '', name: '', qty: '1', unitPrice: '' }],
       })
       await load()
@@ -247,6 +289,7 @@ export function OrdersEngineView() {
       'channel',
       'paymentMethod',
       'itemsCount',
+      'discountGhs',
       'totalAmount',
       'status',
       'orderedAt',
@@ -261,6 +304,7 @@ export function OrdersEngineView() {
           o.channel,
           o.paymentMethod,
           o.items.length,
+          o.discountGhs ?? 0,
           o.totalAmount,
           o.status,
           o.orderedAt,
@@ -528,11 +572,42 @@ export function OrdersEngineView() {
                           </div>
                         ))}
                       </div>
-                      <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2">
-                        <p className="text-sm font-medium text-foreground">Order total</p>
-                        <p className="text-sm font-semibold text-foreground">
-                          {formatGhs(computedTotal)}
-                        </p>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor="order-discount">Discount (GHS)</Label>
+                          <Input
+                            id="order-discount"
+                            inputMode="decimal"
+                            value={form.discountGhs}
+                            onChange={(e) =>
+                              setForm((f) => ({ ...f, discountGhs: e.target.value }))
+                            }
+                            placeholder="0.00"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Applied to the full order total.
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-muted/30 px-3 py-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs text-muted-foreground">Subtotal</p>
+                            <p className="text-xs font-medium tabular-nums text-foreground">
+                              {formatGhs(computedSubtotal)}
+                            </p>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between">
+                            <p className="text-xs text-muted-foreground">Discount</p>
+                            <p className="text-xs font-medium tabular-nums text-foreground">
+                              {computedDiscount > 0 ? `−${formatGhs(computedDiscount)}` : '—'}
+                            </p>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
+                            <p className="text-sm font-medium text-foreground">Total</p>
+                            <p className="text-sm font-semibold tabular-nums text-foreground">
+                              {formatGhs(computedTotal)}
+                            </p>
+                          </div>
+                        </div>
                       </div>
                     </div>
                     <div className="space-y-2">
@@ -662,6 +737,7 @@ export function OrdersEngineView() {
                   <TableHead>Total</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="hidden md:table-cell">Order date</TableHead>
+                  <TableHead className="w-[64px] text-right" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -684,6 +760,18 @@ export function OrdersEngineView() {
                     <TableCell>{orderStatusBadge(o.status)}</TableCell>
                     <TableCell className="hidden text-muted-foreground md:table-cell">
                       {format(new Date(o.orderedAt), 'dd MMM yyyy, HH:mm')}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-destructive hover:text-destructive"
+                        onClick={() => void removeOrder(o)}
+                        aria-label="Remove order"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}

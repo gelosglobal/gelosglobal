@@ -39,6 +39,7 @@ const createBodySchema = z.object({
       }),
     )
     .min(1),
+  discountGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
   status: z
     .enum(['fulfilled', 'processing', 'pending_payment'])
     .optional()
@@ -107,6 +108,7 @@ export async function POST(request: Request) {
       qty: i.qty,
       unitPrice: i.unitPrice,
     })),
+    discountGhs: parsed.data.discountGhs,
     status: parsed.data.status,
     orderedAt: parsed.data.orderedAt,
   })

@@ -12,11 +12,20 @@ import { z } from 'zod'
 
 export const runtime = 'nodejs'
 
+const itemSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  sku: z.string().trim().max(80).optional(),
+  qty: z.coerce.number().int().min(1).max(1_000_000),
+  unitPriceGhs: z.coerce.number().min(0).max(1_000_000_000),
+})
+
 const postBodySchema = z.object({
   outletName: z.string().trim().min(1).max(200),
   invoiceNumber: z.string().trim().min(1).max(64),
   amountGhs: z.coerce.number().min(0).max(1_000_000_000),
+  discountGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
   paidGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  items: z.array(itemSchema).max(200).optional(),
   dueAt: z.coerce.date().optional(),
   repName: z.string().trim().max(120).optional(),
   notes: z.string().trim().max(2000).optional(),
@@ -80,7 +89,9 @@ export async function POST(request: Request) {
     outletName: d.outletName,
     invoiceNumber: d.invoiceNumber,
     amountGhs: d.amountGhs,
+    discountGhs: d.discountGhs,
     paidGhs: d.paidGhs ?? 0,
+    items: d.items,
     dueAt: d.dueAt,
     repName: d.repName,
     notes: d.notes,

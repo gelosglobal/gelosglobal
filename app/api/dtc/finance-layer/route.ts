@@ -1,6 +1,7 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
 import {
   computeFinanceLayerSnapshot,
+  computeFinanceLayerSnapshotForRange,
   updateFinanceConfig,
 } from '@/lib/dtc-finance'
 import { getMongo } from '@/lib/mongodb'
@@ -30,6 +31,8 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url)
+  const start = searchParams.get('start')
+  const end = searchParams.get('end')
   const rawDays = searchParams.get('days')
   const days = Math.min(
     365,
@@ -37,7 +40,22 @@ export async function GET(request: Request) {
   )
 
   const { db } = getMongo()
-  const { snapshot, config } = await computeFinanceLayerSnapshot(db, days)
+  if ((start && !end) || (!start && end)) {
+    return NextResponse.json({ error: 'Provide both start and end' }, { status: 400 })
+  }
+  const since = start ? new Date(start) : null
+  const until = end ? new Date(end) : null
+  if ((since && Number.isNaN(since.getTime())) || (until && Number.isNaN(until.getTime()))) {
+    return NextResponse.json({ error: 'Invalid start/end datetime' }, { status: 400 })
+  }
+  if (since && until && since.getTime() > until.getTime()) {
+    return NextResponse.json({ error: 'start must be <= end' }, { status: 400 })
+  }
+
+  const { snapshot, config } =
+    since && until
+      ? await computeFinanceLayerSnapshotForRange(db, { since, until })
+      : await computeFinanceLayerSnapshot(db, days)
   return NextResponse.json({
     ...snapshot,
     config: {

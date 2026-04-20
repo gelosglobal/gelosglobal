@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { format, formatDistanceToNow } from 'date-fns'
+import { format, formatDistanceToNow, startOfDay, startOfMonth } from 'date-fns'
 import {
   AlertTriangle,
   Building2,
@@ -32,6 +32,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Table,
   TableBody,
   TableCell,
@@ -43,12 +50,14 @@ import { formatGhs } from '@/lib/dtc-orders'
 
 type SfDashboardPayload = {
   generatedAt: string
+  rangeStart: string
+  rangeEnd: string
   primaryRegionLabel: string
   kpis: {
     activeOutlets: number
-    visits7d: number
-    b2bSellIn7d: number
-    collections7d: number
+    visits: number
+    b2bSellInGhs: number
+    collectionsGhs: number
     targetAttainmentPct: number | null
     monthlyTargetGhs: number
     mtdSellInGhs: number
@@ -61,7 +70,14 @@ type SfDashboardPayload = {
     rep: string
     scheduledAt: string
   }>
-  repPulse: Array<{ rep: string; visits: number; sellInGhs: number }>
+  repPulse: Array<{
+    rep: string
+    visits: number
+    sellInGhs: number
+    activityCount: number
+    lastSeenAt: string | null
+    lastPageTitle: string | null
+  }>
   alerts: Array<{ id: string; severity: 'high' | 'medium'; text: string }>
 }
 
@@ -82,10 +98,74 @@ export function SfDashboardView() {
     primaryRegionLabel: '',
   })
 
+  type RangePreset = '24h' | '7d' | '30d' | 'today' | 'mtd' | 'custom'
+  const [rangePreset, setRangePreset] = useState<RangePreset>('7d')
+  const [customOpen, setCustomOpen] = useState(false)
+
+  const [rangeStart, setRangeStart] = useState<string>(() => {
+    const end = new Date()
+    const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000)
+    return start.toISOString().slice(0, 16)
+  })
+  const [rangeEnd, setRangeEnd] = useState<string>(() => new Date().toISOString().slice(0, 16))
+  const [customDraft, setCustomDraft] = useState(() => ({
+    start: rangeStart,
+    end: rangeEnd,
+  }))
+
+  function toIso(value: string): string | undefined {
+    const v = value.trim()
+    if (!v) return undefined
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return undefined
+    return d.toISOString()
+  }
+
+  function applyPreset(preset: Exclude<RangePreset, 'custom'>) {
+    const end = new Date()
+    let start: Date
+    if (preset === '24h') start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
+    else if (preset === '7d') start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000)
+    else if (preset === '30d') start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000)
+    else if (preset === 'today') start = startOfDay(end)
+    else start = startOfMonth(end)
+    setRangeStart(start.toISOString().slice(0, 16))
+    setRangeEnd(end.toISOString().slice(0, 16))
+    setCustomDraft({ start: start.toISOString().slice(0, 16), end: end.toISOString().slice(0, 16) })
+  }
+
+  function openCustom() {
+    setCustomDraft({ start: rangeStart, end: rangeEnd })
+    setCustomOpen(true)
+  }
+
+  function saveCustom() {
+    const s = toIso(customDraft.start)
+    const e = toIso(customDraft.end)
+    if (!s || !e) {
+      toast.error('Pick a valid start and end date/time')
+      return
+    }
+    if (new Date(s).getTime() > new Date(e).getTime()) {
+      toast.error('Start must be before end')
+      return
+    }
+    setRangeStart(customDraft.start)
+    setRangeEnd(customDraft.end)
+    setCustomOpen(false)
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/sf/dashboard', { credentials: 'include' })
+      const qs = new URLSearchParams()
+      const startIso = toIso(rangeStart)
+      const endIso = toIso(rangeEnd)
+      if (startIso) qs.set('start', startIso)
+      if (endIso) qs.set('end', endIso)
+      const url = `/api/sf/dashboard${qs.toString() ? `?${qs.toString()}` : ''}`
+
+      const res = await fetch(url, { credentials: 'include' })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
@@ -97,10 +177,17 @@ export function SfDashboardView() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [rangeEnd, rangeStart])
 
   useEffect(() => {
     void load()
+  }, [load])
+
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      void load()
+    }, 30_000)
+    return () => window.clearInterval(t)
   }, [load])
 
   function openSettings() {
@@ -162,23 +249,23 @@ export function SfDashboardView() {
         accent: 'border-l-blue-600',
       },
       {
-        label: 'Visits (7d)',
-        value: String(kpis.visits7d),
+        label: 'Visits',
+        value: String(kpis.visits),
         subtitle: 'Completed shop visits',
         icon: Footprints,
         accent: 'border-l-emerald-600',
       },
       {
-        label: 'B2B sell-in (7d)',
-        value: formatGhs(kpis.b2bSellIn7d),
-        subtitle: 'B2B portal orders (DTC engine)',
+        label: 'B2B sell-in',
+        value: formatGhs(kpis.b2bSellInGhs),
+        subtitle: 'B2B portal orders (DTC engine) · selected range',
         icon: TrendingUp,
         accent: 'border-l-violet-600',
       },
       {
-        label: 'Collections (7d)',
-        value: formatGhs(kpis.collections7d),
-        subtitle: 'Logged B2B cash collections',
+        label: 'Collections',
+        value: formatGhs(kpis.collectionsGhs),
+        subtitle: 'Paid from B2B Payments · selected range',
         icon: Wallet,
         accent: 'border-l-amber-600',
       },
@@ -203,6 +290,12 @@ export function SfDashboardView() {
   }, [data])
 
   const today = format(new Date(), 'EEEE, d MMM yyyy')
+  const rangeLabel = useMemo(() => {
+    if (!data) return null
+    const start = new Date(data.rangeStart)
+    const end = new Date(data.rangeEnd)
+    return `${format(start, 'd MMM · HH:mm')} → ${format(end, 'd MMM · HH:mm')}`
+  }, [data])
 
   return (
     <div className="flex min-h-0 flex-col">
@@ -211,6 +304,30 @@ export function SfDashboardView() {
         description="Live roll-up from outlets, field visits, POSM tasks, DTC B2B portal orders, logged collections, finance receivables, and inventory health."
         actions={
           <div className="flex flex-wrap gap-2">
+            <Select
+              value={rangePreset}
+              onValueChange={(v) => {
+                const p = v as RangePreset
+                setRangePreset(p)
+                if (p === 'custom') {
+                  openCustom()
+                } else {
+                  applyPreset(p)
+                }
+              }}
+            >
+              <SelectTrigger className="h-9 w-[170px]">
+                <SelectValue placeholder="Range" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="24h">Last 24 hours</SelectItem>
+                <SelectItem value="7d">Last 7 days</SelectItem>
+                <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="today">Today</SelectItem>
+                <SelectItem value="mtd">This month</SelectItem>
+                <SelectItem value="custom">Custom…</SelectItem>
+              </SelectContent>
+            </Select>
             <Button
               type="button"
               variant="outline"
@@ -239,6 +356,7 @@ export function SfDashboardView() {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-muted-foreground">{today}</p>
           <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            {rangeLabel ? <span>{rangeLabel}</span> : null}
             {data?.primaryRegionLabel ? (
               <span className="flex items-center gap-2">
                 <MapPin className="h-3.5 w-3.5" />
@@ -342,7 +460,7 @@ export function SfDashboardView() {
                 <div className="flex items-center gap-2 border-b border-border px-4 py-3 sm:px-6">
                   <TrendingUp className="h-4 w-4 text-muted-foreground" />
                   <h2 className="text-sm font-semibold uppercase tracking-wide">
-                    Rep pulse (7d)
+                    Rep pulse (range)
                   </h2>
                 </div>
                 {data.repPulse.length === 0 ? (
@@ -350,7 +468,7 @@ export function SfDashboardView() {
                     <EmptyHeader>
                       <EmptyTitle>No rep activity</EmptyTitle>
                       <EmptyDescription>
-                        Completed visits in the last 7 days with a rep name will roll up here.
+                        Completed visits in the selected range with a rep name will roll up here.
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -359,6 +477,9 @@ export function SfDashboardView() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Rep</TableHead>
+                        <TableHead className="hidden md:table-cell">Last page</TableHead>
+                        <TableHead className="hidden lg:table-cell text-right">Last seen</TableHead>
+                        <TableHead className="text-right">Activity</TableHead>
                         <TableHead className="text-right">Visits</TableHead>
                         <TableHead className="text-right">Sell-in logged</TableHead>
                       </TableRow>
@@ -367,6 +488,17 @@ export function SfDashboardView() {
                       {data.repPulse.map((r) => (
                         <TableRow key={r.rep}>
                           <TableCell className="font-medium">{r.rep}</TableCell>
+                          <TableCell className="hidden md:table-cell text-muted-foreground">
+                            {r.lastPageTitle ?? '—'}
+                          </TableCell>
+                          <TableCell className="hidden lg:table-cell text-right text-sm text-muted-foreground">
+                            {r.lastSeenAt
+                              ? formatDistanceToNow(new Date(r.lastSeenAt), { addSuffix: true })
+                              : '—'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                            {r.activityCount}
+                          </TableCell>
                           <TableCell className="text-right tabular-nums">{r.visits}</TableCell>
                           <TableCell className="text-right font-medium tabular-nums">
                             {formatGhs(r.sellInGhs)}
@@ -458,6 +590,50 @@ export function SfDashboardView() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={customOpen} onOpenChange={setCustomOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Custom range</DialogTitle>
+            <DialogDescription>Pick a start and end date/time.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="sf-custom-start">From</Label>
+              <Input
+                id="sf-custom-start"
+                type="datetime-local"
+                value={customDraft.start}
+                onChange={(e) => setCustomDraft((d) => ({ ...d, start: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sf-custom-end">To</Label>
+              <Input
+                id="sf-custom-end"
+                type="datetime-local"
+                value={customDraft.end}
+                onChange={(e) => setCustomDraft((d) => ({ ...d, end: e.target.value }))}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setCustomOpen(false)
+                if (rangePreset === 'custom') setRangePreset('7d')
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="button" onClick={saveCustom}>
+              Apply
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

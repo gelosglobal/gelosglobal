@@ -26,6 +26,7 @@ export type DtcOrderDoc = {
   channel: string
   paymentMethod: PaymentMethod
   items: DtcOrderItem[]
+  discountGhs?: number
   totalAmount: number
   currency: 'GHS'
   status: OrderStatus
@@ -40,6 +41,7 @@ export type DtcOrderJson = {
   channel: string
   paymentMethod: PaymentMethod
   items: DtcOrderItem[]
+  discountGhs: number
   totalAmount: number
   currency: 'GHS'
   status: OrderStatus
@@ -55,6 +57,7 @@ export function serializeOrder(doc: DtcOrderDoc): DtcOrderJson {
     channel: doc.channel,
     paymentMethod: doc.paymentMethod,
     items: doc.items,
+    discountGhs: Number.isFinite(doc.discountGhs as number) ? (doc.discountGhs as number) : 0,
     totalAmount: doc.totalAmount,
     currency: doc.currency,
     status: doc.status,
@@ -85,6 +88,7 @@ export type CreateDtcOrderInput = {
   channel: string
   paymentMethod: PaymentMethod
   items: DtcOrderItem[]
+  discountGhs?: number
   status?: OrderStatus
   orderedAt?: Date
 }
@@ -93,16 +97,19 @@ export async function createDtcOrder(
   db: Db,
   input: CreateDtcOrderInput,
 ): Promise<DtcOrderDoc> {
-  const totalAmount = input.items.reduce(
+  const subtotal = input.items.reduce(
     (sum, item) => sum + item.qty * item.unitPrice,
     0,
   )
+  const discount = Math.max(0, Math.min(subtotal, input.discountGhs ?? 0))
+  const totalAmount = Math.max(0, subtotal - discount)
   const doc: WithoutId<DtcOrderDoc> = {
     orderNumber: newOrderNumber(),
     customer: input.customer.trim(),
     channel: input.channel,
     paymentMethod: input.paymentMethod,
     items: input.items,
+    discountGhs: discount > 0 ? discount : undefined,
     totalAmount,
     currency: 'GHS',
     status: input.status ?? 'processing',
@@ -111,6 +118,11 @@ export async function createDtcOrder(
   }
   const res = await ordersCollection(db).insertOne(doc)
   return { _id: res.insertedId, ...doc }
+}
+
+export async function deleteDtcOrder(db: Db, id: ObjectId): Promise<boolean> {
+  const res = await ordersCollection(db).deleteOne({ _id: id })
+  return res.deletedCount === 1
 }
 
 export function computeOrderStats(
@@ -135,8 +147,10 @@ export function computeOrderStats(
   }
 }
 
-export function formatGhs(amount: number): string {
-  return `GHS ${amount.toLocaleString('en-GH', {
+export function formatGhs(amount: number | null | undefined): string {
+  const n = typeof amount === 'number' ? amount : Number(amount)
+  if (!Number.isFinite(n)) return '—'
+  return `GHS ${n.toLocaleString('en-GH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`

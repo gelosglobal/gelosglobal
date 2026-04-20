@@ -57,6 +57,8 @@ type FinancePayload = {
   periodEnd: string
   dtcRevenue: number
   b2bPortalOrderRevenue: number
+  b2bInvoiceRevenue?: number
+  b2bInvoicePaidGhs?: number
   b2bCashCollections: number
   b2bCollected: number
   totalRevenue: number
@@ -372,8 +374,8 @@ export function FinanceLayerView() {
               />
               <MetricCard
                 title="B2B collected"
-                value={formatGhs(data.b2bCollected)}
-                subtitle={`Portal ${formatGhs(data.b2bPortalOrderRevenue)} · Cash ${formatGhs(data.b2bCashCollections)}`}
+                value={formatGhs(data.b2bInvoicePaidGhs ?? 0)}
+                subtitle="Sum of paid across invoices"
                 icon={Wallet}
               />
               <MetricCard

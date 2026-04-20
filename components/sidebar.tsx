@@ -7,22 +7,25 @@ import { ChevronDown, Home, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { signOut, useSession } from '@/lib/auth-client'
 import { Button } from '@/components/ui/button'
-import { dtcNavItems, salesForceNavItems } from '@/lib/nav'
+import { dtcNavItems, salesForceNavItems, sellInNavItems } from '@/lib/nav'
 
 export function Sidebar() {
   const router = useRouter()
   const pathname = usePathname()
   const { data: session, isPending } = useSession()
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
-    () => new Set(['SALES FORCE']),
+    () => new Set(['RETAIL']),
   )
 
   useEffect(() => {
     if (pathname.startsWith('/dtc')) {
-      setExpandedSections((prev) => new Set(prev).add('DTC / SELL-OUT'))
+      setExpandedSections((prev) => new Set(prev).add('DTC'))
+    }
+    if (pathname.startsWith('/sell-in')) {
+      setExpandedSections((prev) => new Set(prev).add('SELL-IN'))
     }
     if (pathname.startsWith('/sf')) {
-      setExpandedSections((prev) => new Set(prev).add('SALES FORCE'))
+      setExpandedSections((prev) => new Set(prev).add('RETAIL'))
     }
   }, [pathname])
 
@@ -65,18 +68,18 @@ export function Sidebar() {
         <div>
           <button
             type="button"
-            onClick={() => toggleSection('DTC / SELL-OUT')}
+            onClick={() => toggleSection('DTC')}
             className="flex w-full items-center justify-between px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-400 transition hover:text-slate-300"
           >
-            DTC / SELL-OUT
+            DTC
             <ChevronDown
               className={cn(
                 'h-4 w-4 transition-transform',
-                expandedSections.has('DTC / SELL-OUT') && 'rotate-180',
+                expandedSections.has('DTC') && 'rotate-180',
               )}
             />
           </button>
-          {expandedSections.has('DTC / SELL-OUT') && (
+          {expandedSections.has('DTC') && (
             <div className="mt-1 space-y-1">
               {dtcNavItems.map((item) => {
                 const Icon = item.icon
@@ -104,18 +107,18 @@ export function Sidebar() {
         <div>
           <button
             type="button"
-            onClick={() => toggleSection('SALES FORCE')}
+            onClick={() => toggleSection('RETAIL')}
             className="flex w-full items-center justify-between px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-400 transition hover:text-slate-300"
           >
-            SALES FORCE
+            RETAIL
             <ChevronDown
               className={cn(
                 'h-4 w-4 transition-transform',
-                expandedSections.has('SALES FORCE') && 'rotate-180',
+                expandedSections.has('RETAIL') && 'rotate-180',
               )}
             />
           </button>
-          {expandedSections.has('SALES FORCE') && (
+          {expandedSections.has('RETAIL') && (
             <div className="mt-1 space-y-1">
               {salesForceNavItems.map((item) => {
                 const Icon = item.icon
@@ -145,6 +148,45 @@ export function Sidebar() {
                     <Icon className="h-4 w-4 shrink-0" />
                     {item.label}
                   </span>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <button
+            type="button"
+            onClick={() => toggleSection('SELL-IN')}
+            className="flex w-full items-center justify-between px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-400 transition hover:text-slate-300"
+          >
+            SELL-IN
+            <ChevronDown
+              className={cn(
+                'h-4 w-4 transition-transform',
+                expandedSections.has('SELL-IN') && 'rotate-180',
+              )}
+            />
+          </button>
+          {expandedSections.has('SELL-IN') && (
+            <div className="mt-1 space-y-1">
+              {sellInNavItems.map((item) => {
+                const Icon = item.icon
+                const active = pathname === item.href
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href!}
+                    className={cn(
+                      'flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium transition',
+                      active
+                        ? 'bg-blue-600 text-white shadow-lg'
+                        : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    {item.label}
+                  </Link>
                 )
               })}
             </div>

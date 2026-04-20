@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import {
   Download,
+  Eye,
   ExternalLink,
   Loader2,
   Pencil,
@@ -55,8 +56,10 @@ type CollectionRow = {
   outletName: string
   invoiceNumber: string
   amountGhs: number
+  discountGhs: number
   paidGhs: number
   balanceGhs: number
+  items: { name: string; sku?: string; qty: number; unitPriceGhs: number }[]
   dueAt: string | null
   repName: string | null
   status: 'paid' | 'overdue' | 'open'
@@ -94,11 +97,20 @@ function emptyForm() {
     outletName: '',
     invoiceNumber: '',
     amountGhs: '',
+    discountGhs: '',
     paidGhs: '',
     dueDate: '',
     repName: '',
     notes: '',
+    items: [] as DraftItem[],
   }
+}
+
+type DraftItem = {
+  name: string
+  sku: string
+  qty: string
+  unitPriceGhs: string
 }
 
 export function B2bPaymentsView() {
@@ -116,6 +128,10 @@ export function B2bPaymentsView() {
   const [editing, setEditing] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState(emptyForm)
+
+  const [itemsOpen, setItemsOpen] = useState(false)
+  const [itemsTitle, setItemsTitle] = useState<string>('')
+  const [itemsForModal, setItemsForModal] = useState<CollectionRow['items']>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -168,12 +184,31 @@ export function B2bPaymentsView() {
       outletName: c.outletName,
       invoiceNumber: c.invoiceNumber,
       amountGhs: String(c.amountGhs),
+      discountGhs: c.discountGhs ? String(c.discountGhs) : '',
       paidGhs: String(c.paidGhs),
       dueDate: isoToDateInput(c.dueAt),
       repName: c.repName ?? '',
       notes: c.notes ?? '',
+      items:
+        c.items && c.items.length > 0
+          ? c.items.map(
+              (it) =>
+                ({
+                  name: it.name,
+                  sku: it.sku ?? '',
+                  qty: String(it.qty),
+                  unitPriceGhs: String(it.unitPriceGhs),
+                }) satisfies DraftItem,
+            )
+          : [],
     })
     setEditOpen(true)
+  }
+
+  function openItems(c: CollectionRow) {
+    setItemsTitle(`${c.outletName} · ${c.invoiceNumber}`)
+    setItemsForModal(c.items ?? [])
+    setItemsOpen(true)
   }
 
   async function submitCreate(e: React.FormEvent) {
@@ -185,10 +220,13 @@ export function B2bPaymentsView() {
       return
     }
     const amountGhs = Number(form.amountGhs)
+    const discountGhs = form.discountGhs.trim() === '' ? 0 : Number(form.discountGhs)
     const paidGhs = form.paidGhs.trim() === '' ? 0 : Number(form.paidGhs)
     if (
       !Number.isFinite(amountGhs) ||
       amountGhs < 0 ||
+      !Number.isFinite(discountGhs) ||
+      discountGhs < 0 ||
       !Number.isFinite(paidGhs) ||
       paidGhs < 0
     ) {
@@ -196,6 +234,18 @@ export function B2bPaymentsView() {
       return
     }
     const dueAt = form.dueDate.trim() ? dateToIsoNoon(form.dueDate) : undefined
+    const items = form.items
+      .map((it) => {
+        const name = it.name.trim()
+        const qty = Number.parseInt(it.qty, 10)
+        const unitPriceGhs = Number.parseFloat(it.unitPriceGhs)
+        const sku = it.sku.trim()
+        if (!name) return null
+        if (!Number.isFinite(qty) || qty <= 0) return null
+        if (!Number.isFinite(unitPriceGhs) || unitPriceGhs < 0) return null
+        return { name, qty, unitPriceGhs, sku: sku ? sku : undefined }
+      })
+      .filter((x): x is NonNullable<typeof x> => Boolean(x))
     setCreating(true)
     try {
       const res = await fetch('/api/sf/b2b-payments', {
@@ -206,7 +256,9 @@ export function B2bPaymentsView() {
           outletName,
           invoiceNumber,
           amountGhs,
+          discountGhs: discountGhs > 0 ? discountGhs : undefined,
           paidGhs,
+          items,
           dueAt,
           repName: form.repName.trim() || undefined,
           notes: form.notes.trim() || undefined,
@@ -238,10 +290,13 @@ export function B2bPaymentsView() {
       return
     }
     const amountGhs = Number(editForm.amountGhs)
+    const discountGhs = editForm.discountGhs.trim() === '' ? 0 : Number(editForm.discountGhs)
     const paidGhs = editForm.paidGhs.trim() === '' ? 0 : Number(editForm.paidGhs)
     if (
       !Number.isFinite(amountGhs) ||
       amountGhs < 0 ||
+      !Number.isFinite(discountGhs) ||
+      discountGhs < 0 ||
       !Number.isFinite(paidGhs) ||
       paidGhs < 0
     ) {
@@ -249,6 +304,18 @@ export function B2bPaymentsView() {
       return
     }
     const dueAt = editForm.dueDate.trim() ? dateToIsoNoon(editForm.dueDate) : null
+    const items = editForm.items
+      .map((it) => {
+        const name = it.name.trim()
+        const qty = Number.parseInt(it.qty, 10)
+        const unitPriceGhs = Number.parseFloat(it.unitPriceGhs)
+        const sku = it.sku.trim()
+        if (!name) return null
+        if (!Number.isFinite(qty) || qty <= 0) return null
+        if (!Number.isFinite(unitPriceGhs) || unitPriceGhs < 0) return null
+        return { name, qty, unitPriceGhs, sku: sku ? sku : undefined }
+      })
+      .filter((x): x is NonNullable<typeof x> => Boolean(x))
     setEditing(true)
     try {
       const res = await fetch(`/api/sf/b2b-payments/${editId}`, {
@@ -259,7 +326,9 @@ export function B2bPaymentsView() {
           outletName,
           invoiceNumber,
           amountGhs,
+          discountGhs: discountGhs > 0 ? discountGhs : null,
           paidGhs,
+          items,
           dueAt,
           repName: editForm.repName.trim() === '' ? null : editForm.repName.trim(),
           notes: editForm.notes.trim() === '' ? null : editForm.notes.trim(),
@@ -314,6 +383,7 @@ export function B2bPaymentsView() {
       'due',
       'rep',
       'status',
+      'items',
     ]
     const esc = (s: string) => `"${s.replace(/"/g, '""')}"`
     const lines = [
@@ -328,6 +398,11 @@ export function B2bPaymentsView() {
           c.dueAt ?? '',
           c.repName ? esc(c.repName) : '',
           c.status,
+          esc(
+            (c.items ?? [])
+              .map((it) => `${it.name} x${it.qty} @${it.unitPriceGhs}`)
+              .join(' | '),
+          ),
         ].join(','),
       ),
     ]
@@ -435,6 +510,20 @@ export function B2bPaymentsView() {
                         />
                       </div>
                       <div className="space-y-2">
+                        <Label htmlFor="b2b-discount">Discount (GHS)</Label>
+                        <Input
+                          id="b2b-discount"
+                          inputMode="decimal"
+                          value={form.discountGhs}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, discountGhs: e.target.value }))
+                          }
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
                         <Label htmlFor="b2b-paid">Paid (GHS)</Label>
                         <Input
                           id="b2b-paid"
@@ -475,6 +564,121 @@ export function B2bPaymentsView() {
                         rows={3}
                         className="resize-y"
                       />
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <Label>Order items (optional)</Label>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setForm((f) => ({
+                              ...f,
+                              items: [...f.items, { name: '', sku: '', qty: '1', unitPriceGhs: '' }],
+                            }))
+                          }
+                        >
+                          Add item
+                        </Button>
+                      </div>
+                      <div className="space-y-3">
+                        {form.items.map((it, idx) => (
+                          <div key={idx} className="rounded-lg border border-border p-3">
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div className="space-y-2">
+                                <Label htmlFor={`b2b-item-name-${idx}`}>Product</Label>
+                                <Input
+                                  id={`b2b-item-name-${idx}`}
+                                  value={it.name}
+                                  onChange={(e) =>
+                                    setForm((f) => {
+                                      const items = [...f.items]
+                                      items[idx] = { ...items[idx], name: e.target.value }
+                                      return { ...f, items }
+                                    })
+                                  }
+                                  placeholder="Gelos Charcoal Toothpaste"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor={`b2b-item-sku-${idx}`}>SKU (optional)</Label>
+                                <Input
+                                  id={`b2b-item-sku-${idx}`}
+                                  value={it.sku}
+                                  onChange={(e) =>
+                                    setForm((f) => {
+                                      const items = [...f.items]
+                                      items[idx] = { ...items[idx], sku: e.target.value }
+                                      return { ...f, items }
+                                    })
+                                  }
+                                  placeholder="GLO-CHAR-100"
+                                />
+                              </div>
+                            </div>
+                            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                              <div className="space-y-2">
+                                <Label htmlFor={`b2b-item-qty-${idx}`}>Qty</Label>
+                                <Input
+                                  id={`b2b-item-qty-${idx}`}
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={1}
+                                  step={1}
+                                  value={it.qty}
+                                  onChange={(e) =>
+                                    setForm((f) => {
+                                      const items = [...f.items]
+                                      items[idx] = { ...items[idx], qty: e.target.value }
+                                      return { ...f, items }
+                                    })
+                                  }
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor={`b2b-item-unit-${idx}`}>Unit price (GHS)</Label>
+                                <Input
+                                  id={`b2b-item-unit-${idx}`}
+                                  type="number"
+                                  inputMode="decimal"
+                                  min={0}
+                                  step="0.01"
+                                  value={it.unitPriceGhs}
+                                  onChange={(e) =>
+                                    setForm((f) => {
+                                      const items = [...f.items]
+                                      items[idx] = { ...items[idx], unitPriceGhs: e.target.value }
+                                      return { ...f, items }
+                                    })
+                                  }
+                                />
+                              </div>
+                              <div className="flex items-end justify-end">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-destructive hover:text-destructive"
+                                  onClick={() =>
+                                    setForm((f) => ({
+                                      ...f,
+                                      items: f.items.filter((_, i) => i !== idx),
+                                    }))
+                                  }
+                                  aria-label="Remove item"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Items saved here will show via the eye icon in the table.
+                      </p>
                     </div>
                   </div>
                   <DialogFooter>
@@ -590,7 +794,9 @@ export function B2bPaymentsView() {
                 <TableRow>
                   <TableHead>Outlet</TableHead>
                   <TableHead>Invoice</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Items</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
+                  <TableHead className="hidden md:table-cell text-right">Discount</TableHead>
                   <TableHead className="text-right">Paid</TableHead>
                   <TableHead className="text-right">Balance</TableHead>
                   <TableHead className="hidden lg:table-cell text-right">Due</TableHead>
@@ -604,8 +810,24 @@ export function B2bPaymentsView() {
                   <TableRow key={c.id}>
                     <TableCell className="font-medium">{c.outletName}</TableCell>
                     <TableCell className="font-mono text-xs font-medium">{c.invoiceNumber}</TableCell>
+                    <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => openItems(c)}
+                        aria-label="View items"
+                        title={c.items?.length ? 'View items' : 'No items saved yet'}
+                      >
+                        <Eye className={c.items?.length ? 'h-4 w-4' : 'h-4 w-4 opacity-40'} />
+                      </Button>
+                    </TableCell>
                     <TableCell className="text-right font-medium tabular-nums">
                       {formatGhs(c.amountGhs)}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
+                      {c.discountGhs ? `−${formatGhs(c.discountGhs)}` : '—'}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{formatGhs(c.paidGhs)}</TableCell>
                     <TableCell className="text-right font-semibold tabular-nums">
@@ -703,6 +925,20 @@ export function B2bPaymentsView() {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label htmlFor="edit-b2b-discount">Discount (GHS)</Label>
+                  <Input
+                    id="edit-b2b-discount"
+                    inputMode="decimal"
+                    value={editForm.discountGhs}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, discountGhs: e.target.value }))
+                    }
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
                   <Label htmlFor="edit-b2b-paid">Paid (GHS)</Label>
                   <Input
                     id="edit-b2b-paid"
@@ -746,6 +982,119 @@ export function B2bPaymentsView() {
                   className="resize-y"
                 />
               </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label>Order items (optional)</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setEditForm((f) => ({
+                        ...f,
+                        items: [...f.items, { name: '', sku: '', qty: '1', unitPriceGhs: '' }],
+                      }))
+                    }
+                  >
+                    Add item
+                  </Button>
+                </div>
+                <div className="space-y-3">
+                  {editForm.items.map((it, idx) => (
+                    <div key={idx} className="rounded-lg border border-border p-3">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor={`edit-b2b-item-name-${idx}`}>Product</Label>
+                          <Input
+                            id={`edit-b2b-item-name-${idx}`}
+                            value={it.name}
+                            onChange={(e) =>
+                              setEditForm((f) => {
+                                const items = [...f.items]
+                                items[idx] = { ...items[idx], name: e.target.value }
+                                return { ...f, items }
+                              })
+                            }
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor={`edit-b2b-item-sku-${idx}`}>SKU (optional)</Label>
+                          <Input
+                            id={`edit-b2b-item-sku-${idx}`}
+                            value={it.sku}
+                            onChange={(e) =>
+                              setEditForm((f) => {
+                                const items = [...f.items]
+                                items[idx] = { ...items[idx], sku: e.target.value }
+                                return { ...f, items }
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                        <div className="space-y-2">
+                          <Label htmlFor={`edit-b2b-item-qty-${idx}`}>Qty</Label>
+                          <Input
+                            id={`edit-b2b-item-qty-${idx}`}
+                            type="number"
+                            inputMode="numeric"
+                            min={1}
+                            step={1}
+                            value={it.qty}
+                            onChange={(e) =>
+                              setEditForm((f) => {
+                                const items = [...f.items]
+                                items[idx] = { ...items[idx], qty: e.target.value }
+                                return { ...f, items }
+                              })
+                            }
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor={`edit-b2b-item-unit-${idx}`}>Unit price (GHS)</Label>
+                          <Input
+                            id={`edit-b2b-item-unit-${idx}`}
+                            type="number"
+                            inputMode="decimal"
+                            min={0}
+                            step="0.01"
+                            value={it.unitPriceGhs}
+                            onChange={(e) =>
+                              setEditForm((f) => {
+                                const items = [...f.items]
+                                items[idx] = { ...items[idx], unitPriceGhs: e.target.value }
+                                return { ...f, items }
+                              })
+                            }
+                          />
+                        </div>
+                        <div className="flex items-end justify-end">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={() =>
+                              setEditForm((f) => ({
+                                ...f,
+                                items: f.items.filter((_, i) => i !== idx),
+                              }))
+                            }
+                            aria-label="Remove item"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Items saved here will show via the eye icon in the table.
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
@@ -763,6 +1112,63 @@ export function B2bPaymentsView() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={itemsOpen} onOpenChange={setItemsOpen}>
+        <DialogContent className="max-h-[min(90vh,40rem)] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Order items</DialogTitle>
+            <DialogDescription>{itemsTitle}</DialogDescription>
+          </DialogHeader>
+
+          {itemsForModal.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">No items for this invoice.</div>
+          ) : (
+            <div className="space-y-3">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Product</TableHead>
+                    <TableHead className="hidden sm:table-cell">SKU</TableHead>
+                    <TableHead className="text-right">Qty</TableHead>
+                    <TableHead className="text-right">Unit</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {itemsForModal.map((it, idx) => (
+                    <TableRow key={`${it.name}-${it.sku ?? ''}-${idx}`}>
+                      <TableCell className="font-medium">{it.name}</TableCell>
+                      <TableCell className="hidden sm:table-cell font-mono text-xs text-muted-foreground">
+                        {it.sku ?? '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{it.qty}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatGhs(it.unitPriceGhs)}</TableCell>
+                      <TableCell className="text-right font-semibold tabular-nums">
+                        {formatGhs(it.qty * it.unitPriceGhs)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+
+              <div className="flex items-center justify-end gap-4">
+                <span className="text-sm text-muted-foreground">Subtotal</span>
+                <span className="text-base font-semibold tabular-nums">
+                  {formatGhs(
+                    itemsForModal.reduce((s, it) => s + it.qty * it.unitPriceGhs, 0),
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setItemsOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

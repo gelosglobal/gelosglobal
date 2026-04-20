@@ -24,6 +24,21 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     setOpen(false)
   }, [pathname])
 
+  useEffect(() => {
+    if (!pathname) return
+    // Fire-and-forget activity log; don't block UI.
+    void fetch('/api/activity/page-view', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pathname,
+        pageTitle: title || 'GELOS',
+        visitedAt: new Date().toISOString(),
+      }),
+    }).catch(() => {})
+  }, [pathname, title])
+
   return (
     <div className="flex h-screen bg-background">
       <div className="hidden lg:flex">

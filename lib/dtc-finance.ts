@@ -7,6 +7,7 @@ import {
   type DtcOrderDoc,
   type PaymentMethod,
 } from '@/lib/dtc-orders'
+import { SF_B2B_INVOICES_COLLECTION } from '@/lib/sf-b2b-invoices'
 
 export const FINANCE_LAYER_CONFIG_COLLECTION = 'finance_layer_config'
 export const B2B_CASH_COLLECTIONS_COLLECTION = 'b2b_cash_collections'
@@ -144,6 +145,38 @@ export async function sumB2BPortalOrderRevenue(
   return rows[0]?.total ?? 0
 }
 
+export async function sumSfB2bInvoiceRevenue(
+  db: Db,
+  since: Date,
+  until: Date,
+): Promise<number> {
+  const rows = await db
+    .collection(SF_B2B_INVOICES_COLLECTION)
+    .aggregate<{ total: number }>([
+      {
+        $match: {
+          $or: [
+            { createdAt: { $gte: since, $lte: until } },
+            { updatedAt: { $gte: since, $lte: until } },
+          ],
+        },
+      },
+      { $group: { _id: null, total: { $sum: '$amountGhs' } } },
+    ])
+    .toArray()
+  return rows[0]?.total ?? 0
+}
+
+export async function sumSfB2bInvoicePaidTotal(db: Db): Promise<number> {
+  const rows = await db
+    .collection(SF_B2B_INVOICES_COLLECTION)
+    .aggregate<{ total: number }>([
+      { $group: { _id: null, total: { $sum: '$paidGhs' } } },
+    ])
+    .toArray()
+  return rows[0]?.total ?? 0
+}
+
 export async function listB2BCashCollections(
   db: Db,
   opts?: { limit?: number },
@@ -245,6 +278,8 @@ export type FinanceLayerSnapshot = {
   periodEnd: string
   dtcRevenue: number
   b2bPortalOrderRevenue: number
+  b2bInvoiceRevenue: number
+  b2bInvoicePaidGhs: number
   b2bCashCollections: number
   b2bCollected: number
   totalRevenue: number
@@ -264,6 +299,18 @@ export async function computeFinanceLayerSnapshot(
 ): Promise<{ snapshot: FinanceLayerSnapshot; config: FinanceLayerConfigDoc }> {
   const until = new Date()
   const since = subDays(until, periodDays)
+  return await computeFinanceLayerSnapshotForRange(db, { since, until, periodDays })
+}
+
+export async function computeFinanceLayerSnapshotForRange(
+  db: Db,
+  input: { since: Date; until: Date; periodDays?: number },
+): Promise<{ snapshot: FinanceLayerSnapshot; config: FinanceLayerConfigDoc }> {
+  const until = input.until
+  const since = input.since
+  const periodDays =
+    input.periodDays ?? Math.max(1, Math.round((until.getTime() - since.getTime()) / 86_400_000))
+
   const config = await getOrCreateFinanceConfig(db)
 
   const orders = (await db
@@ -303,8 +350,10 @@ export async function computeFinanceLayerSnapshot(
     }
   }
 
+  const b2bInvoiceRevenue = await sumSfB2bInvoiceRevenue(db, since, until)
+  const b2bInvoicePaidGhs = await sumSfB2bInvoicePaidTotal(db)
   const b2bCashCollections = await sumB2BCashCollections(db, since, until)
-  const b2bCollected = b2bPortalOrderRevenue + b2bCashCollections
+  const b2bCollected = b2bPortalOrderRevenue + b2bInvoiceRevenue + b2bCashCollections
   const totalRevenue = dtcRevenue + b2bCollected
 
   const spendMap = await spendByChannelFromCampaigns(db, since, until)
@@ -345,6 +394,8 @@ export async function computeFinanceLayerSnapshot(
       periodEnd: until.toISOString(),
       dtcRevenue,
       b2bPortalOrderRevenue,
+      b2bInvoiceRevenue,
+      b2bInvoicePaidGhs,
       b2bCashCollections,
       b2bCollected,
       totalRevenue,
