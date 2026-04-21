@@ -189,17 +189,80 @@ export function B2bInvoicesView() {
 
   async function downloadInvoice() {
     try {
-      const outlet = form.outletName.trim() || 'invoice'
-      const inv = form.invoiceNumber.trim() || 'draft'
-      const blob = new Blob([invoiceDocText], { type: 'text/plain;charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `gelos-invoice-${outlet}-${inv}.txt`.replace(/[^\w.-]+/g, '_')
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(url)
+      // Import browser-only jsPDF bundle (avoids Turbopack pulling node build)
+      const jspdfMod = await import('jspdf/dist/jspdf.es.min.js')
+      const jsPDF = (jspdfMod as any).jsPDF as any
+
+      const outlet = form.outletName.trim() || 'Invoice'
+      const inv = form.invoiceNumber.trim() || 'Draft'
+      const invoiceDate = form.invoiceDate.trim()
+      const dueDate = form.dueDate.trim()
+      const billFrom = form.billFrom.trim()
+
+      const doc = new jsPDF({ unit: 'pt', format: 'a4' })
+      const pageWidth = doc.internal.pageSize.getWidth()
+      const margin = 48
+      let y = 56
+
+      const line = (text: string, opts?: { size?: number; bold?: boolean }) => {
+        const size = opts?.size ?? 11
+        doc.setFont('helvetica', opts?.bold ? 'bold' : 'normal')
+        doc.setFontSize(size)
+        const lines = doc.splitTextToSize(text, pageWidth - margin * 2)
+        for (const l of lines) {
+          if (y > doc.internal.pageSize.getHeight() - 64) {
+            doc.addPage()
+            y = 56
+          }
+          doc.text(String(l), margin, y)
+          y += size + 6
+        }
+      }
+
+      line('GELOS INVOICE', { size: 18, bold: true })
+      y += 6
+      line(`Outlet: ${outlet}`, { bold: true })
+      line(`Invoice #: ${inv}`)
+      if (invoiceDate) line(`Invoice date: ${invoiceDate}`)
+      if (dueDate) line(`Payment due: ${dueDate}`)
+      if (billFrom) line(`Bill from: ${billFrom}`)
+
+      y += 10
+      doc.setDrawColor(220)
+      doc.line(margin, y, pageWidth - margin, y)
+      y += 18
+
+      line('Items', { size: 13, bold: true })
+      if (computed.rows.length === 0) {
+        line('(no items)')
+      } else {
+        for (const r of computed.rows) {
+          line(
+            `${r.description}  •  qty ${r.qty}  •  unit ${formatGhs(r.unitPrice)}  •  line ${formatGhs(
+              r.qty * r.unitPrice,
+            )}`,
+          )
+        }
+      }
+
+      y += 10
+      doc.setDrawColor(220)
+      doc.line(margin, y, pageWidth - margin, y)
+      y += 18
+
+      line(`Subtotal: ${formatGhs(computed.subtotal)}`)
+      line(`Discount: ${formatGhs(computed.discount)}`)
+      if (computed.tax > 0) line(`Tax: ${formatGhs(computed.tax)}`)
+      line(`Total: ${formatGhs(computed.total)}`, { bold: true })
+
+      if (form.message.trim()) {
+        y += 10
+        line('Notes', { size: 13, bold: true })
+        line(form.message.trim())
+      }
+
+      const filename = `gelos-invoice-${outlet}-${inv}.pdf`.replace(/[^\w.-]+/g, '_')
+      doc.save(filename)
       toast.success('Invoice downloaded')
     } catch {
       toast.error('Could not download invoice')

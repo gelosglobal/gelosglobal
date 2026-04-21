@@ -64,7 +64,9 @@ export async function POST(request: Request) {
     updateOne: {
       filter: { customer: r.customer },
       update: {
-        $setOnInsert: {
+        $setOnInsert: { createdAt: now },
+        $set: {
+          updatedAt: now,
           customer: r.customer,
           phone: r.phone ?? '',
           email: r.email ?? '',
@@ -78,24 +80,6 @@ export async function POST(request: Request) {
           acMomoGhs: r.acMomoGhs ?? undefined,
           acPaystackGhs: r.acPaystackGhs ?? undefined,
           remarks: r.remarks ?? undefined,
-          createdAt: now,
-        },
-        $set: {
-          updatedAt: now,
-          ...(r.phone !== undefined ? { phone: r.phone } : {}),
-          ...(r.email !== undefined ? { email: r.email } : {}),
-          ...(r.location !== undefined ? { location: r.location } : {}),
-          ...(r.source !== undefined ? { source: r.source } : {}),
-          ...(r.joinDate !== undefined ? { joinDate: new Date(r.joinDate) } : {}),
-          ...(r.segment !== undefined ? { segment: r.segment } : {}),
-          ...(r.riderAssigned !== undefined ? { riderAssigned: r.riderAssigned } : {}),
-          ...(r.amountToBeCollectedGhs !== undefined
-            ? { amountToBeCollectedGhs: r.amountToBeCollectedGhs }
-            : {}),
-          ...(r.acCashCollectedGhs !== undefined ? { acCashCollectedGhs: r.acCashCollectedGhs } : {}),
-          ...(r.acMomoGhs !== undefined ? { acMomoGhs: r.acMomoGhs } : {}),
-          ...(r.acPaystackGhs !== undefined ? { acPaystackGhs: r.acPaystackGhs } : {}),
-          ...(r.remarks !== undefined ? { remarks: r.remarks } : {}),
         },
       },
       upsert: true,
