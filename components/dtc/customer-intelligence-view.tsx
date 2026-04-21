@@ -256,13 +256,16 @@ export function CustomerIntelligenceView() {
         String(h ?? '')
           .trim()
           .toLowerCase()
+          // remove punctuation but keep letters/numbers
+          .replace(/[^a-z0-9]+/g, ' ')
           .replace(/\s+/g, ' ')
-          .replace(/[()]/g, '')
+          .trim()
 
       const get = (row: Record<string, unknown>, ...candidates: string[]) => {
+        const normalizedCandidates = new Set(candidates.map((c) => normalizeHeader(c)))
         for (const k of Object.keys(row)) {
           const nk = normalizeHeader(k)
-          if (candidates.includes(nk)) return row[k]
+          if (normalizedCandidates.has(nk)) return row[k]
         }
         return undefined
       }
@@ -278,13 +281,18 @@ export function CustomerIntelligenceView() {
       const rows = json
         .map((r) => {
           const customer = String(
-            get(r, 'customer', 'name') ?? r.customer ?? r.Customer ?? r.name ?? r.Name ?? '',
+            get(r, 'customer', 'customer name', 'name', 'full name') ??
+              r.customer ??
+              r.Customer ??
+              r.name ??
+              r.Name ??
+              '',
           ).trim()
           if (!customer) return null
-          const phone = String(get(r, 'phone', 'number') ?? r.phone ?? r.Phone ?? '').trim()
+          const phone = String(get(r, 'phone', 'number', 'mobile') ?? r.phone ?? r.Phone ?? '').trim()
           const email = String(get(r, 'email') ?? r.email ?? r.Email ?? '').trim()
           const location = String(get(r, 'location') ?? r.location ?? r.Location ?? '').trim()
-          const riderAssigned = String(get(r, 'rider assigned', 'rider') ?? '').trim()
+          const riderAssigned = String(get(r, 'rider assigned', 'rider', 'assigned rider') ?? '').trim()
           const amountToBeCollectedGhs = parseMoney(
             get(r, 'amount to be collected', 'amount_to_be_collected') ?? '',
           )
