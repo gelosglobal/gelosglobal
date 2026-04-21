@@ -246,12 +246,6 @@ export function CustomerIntelligenceView() {
         return
       }
 
-      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
-      if (!Array.isArray(json) || json.length === 0) {
-        toast.error('No rows found in the sheet')
-        return
-      }
-
       const normalizeHeader = (h: unknown) =>
         String(h ?? '')
           .trim()
@@ -278,76 +272,111 @@ export function CustomerIntelligenceView() {
         return Number.isFinite(n) ? n : undefined
       }
 
-      const rows = json
-        .map((r) => {
-          const customer = String(
-            get(r, 'customer', 'customer name', 'name', 'full name') ??
-              r.customer ??
-              r.Customer ??
-              r.name ??
-              r.Name ??
-              '',
-          ).trim()
-          if (!customer) return null
-          const phone = String(get(r, 'phone', 'number', 'mobile') ?? r.phone ?? r.Phone ?? '').trim()
-          const email = String(get(r, 'email') ?? r.email ?? r.Email ?? '').trim()
-          const location = String(get(r, 'location') ?? r.location ?? r.Location ?? '').trim()
-          const riderAssigned = String(get(r, 'rider assigned', 'rider', 'assigned rider') ?? '').trim()
-          const amountToBeCollectedGhs = parseMoney(
-            get(r, 'amount to be collected', 'amount_to_be_collected') ?? '',
-          )
-          const acCashCollectedGhs = parseMoney(get(r, 'ac cash collected', 'ac cash') ?? '')
-          const acMomoGhs = parseMoney(get(r, 'ac momo', 'acmomo') ?? '')
-          const acPaystackGhs = parseMoney(get(r, 'ac paystack', 'paystack') ?? '')
-          const remarks = String(get(r, 'remarks', 'remark', 'notes') ?? '').trim()
+      // Some Excel sheets have title/date rows above the header row.
+      // First try to detect the real header row by scanning the sheet (AOA mode).
+      const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' }) as unknown[][]
 
-          const sourceRaw = String(get(r, 'source') ?? r.source ?? r.Source ?? '').trim().toLowerCase()
-          const joinDateRaw = String(get(r, 'joindate', 'join date', 'join_date') ?? r.joinDate ?? r.JoinDate ?? r.join_date ?? '').trim()
-          const segmentRaw = String(get(r, 'segment') ?? r.segment ?? r.Segment ?? '').trim()
+      const headerRowIdx = aoa.findIndex((row) => {
+        const cells = row.map((c) => normalizeHeader(c))
+        return cells.includes('name') && (cells.includes('number') || cells.includes('phone'))
+      })
 
-          const source =
-            sourceRaw === 'walk_in' || sourceRaw === 'walk in'
-              ? 'walk_in'
-              : sourceRaw === 'instagram'
-                ? 'instagram'
-                : sourceRaw === 'web'
-                  ? 'web'
-                  : sourceRaw === 'referral'
-                    ? 'referral'
-                    : sourceRaw === 'sales_rep' || sourceRaw === 'sales rep'
-                      ? 'sales_rep'
-                      : sourceRaw
-                        ? 'other'
-                        : undefined
+      const rowsFromAoa =
+        headerRowIdx >= 0
+          ? (() => {
+              const headerRow = aoa[headerRowIdx] ?? []
+              const colKeys = headerRow.map((c) => normalizeHeader(c))
+              const colIndex = (key: string) => colKeys.findIndex((k) => k === normalizeHeader(key))
+              const idxName = colIndex('name')
+              const idxNumber = colIndex('number')
+              const idxLocation = colIndex('location')
+              const idxRider = colIndex('rider assigned')
+              const idxAmt = colIndex('amount to be collected')
+              const idxCash = colIndex('ac cash collected')
+              const idxMomo = colIndex('ac momo')
+              const idxPaystack = colIndex('ac paystack')
+              const idxRemarks = colIndex('remarks')
 
-          let joinDate: string | undefined
-          if (joinDateRaw) {
-            const d = new Date(joinDateRaw)
-            if (!Number.isNaN(d.getTime())) joinDate = d.toISOString()
-          }
+              return aoa
+                .slice(headerRowIdx + 1)
+                .map((r) => {
+                  const customer = String(r[idxName] ?? '').trim()
+                  if (!customer) return null
+                  const phone = String(r[idxNumber] ?? '').trim()
+                  const location = String(r[idxLocation] ?? '').trim()
+                  const riderAssigned = String(r[idxRider] ?? '').trim()
+                  const amountToBeCollectedGhs = parseMoney(r[idxAmt])
+                  const acCashCollectedGhs = parseMoney(r[idxCash])
+                  const acMomoGhs = parseMoney(r[idxMomo])
+                  const acPaystackGhs = parseMoney(r[idxPaystack])
+                  const remarks = String(r[idxRemarks] ?? '').trim()
 
-          const segment =
-            segmentRaw === 'High LTV' || segmentRaw === 'At risk' || segmentRaw === 'New (30d)' || segmentRaw === 'Core'
-              ? (segmentRaw as any)
-              : undefined
+                  return {
+                    customer,
+                    phone: phone || undefined,
+                    email: undefined,
+                    location: location || undefined,
+                    source: undefined,
+                    joinDate: undefined,
+                    segment: undefined,
+                    riderAssigned: riderAssigned || undefined,
+                    amountToBeCollectedGhs,
+                    acCashCollectedGhs,
+                    acMomoGhs,
+                    acPaystackGhs,
+                    remarks: remarks || undefined,
+                  }
+                })
+                .filter((x): x is NonNullable<typeof x> => Boolean(x))
+            })()
+          : []
 
-          return {
-            customer,
-            phone: phone || undefined,
-            email: email || undefined,
-            location: location || undefined,
-            source,
-            joinDate,
-            segment,
-            riderAssigned: riderAssigned || undefined,
-            amountToBeCollectedGhs,
-            acCashCollectedGhs,
-            acMomoGhs,
-            acPaystackGhs,
-            remarks: remarks || undefined,
-          }
-        })
-        .filter((x): x is NonNullable<typeof x> => Boolean(x))
+      // Fallback to object-mode parsing (simple sheets)
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+      const rowsFromJson = Array.isArray(json)
+        ? json
+            .map((r) => {
+              const customer = String(
+                get(r, 'customer', 'customer name', 'name', 'full name') ??
+                  r.customer ??
+                  r.Customer ??
+                  r.name ??
+                  r.Name ??
+                  '',
+              ).trim()
+              if (!customer) return null
+              const phone = String(get(r, 'phone', 'number', 'mobile') ?? r.phone ?? r.Phone ?? '').trim()
+              const email = String(get(r, 'email') ?? r.email ?? r.Email ?? '').trim()
+              const location = String(get(r, 'location') ?? r.location ?? r.Location ?? '').trim()
+              const riderAssigned = String(get(r, 'rider assigned', 'rider', 'assigned rider') ?? '').trim()
+              const amountToBeCollectedGhs = parseMoney(
+                get(r, 'amount to be collected', 'amount_to_be_collected') ?? '',
+              )
+              const acCashCollectedGhs = parseMoney(get(r, 'ac cash collected', 'ac cash') ?? '')
+              const acMomoGhs = parseMoney(get(r, 'ac momo', 'acmomo') ?? '')
+              const acPaystackGhs = parseMoney(get(r, 'ac paystack', 'paystack') ?? '')
+              const remarks = String(get(r, 'remarks', 'remark', 'notes') ?? '').trim()
+
+              return {
+                customer,
+                phone: phone || undefined,
+                email: email || undefined,
+                location: location || undefined,
+                source: undefined,
+                joinDate: undefined,
+                segment: undefined,
+                riderAssigned: riderAssigned || undefined,
+                amountToBeCollectedGhs,
+                acCashCollectedGhs,
+                acMomoGhs,
+                acPaystackGhs,
+                remarks: remarks || undefined,
+              }
+            })
+            .filter((x): x is NonNullable<typeof x> => Boolean(x))
+        : []
+
+      const rows = rowsFromAoa.length > 0 ? rowsFromAoa : rowsFromJson
 
       if (rows.length === 0) {
         toast.error('No valid customer rows found (missing customer name)')

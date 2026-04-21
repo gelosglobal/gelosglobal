@@ -84,6 +84,13 @@ type Stats = {
   sellIn7dGhs: number
 }
 
+type OutletOption = {
+  id: string
+  name: string
+  isActive: boolean
+  region: string | null
+}
+
 const STATUS_OPTIONS: { value: VisitStatus; label: string }[] = [
   { value: 'scheduled', label: 'Scheduled' },
   { value: 'completed', label: 'Completed' },
@@ -153,6 +160,11 @@ export function ShopVisitsView() {
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
 
+  const [outletsLoading, setOutletsLoading] = useState(true)
+  const [outlets, setOutlets] = useState<OutletOption[]>([])
+  const [outletMode, setOutletMode] = useState<'select' | 'custom'>('select')
+  const [editOutletMode, setEditOutletMode] = useState<'select' | 'custom'>('select')
+
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState(emptyForm)
@@ -161,6 +173,45 @@ export function ShopVisitsView() {
   const [editing, setEditing] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState(emptyForm)
+
+  const loadOutlets = useCallback(async () => {
+    setOutletsLoading(true)
+    try {
+      const res = await fetch('/api/sf/outlets', { credentials: 'include' })
+      if (res.status === 401) return
+      if (!res.ok) throw new Error('Failed')
+      const data = (await res.json()) as { outlets: OutletOption[] }
+      const primary = Array.isArray(data.outlets) ? data.outlets : []
+      if (primary.length > 0) {
+        setOutlets(primary)
+        return
+      }
+
+      // Fallback: suggest outlets from B2B Payments if registry is empty.
+      const alt = await fetch('/api/sf/b2b-payments/outlets', { credentials: 'include' })
+      if (!alt.ok) {
+        setOutlets([])
+        return
+      }
+      const altJson = (await alt.json()) as {
+        outlets?: Array<{ outletName: string }>
+      }
+      const suggested =
+        altJson.outlets
+          ?.map((o, idx) => ({
+            id: `b2b-${idx}-${o.outletName}`,
+            name: String(o.outletName ?? '').trim(),
+            isActive: true,
+            region: null,
+          }))
+          .filter((o) => o.name.length > 0) ?? []
+      setOutlets(suggested)
+    } catch {
+      setOutlets([])
+    } finally {
+      setOutletsLoading(false)
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -191,6 +242,28 @@ export function ShopVisitsView() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    void loadOutlets()
+  }, [loadOutlets])
+
+  // Default outlet selection (avoid "—")
+  useEffect(() => {
+    if (outletMode !== 'select') return
+    if (outletsLoading) return
+    if (outlets.length === 0) return
+    if (form.outletName.trim()) return
+    setForm((f) => ({ ...f, outletName: outlets[0]!.name }))
+  }, [outletMode, outletsLoading, outlets, form.outletName])
+
+  useEffect(() => {
+    if (!editOpen) return
+    if (editOutletMode !== 'select') return
+    if (outletsLoading) return
+    if (outlets.length === 0) return
+    if (editForm.outletName.trim()) return
+    setEditForm((f) => ({ ...f, outletName: outlets[0]!.name }))
+  }, [editOpen, editOutletMode, outletsLoading, outlets, editForm.outletName])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return visits
@@ -217,6 +290,7 @@ export function ShopVisitsView() {
       durationMinutes: v.durationMinutes != null ? String(v.durationMinutes) : '',
       notes: v.notes ?? '',
     })
+    setEditOutletMode('select')
     setEditOpen(true)
   }
 
@@ -281,6 +355,7 @@ export function ShopVisitsView() {
       toast.success('Visit logged')
       setCreateOpen(false)
       setForm(emptyForm())
+      setOutletMode('select')
       void load()
     } catch {
       toast.error('Could not create visit')
@@ -349,6 +424,7 @@ export function ShopVisitsView() {
       toast.success('Visit updated')
       setEditOpen(false)
       setEditId(null)
+      setEditOutletMode('select')
       void load()
     } catch {
       toast.error('Could not update visit')
@@ -457,15 +533,39 @@ export function ShopVisitsView() {
                   <div className="grid gap-4 py-4">
                     <div className="space-y-2">
                       <Label htmlFor="sv-outlet">Outlet name</Label>
-                      <Input
-                        id="sv-outlet"
-                        value={form.outletName}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, outletName: e.target.value }))
-                        }
-                        placeholder="Mama Grace Stores — Tema"
-                        required
-                      />
+                      {outletMode === 'custom' ? (
+                        <Input
+                          id="sv-outlet"
+                          value={form.outletName}
+                          onChange={(e) => setForm((f) => ({ ...f, outletName: e.target.value }))}
+                          placeholder="Type outlet name"
+                          required
+                        />
+                      ) : (
+                        <Select
+                          value={form.outletName}
+                          onValueChange={(v) => {
+                            if (v === 'custom') {
+                              setOutletMode('custom')
+                              setForm((f) => ({ ...f, outletName: '' }))
+                              return
+                            }
+                            setForm((f) => ({ ...f, outletName: v }))
+                          }}
+                        >
+                          <SelectTrigger id="sv-outlet">
+                            <SelectValue placeholder={outletsLoading ? 'Loading outlets…' : 'Select outlet'} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="custom">Add custom…</SelectItem>
+                            {outlets.map((o) => (
+                              <SelectItem key={o.id} value={o.name}>
+                                {o.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="sv-area">Area (optional)</Label>
@@ -806,14 +906,39 @@ export function ShopVisitsView() {
             <div className="grid gap-4 py-4">
               <div className="space-y-2">
                 <Label htmlFor="edit-sv-outlet">Outlet name</Label>
-                <Input
-                  id="edit-sv-outlet"
-                  value={editForm.outletName}
-                  onChange={(e) =>
-                    setEditForm((f) => ({ ...f, outletName: e.target.value }))
-                  }
-                  required
-                />
+                {editOutletMode === 'custom' ? (
+                  <Input
+                    id="edit-sv-outlet"
+                    value={editForm.outletName}
+                    onChange={(e) => setEditForm((f) => ({ ...f, outletName: e.target.value }))}
+                    placeholder="Type outlet name"
+                    required
+                  />
+                ) : (
+                  <Select
+                    value={editForm.outletName}
+                    onValueChange={(v) => {
+                      if (v === 'custom') {
+                        setEditOutletMode('custom')
+                        setEditForm((f) => ({ ...f, outletName: '' }))
+                        return
+                      }
+                      setEditForm((f) => ({ ...f, outletName: v }))
+                    }}
+                  >
+                    <SelectTrigger id="edit-sv-outlet">
+                      <SelectValue placeholder={outletsLoading ? 'Loading outlets…' : 'Select outlet'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="custom">Add custom…</SelectItem>
+                      {outlets.map((o) => (
+                        <SelectItem key={o.id} value={o.name}>
+                          {o.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-sv-area">Area</Label>

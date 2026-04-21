@@ -71,6 +71,13 @@ type Stats = {
   overdueOpen: number
 }
 
+type OutletOption = {
+  id: string
+  name: string
+  isActive: boolean
+  region: string | null
+}
+
 const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
   { value: 'open', label: 'Open' },
   { value: 'done', label: 'Done' },
@@ -122,6 +129,11 @@ export function PosmTrackerView() {
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
 
+  const [outletsLoading, setOutletsLoading] = useState(true)
+  const [outlets, setOutlets] = useState<OutletOption[]>([])
+  const [outletMode, setOutletMode] = useState<'select' | 'custom'>('select')
+  const [editOutletMode, setEditOutletMode] = useState<'select' | 'custom'>('select')
+
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState(emptyForm)
@@ -130,6 +142,46 @@ export function PosmTrackerView() {
   const [editing, setEditing] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState(emptyForm)
+
+  const loadOutlets = useCallback(async () => {
+    setOutletsLoading(true)
+    try {
+      const res = await fetch('/api/sf/outlets', { credentials: 'include' })
+      if (res.status === 401) return
+      if (!res.ok) throw new Error('Failed')
+      const data = (await res.json()) as { outlets: OutletOption[] }
+      const primary = Array.isArray(data.outlets) ? data.outlets : []
+      if (primary.length > 0) {
+        setOutlets(primary)
+        return
+      }
+
+      // Fallback: if the outlets registry isn't populated yet,
+      // suggest outlets from B2B Payments invoices.
+      const alt = await fetch('/api/sf/b2b-payments/outlets', { credentials: 'include' })
+      if (!alt.ok) {
+        setOutlets([])
+        return
+      }
+      const altJson = (await alt.json()) as {
+        outlets?: Array<{ outletName: string }>
+      }
+      const suggested =
+        altJson.outlets
+          ?.map((o, idx) => ({
+            id: `b2b-${idx}-${o.outletName}`,
+            name: String(o.outletName ?? '').trim(),
+            isActive: true,
+            region: null,
+          }))
+          .filter((o) => o.name.length > 0) ?? []
+      setOutlets(suggested)
+    } catch {
+      setOutlets([])
+    } finally {
+      setOutletsLoading(false)
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -160,6 +212,28 @@ export function PosmTrackerView() {
     void load()
   }, [load])
 
+  useEffect(() => {
+    void loadOutlets()
+  }, [loadOutlets])
+
+  // Default outlet selection (avoid "—")
+  useEffect(() => {
+    if (outletMode !== 'select') return
+    if (outletsLoading) return
+    if (outlets.length === 0) return
+    if (form.outletName.trim()) return
+    setForm((f) => ({ ...f, outletName: outlets[0]!.name }))
+  }, [outletMode, outletsLoading, outlets, form.outletName])
+
+  useEffect(() => {
+    if (!editOpen) return
+    if (editOutletMode !== 'select') return
+    if (outletsLoading) return
+    if (outlets.length === 0) return
+    if (editForm.outletName.trim()) return
+    setEditForm((f) => ({ ...f, outletName: outlets[0]!.name }))
+  }, [editOpen, editOutletMode, outletsLoading, outlets, editForm.outletName])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return tasks
@@ -180,6 +254,7 @@ export function PosmTrackerView() {
       dueDate: isoToDateInput(t.dueAt),
       notes: t.notes ?? '',
     })
+    setEditOutletMode('select')
     setEditOpen(true)
   }
 
@@ -234,6 +309,7 @@ export function PosmTrackerView() {
       toast.success('Task created')
       setCreateOpen(false)
       setForm(emptyForm())
+      setOutletMode('select')
       void load()
     } catch {
       toast.error('Could not create task')
@@ -274,6 +350,7 @@ export function PosmTrackerView() {
       toast.success('Task updated')
       setEditOpen(false)
       setEditId(null)
+      setEditOutletMode('select')
       void load()
     } catch {
       toast.error('Could not update task')
@@ -376,15 +453,39 @@ export function PosmTrackerView() {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="posm-outlet">Outlet</Label>
-                      <Input
-                        id="posm-outlet"
-                        value={form.outletName}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, outletName: e.target.value }))
-                        }
-                        placeholder="Outlet name as on the route"
-                        required
-                      />
+                      {outletMode === 'custom' ? (
+                        <Input
+                          id="posm-outlet"
+                          value={form.outletName}
+                          onChange={(e) => setForm((f) => ({ ...f, outletName: e.target.value }))}
+                          placeholder="Type outlet name"
+                          required
+                        />
+                      ) : (
+                        <Select
+                          value={form.outletName}
+                          onValueChange={(v) => {
+                            if (v === 'custom') {
+                              setOutletMode('custom')
+                              setForm((f) => ({ ...f, outletName: '' }))
+                              return
+                            }
+                            setForm((f) => ({ ...f, outletName: v }))
+                          }}
+                        >
+                          <SelectTrigger id="posm-outlet">
+                            <SelectValue placeholder={outletsLoading ? 'Loading outlets…' : 'Select outlet'} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="custom">Add custom…</SelectItem>
+                            {outlets.map((o) => (
+                              <SelectItem key={o.id} value={o.name}>
+                                {o.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
@@ -654,14 +755,39 @@ export function PosmTrackerView() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-posm-outlet">Outlet</Label>
-                <Input
-                  id="edit-posm-outlet"
-                  value={editForm.outletName}
-                  onChange={(e) =>
-                    setEditForm((f) => ({ ...f, outletName: e.target.value }))
-                  }
-                  required
-                />
+                {editOutletMode === 'custom' ? (
+                  <Input
+                    id="edit-posm-outlet"
+                    value={editForm.outletName}
+                    onChange={(e) => setEditForm((f) => ({ ...f, outletName: e.target.value }))}
+                    placeholder="Type outlet name"
+                    required
+                  />
+                ) : (
+                  <Select
+                    value={editForm.outletName}
+                    onValueChange={(v) => {
+                      if (v === 'custom') {
+                        setEditOutletMode('custom')
+                        setEditForm((f) => ({ ...f, outletName: '' }))
+                        return
+                      }
+                      setEditForm((f) => ({ ...f, outletName: v }))
+                    }}
+                  >
+                    <SelectTrigger id="edit-posm-outlet">
+                      <SelectValue placeholder={outletsLoading ? 'Loading outlets…' : 'Select outlet'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="custom">Add custom…</SelectItem>
+                      {outlets.map((o) => (
+                        <SelectItem key={o.id} value={o.name}>
+                          {o.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
