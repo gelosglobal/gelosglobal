@@ -17,6 +17,7 @@ const itemSchema = z.object({
   sku: z.string().trim().max(80).optional(),
   qty: z.coerce.number().int().min(1).max(1_000_000),
   unitPriceGhs: z.coerce.number().min(0).max(1_000_000_000),
+  unitCostGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
 })
 
 const patchBodySchema = z
@@ -27,6 +28,7 @@ const patchBodySchema = z
     amountGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
     discountGhs: z.coerce.number().min(0).max(1_000_000_000).nullable().optional(),
     paidGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+    paidAt: z.string().datetime().nullable().optional(),
     paymentMethod: z.enum(['momo', 'cash', 'bank_transfer', 'cheque']).nullable().optional(),
     items: z.array(itemSchema).max(200).nullable().optional(),
     dueAt: z.coerce.date().nullable().optional(),
@@ -80,6 +82,12 @@ export async function PATCH(
         : parsed.data.invoiceAt === null
           ? null
           : new Date(parsed.data.invoiceAt),
+    paidAt:
+      parsed.data.paidAt === undefined
+        ? undefined
+        : parsed.data.paidAt === null
+          ? null
+          : new Date(parsed.data.paidAt),
   })
   if (!updated) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })

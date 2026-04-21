@@ -10,6 +10,8 @@ export type SfB2bInvoiceItem = {
   sku?: string
   qty: number
   unitPriceGhs: number
+  /** Optional unit cost (for margin calculations). */
+  unitCostGhs?: number
 }
 
 export type SfB2bInvoiceDoc = {
@@ -21,6 +23,8 @@ export type SfB2bInvoiceDoc = {
   amountGhs: number
   discountGhs?: number
   paidGhs: number
+  /** Date the payment was made/recorded (optional). */
+  paidAt?: Date
   paymentMethod?: SfB2bPaymentMethod
   items?: SfB2bInvoiceItem[]
   dueAt?: Date
@@ -40,6 +44,7 @@ export type SfB2bInvoiceJson = {
   amountGhs: number
   discountGhs: number
   paidGhs: number
+  paidAt: string | null
   balanceGhs: number
   paymentMethod: SfB2bPaymentMethod | null
   items: SfB2bInvoiceItem[]
@@ -77,6 +82,7 @@ export function serializeSfB2bInvoice(doc: SfB2bInvoiceDoc, now = new Date()): S
     amountGhs: doc.amountGhs,
     discountGhs: Number.isFinite(doc.discountGhs as number) ? (doc.discountGhs as number) : 0,
     paidGhs: doc.paidGhs,
+    paidAt: doc.paidAt ? doc.paidAt.toISOString() : null,
     balanceGhs,
     paymentMethod: doc.paymentMethod ?? null,
     items: Array.isArray(doc.items) ? doc.items : [],
@@ -109,6 +115,7 @@ export type CreateSfB2bInvoiceInput = {
   amountGhs: number
   discountGhs?: number
   paidGhs: number
+  paidAt?: Date
   paymentMethod?: SfB2bPaymentMethod
   items?: SfB2bInvoiceItem[]
   dueAt?: Date
@@ -129,12 +136,17 @@ export async function createSfB2bInvoice(
     amountGhs: input.amountGhs,
     discountGhs: discount > 0 ? discount : undefined,
     paidGhs: input.paidGhs,
+    paidAt: input.paidAt,
     paymentMethod: input.paymentMethod,
     items: input.items?.map((it) => ({
       name: it.name.trim(),
       sku: it.sku?.trim() ? it.sku.trim() : undefined,
       qty: it.qty,
       unitPriceGhs: it.unitPriceGhs,
+      unitCostGhs:
+        typeof it.unitCostGhs === 'number' && Number.isFinite(it.unitCostGhs)
+          ? it.unitCostGhs
+          : undefined,
     })),
     dueAt: input.dueAt,
     repName: input.repName?.trim() || undefined,
@@ -153,6 +165,7 @@ export type UpdateSfB2bInvoiceInput = Partial<{
   amountGhs: number
   discountGhs: number | null
   paidGhs: number
+  paidAt: Date | null
   paymentMethod: SfB2bPaymentMethod | null
   items: SfB2bInvoiceItem[] | null
   dueAt: Date | null
@@ -172,6 +185,7 @@ export async function updateSfB2bInvoice(
   if (patch.amountGhs !== undefined) $set.amountGhs = patch.amountGhs
   if (patch.discountGhs !== undefined) $set.discountGhs = patch.discountGhs ?? undefined
   if (patch.paidGhs !== undefined) $set.paidGhs = patch.paidGhs
+  if (patch.paidAt !== undefined) $set.paidAt = patch.paidAt ?? undefined
   if (patch.paymentMethod !== undefined) $set.paymentMethod = patch.paymentMethod ?? undefined
   if (patch.items !== undefined) {
     $set.items =
@@ -182,6 +196,10 @@ export async function updateSfB2bInvoice(
             sku: it.sku?.trim() ? it.sku.trim() : undefined,
             qty: it.qty,
             unitPriceGhs: it.unitPriceGhs,
+            unitCostGhs:
+              typeof it.unitCostGhs === 'number' && Number.isFinite(it.unitCostGhs)
+                ? it.unitCostGhs
+                : undefined,
           }))
   }
   if (patch.dueAt !== undefined) $set.dueAt = patch.dueAt ?? undefined

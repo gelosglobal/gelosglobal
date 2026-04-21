@@ -2,6 +2,7 @@ import type { Db, WithoutId } from 'mongodb'
 import { ObjectId } from 'mongodb'
 import { startOfMonth, addMonths } from 'date-fns'
 import { SF_VISITS_COLLECTION, type SfVisitDoc } from '@/lib/sf-dashboard'
+import { SF_SCOUTED_OUTLETS_COLLECTION } from '@/lib/sf-outlet-scouting'
 
 export const SF_TARGETS_COLLECTION = 'sf_targets'
 
@@ -36,6 +37,7 @@ export type SfRepTargetJson = {
 export type SfRepTargetWithActuals = SfRepTargetJson & {
   actualVisitsMtd: number
   actualSellInMtdGhs: number
+  newShopsAcquiredMtd: number
   visitsAttainmentPct: number | null
   sellInAttainmentPct: number | null
 }
@@ -139,7 +141,8 @@ export async function computeSfTargetsWithActuals(
   const { start, end } = monthKeyToRange(month)
   const targets = await listSfTargets(db, month)
 
-  const actualAgg = await db
+  const [actualAgg, wonAgg] = await Promise.all([
+    db
     .collection<WithoutId<SfVisitDoc>>(SF_VISITS_COLLECTION)
     .aggregate<{ _id: string; visits: number; sellIn: number }>([
       {
@@ -157,10 +160,30 @@ export async function computeSfTargetsWithActuals(
       },
     ])
     .toArray()
+    ,
+    db
+      .collection(SF_SCOUTED_OUTLETS_COLLECTION)
+      .aggregate<{ _id: string; won: number }>([
+        {
+          $match: {
+            status: 'won',
+            scoutedAt: { $gte: start, $lt: end },
+          },
+        },
+        {
+          $group: {
+            _id: { $ifNull: ['$scoutedBy', 'Unknown'] },
+            won: { $sum: 1 },
+          },
+        },
+      ])
+      .toArray(),
+  ])
 
   const actualByRep = new Map(
     actualAgg.map((r) => [r._id || 'Unknown', { visits: r.visits, sellIn: r.sellIn }]),
   )
+  const wonByRep = new Map(wonAgg.map((r) => [r._id || 'Unknown', r.won ?? 0]))
 
   return targets.map((t) => {
     const json = serializeSfTarget(t)
@@ -177,6 +200,7 @@ export async function computeSfTargetsWithActuals(
       ...json,
       actualVisitsMtd: actual.visits,
       actualSellInMtdGhs: actual.sellIn,
+      newShopsAcquiredMtd: wonByRep.get(json.repName) ?? 0,
       visitsAttainmentPct,
       sellInAttainmentPct,
     }

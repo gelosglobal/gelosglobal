@@ -17,6 +17,7 @@ const itemSchema = z.object({
   sku: z.string().trim().max(80).optional(),
   qty: z.coerce.number().int().min(1).max(1_000_000),
   unitPriceGhs: z.coerce.number().min(0).max(1_000_000_000),
+  unitCostGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
 })
 
 const postBodySchema = z.object({
@@ -26,6 +27,7 @@ const postBodySchema = z.object({
   amountGhs: z.coerce.number().min(0).max(1_000_000_000),
   discountGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
   paidGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  paidAt: z.string().datetime().optional(),
   paymentMethod: z.enum(['momo', 'cash', 'bank_transfer', 'cheque']).optional(),
   items: z.array(itemSchema).max(200).optional(),
   dueAt: z.coerce.date().optional(),
@@ -94,6 +96,7 @@ export async function POST(request: Request) {
     amountGhs: d.amountGhs,
     discountGhs: d.discountGhs,
     paidGhs: d.paidGhs ?? 0,
+    paidAt: d.paidAt ? new Date(d.paidAt) : undefined,
     paymentMethod: d.paymentMethod,
     items: d.items,
     dueAt: d.dueAt,

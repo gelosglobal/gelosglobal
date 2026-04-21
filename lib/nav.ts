@@ -20,6 +20,8 @@ export type NavItemConfig = {
   label: string
   href?: string
   icon: LucideIcon
+  /** Optional indentation level for "submenu" items. */
+  indent?: 0 | 1
 }
 
 export const dtcNavItems: NavItemConfig[] = [
@@ -41,7 +43,6 @@ export const dtcNavItems: NavItemConfig[] = [
     href: '/dtc/marketing-attribution',
     icon: BarChart3,
   },
-  { label: 'Finance Layer', href: '/dtc/finance-layer', icon: Landmark },
 ]
 
 export const sellInNavItems: NavItemConfig[] = [
@@ -55,6 +56,8 @@ export const salesForceNavItems: NavItemConfig[] = [
   { label: 'POSM Tracker', href: '/sf/posm-tracker', icon: Activity },
   { label: 'Retail Inventory', href: '/sf/inventory', icon: Box },
   { label: 'B2B Payments', href: '/sf/b2b-payments', icon: CreditCard },
+  { label: 'Invoices', href: '/sf/b2b-invoices', icon: CreditCard, indent: 1 },
+  { label: 'Customer Intelligence', href: '/sf/customer-intelligence', icon: Users },
   { label: 'Targets & Quotas', href: '/sf/targets', icon: Target },
   { label: 'Rep Leaderboard', href: '/sf/leaderboard', icon: BarChart3 },
   { label: 'Retail Reports', href: '/sf/reports', icon: BarChart3 },
@@ -69,6 +72,8 @@ const pathTitleEntries: [string, string][] = [
   ['/sf/posm-tracker', 'POSM Tracker'],
   ['/sf/inventory', 'Retail Inventory'],
   ['/sf/b2b-payments', 'B2B Payments'],
+  ['/sf/b2b-invoices', 'Invoices'],
+  ['/sf/customer-intelligence', 'Customer Intelligence'],
   ['/sf/targets', 'Targets & Quotas'],
   ['/sf/leaderboard', 'Rep Leaderboard'],
   ['/sf/reports', 'Retail Reports'],
@@ -80,7 +85,6 @@ const pathTitleEntries: [string, string][] = [
   ['/dtc/inventory', 'DTC Inventory'],
   ['/dtc/product-performance', 'Product Performance'],
   ['/dtc/marketing-attribution', 'Marketing Attribution'],
-  ['/dtc/finance-layer', 'Finance Layer'],
 ]
 
 export function getMobileNavTitle(pathname: string): string {

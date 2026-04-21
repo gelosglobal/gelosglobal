@@ -1,10 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { BarChart3, Loader2, RefreshCw, ShoppingCart, TriangleAlert, Wallet } from 'lucide-react'
+import { AlertTriangle, BarChart3, Loader2, RefreshCw, ShoppingCart, TriangleAlert, Wallet } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { toast } from 'sonner'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
@@ -38,6 +39,12 @@ type DtcDashboardSnapshot = {
     units: number
     revenueGhs: number
   }>
+  alerts: Array<{ id: string; severity: 'high' | 'medium'; text: string }>
+}
+
+function severityBadge(s: 'high' | 'medium') {
+  if (s === 'high') return <Badge variant="destructive">High</Badge>
+  return <Badge variant="secondary">Medium</Badge>
 }
 
 export function DtcDashboardView() {
@@ -206,6 +213,28 @@ export function DtcDashboardView() {
                   </div>
                 </div>
               </Card>
+            </div>
+
+            <div>
+              <div className="mb-3 flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
+                <h2 className="text-sm font-semibold uppercase tracking-wide">Alerts</h2>
+              </div>
+              {data.alerts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No stock, order, or receivable alerts right now.</p>
+              ) : (
+                <div className="space-y-2">
+                  {data.alerts.map((a) => (
+                    <Card
+                      key={a.id}
+                      className="flex flex-col gap-2 border-l-4 border-l-amber-600 p-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <p className="text-sm text-foreground">{a.text}</p>
+                      {severityBadge(a.severity)}
+                    </Card>
+                  ))}
+                </div>
+              )}
             </div>
           </>
         )}

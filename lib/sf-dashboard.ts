@@ -1,14 +1,8 @@
 import type { Db, WithoutId } from 'mongodb'
 import { ObjectId } from 'mongodb'
 import { startOfDay, startOfMonth, subDays } from 'date-fns'
-import {
-  getOrCreateFinanceConfig,
-} from '@/lib/dtc-finance'
-import {
-  computeStockHealth,
-  listDtcInventory,
-  type DtcInventoryDoc,
-} from '@/lib/dtc-inventory'
+import { computeStockHealth } from '@/lib/dtc-inventory'
+import { listSfInventory, type SfInventoryDoc } from '@/lib/sf-inventory'
 import { SF_B2B_INVOICES_COLLECTION } from '@/lib/sf-b2b-invoices'
 import { REP_ACTIVITY_COLLECTION } from '@/lib/rep-activity'
 
@@ -153,12 +147,44 @@ async function sumB2bPaymentsPaid(db: Db, since: Date, until: Date): Promise<num
       {
         $match: {
           $or: [
+            { paidAt: { $gte: since, $lte: until } },
             { updatedAt: { $gte: since, $lte: until } },
             { createdAt: { $gte: since, $lte: until } },
           ],
         },
       },
       { $group: { _id: null, t: { $sum: { $ifNull: ['$paidGhs', 0] } } } },
+    ])
+    .toArray()
+  return rows[0]?.t ?? 0
+}
+
+async function sumB2bOutstanding(db: Db): Promise<number> {
+  const rows = await db
+    .collection(SF_B2B_INVOICES_COLLECTION)
+    .aggregate<{ t: number }>([
+      {
+        $project: {
+          net: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  { $ifNull: ['$amountGhs', 0] },
+                  { $ifNull: ['$discountGhs', 0] },
+                ],
+              },
+            ],
+          },
+          paid: { $max: [0, { $ifNull: ['$paidGhs', 0] }] },
+        },
+      },
+      {
+        $project: {
+          bal: { $max: [0, { $subtract: ['$net', '$paid'] }] },
+        },
+      },
+      { $group: { _id: null, t: { $sum: '$bal' } } },
     ])
     .toArray()
   return rows[0]?.t ?? 0
@@ -225,10 +251,10 @@ export async function computeSfDashboardSnapshot(
   const monthStart = startOfMonth(now)
   const dayStart = startOfDay(now)
 
-  const [settings, financeConfig, inventoryRows] = await Promise.all([
+  const [settings, inventoryRows, b2bOutstandingGhs] = await Promise.all([
     getOrCreateSfSettings(db),
-    getOrCreateFinanceConfig(db),
-    listDtcInventory(db),
+    listSfInventory(db),
+    sumB2bOutstanding(db),
   ])
 
   let [
@@ -396,7 +422,7 @@ export async function computeSfDashboardSnapshot(
   const alerts: SfDashboardAlert[] = []
 
   let invAlerts = 0
-  for (const row of inventoryRows as DtcInventoryDoc[]) {
+  for (const row of inventoryRows as SfInventoryDoc[]) {
     if (invAlerts >= 8) break
     const h = computeStockHealth(row.onHand, row.safetyStock)
     if (h === 'critical' || h === 'low') {
@@ -404,7 +430,7 @@ export async function computeSfDashboardSnapshot(
       alerts.push({
         id: `inv-${row._id.toHexString()}`,
         severity: h === 'critical' ? 'high' : 'medium',
-        text: `[Stock] ${row.name} (${row.sku}) — ${row.onHand} on hand vs ${row.safetyStock} safety · ${row.warehouse}`,
+        text: `[Stock] ${row.outlet}: ${row.name} (${row.sku}) — ${row.onHand} on hand vs ${row.safetyStock} safety`,
       })
     }
   }
@@ -417,11 +443,11 @@ export async function computeSfDashboardSnapshot(
     })
   }
 
-  if (financeConfig.b2bOutstandingGhs >= 5_000) {
+  if (b2bOutstandingGhs >= 5_000) {
     alerts.push({
       id: 'fin-b2b-outstanding',
-      severity: financeConfig.b2bOutstandingGhs >= 20_000 ? 'high' : 'medium',
-      text: `[B2B] Outstanding receivables: GHS ${financeConfig.b2bOutstandingGhs.toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      severity: b2bOutstandingGhs >= 20_000 ? 'high' : 'medium',
+      text: `[B2B] Outstanding receivables: GHS ${b2bOutstandingGhs.toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     })
   }
 

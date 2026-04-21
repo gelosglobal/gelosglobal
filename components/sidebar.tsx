@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { ChevronDown, Home, LogOut } from 'lucide-react'
+import { ChevronDown, ChevronRight, Home, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { signOut, useSession } from '@/lib/auth-client'
 import { Button } from '@/components/ui/button'
 import { dtcNavItems, salesForceNavItems, sellInNavItems } from '@/lib/nav'
 import { getUserAccess } from '@/lib/access'
+import { gelosLogoFont } from '@/lib/fonts'
 
 export function Sidebar() {
   const router = useRouter()
@@ -45,7 +46,14 @@ export function Sidebar() {
     <div className="flex h-screen w-64 flex-col border-r border-slate-700 bg-gradient-to-b from-slate-900 to-slate-800 text-slate-100">
       <div className="border-b border-slate-700 p-6">
         <div className="mb-1">
-          <h2 className="text-xl font-bold tracking-wide text-white">GELOS</h2>
+          <h2
+            className={cn(
+              gelosLogoFont.className,
+              'text-xl font-extrabold tracking-wide text-white',
+            )}
+          >
+            GELOS
+          </h2>
           <p className="text-xs font-semibold uppercase tracking-widest text-amber-400">
             for staffs
           </p>
@@ -128,36 +136,117 @@ export function Sidebar() {
           </button>
           {expandedSections.has('RETAIL') && (
             <div className="mt-1 space-y-1">
-              {salesForceNavItems.map((item) => {
-                const Icon = item.icon
-                if (item.href) {
-                  const active = pathname === item.href
-                  return (
-                    <Link
+              {(() => {
+                const out: React.ReactNode[] = []
+                for (let i = 0; i < salesForceNavItems.length; i += 1) {
+                  const item = salesForceNavItems[i]!
+                  const Icon = item.icon
+
+                  // Hover-reveal submenu under "B2B Payments"
+                  if (item.href === '/sf/b2b-payments') {
+                    const children = []
+                    let j = i + 1
+                    while (j < salesForceNavItems.length && salesForceNavItems[j]?.indent === 1) {
+                      children.push(salesForceNavItems[j]!)
+                      j += 1
+                    }
+                    i = j - 1
+
+                    const childActive = children.some((c) => c.href && pathname === c.href)
+                    const active = pathname === item.href
+                    const open = active || childActive
+
+                    out.push(
+                      <div key={item.href} className="group">
+                        <Link
+                          href={item.href}
+                          className={cn(
+                            'flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium transition',
+                            active
+                              ? 'bg-blue-600 text-white shadow-lg'
+                              : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
+                          )}
+                        >
+                          <Icon className="h-4 w-4 shrink-0" />
+                          <span className="flex-1">{item.label}</span>
+                          <ChevronRight
+                            className={cn(
+                              'h-4 w-4 shrink-0 opacity-70 transition-transform',
+                              open
+                                ? 'rotate-90'
+                                : 'rotate-0 group-hover:rotate-90 group-hover:opacity-90',
+                            )}
+                          />
+                        </Link>
+
+                        <div
+                          className={cn(
+                            'mt-1 overflow-hidden pl-4 transition-all duration-200',
+                            open
+                              ? 'max-h-40 opacity-100'
+                              : 'max-h-0 opacity-0 group-hover:max-h-40 group-hover:opacity-100',
+                          )}
+                        >
+                          <div className="space-y-1 py-1">
+                            {children.map((c) => {
+                              const ChildIcon = c.icon
+                              const cActive = pathname === c.href
+                              return (
+                                <Link
+                                  key={c.href}
+                                  href={c.href!}
+                                  className={cn(
+                                    'flex w-full items-center gap-3 rounded-lg px-4 py-2 text-[13px] font-medium transition',
+                                    cActive
+                                      ? 'bg-blue-600 text-white shadow-lg'
+                                      : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
+                                  )}
+                                >
+                                  <ChildIcon className="h-4 w-4 shrink-0 opacity-90" />
+                                  {c.label}
+                                </Link>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </div>,
+                    )
+                    continue
+                  }
+
+                  if (item.href) {
+                    const active = pathname === item.href
+                    out.push(
+                      <Link
+                        key={item.label}
+                        href={item.href}
+                        className={cn(
+                          'flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium transition',
+                          item.indent === 1 && 'ml-4 pl-4 text-[13px]',
+                          active
+                            ? 'bg-blue-600 text-white shadow-lg'
+                            : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
+                        )}
+                      >
+                        <Icon className="h-4 w-4 shrink-0" />
+                        {item.label}
+                      </Link>,
+                    )
+                    continue
+                  }
+
+                  out.push(
+                    <span
                       key={item.label}
-                      href={item.href}
-                      className={cn(
-                        'flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium transition',
-                        active
-                          ? 'bg-blue-600 text-white shadow-lg'
-                          : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
-                      )}
+                      className="flex w-full cursor-default items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-500"
                     >
                       <Icon className="h-4 w-4 shrink-0" />
                       {item.label}
-                    </Link>
+                    </span>,
                   )
                 }
-                return (
-                  <span
-                    key={item.label}
-                    className="flex w-full cursor-default items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-500"
-                  >
-                    <Icon className="h-4 w-4 shrink-0" />
-                    {item.label}
-                  </span>
-                )
-              })}
+                return out
+              })()}
             </div>
           )}
         </div>

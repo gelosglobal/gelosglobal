@@ -50,6 +50,7 @@ type TargetRow = {
   updatedAt: string
   actualVisitsMtd: number
   actualSellInMtdGhs: number
+  newShopsAcquiredMtd: number
   visitsAttainmentPct: number | null
   sellInAttainmentPct: number | null
 }
@@ -149,12 +150,14 @@ export function TargetsQuotasView() {
     let targetSellIn = 0
     let actualVisits = 0
     let actualSellIn = 0
+    let newShops = 0
     for (const r of items) {
       reps += 1
       targetVisits += r.targetVisits
       targetSellIn += r.targetSellInGhs
       actualVisits += r.actualVisitsMtd
       actualSellIn += r.actualSellInMtdGhs
+      newShops += r.newShopsAcquiredMtd ?? 0
       if ((r.visitsAttainmentPct ?? 0) >= 100) above100Visits += 1
       if ((r.sellInAttainmentPct ?? 0) >= 100) above100SellIn += 1
     }
@@ -172,6 +175,7 @@ export function TargetsQuotasView() {
       targetSellIn,
       actualVisits,
       actualSellIn,
+      newShops,
       visitsPct,
       sellInPct,
     }
@@ -433,7 +437,7 @@ export function TargetsQuotasView() {
           </div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <Card className="p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">Reps targeted</p>
             <p className="mt-2 text-3xl font-bold tabular-nums">{loading ? '—' : summary.reps}</p>
@@ -457,6 +461,11 @@ export function TargetsQuotasView() {
             <p className="mt-1 text-xs text-muted-foreground">
               Attainment: {summary.sellInPct == null ? '—' : `${summary.sellInPct}%`}
             </p>
+          </Card>
+          <Card className="p-5">
+            <p className="text-xs font-medium uppercase text-muted-foreground">New shops acquired</p>
+            <p className="mt-2 text-3xl font-bold tabular-nums">{loading ? '—' : summary.newShops}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Outlet Scouting · status “won”</p>
           </Card>
           <Card className="border-l-4 border-l-emerald-600 p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">Above 100%</p>

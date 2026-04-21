@@ -256,7 +256,7 @@ export function SfDashboardView() {
         accent: 'border-l-emerald-600',
       },
       {
-        label: 'B2B sell-in',
+        label: 'B2B ',
         value: formatGhs(kpis.b2bSellInGhs),
         subtitle: 'B2B Payments (invoiced net) · selected range',
         icon: TrendingUp,

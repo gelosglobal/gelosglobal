@@ -60,6 +60,7 @@ type CollectionRow = {
   amountGhs: number
   discountGhs: number
   paidGhs: number
+  paidAt: string | null
   balanceGhs: number
   paymentMethod: 'momo' | 'cash' | 'bank_transfer' | 'cheque' | null
   items: { name: string; sku?: string; qty: number; unitPriceGhs: number }[]
@@ -103,6 +104,7 @@ function emptyForm() {
     amountGhs: '',
     discountGhs: '',
     paidGhs: '',
+    paidDate: '',
     paymentMethod: 'momo' as const,
     dueDate: '',
     repName: '',
@@ -213,6 +215,7 @@ export function B2bPaymentsView() {
       amountGhs: String(c.amountGhs),
       discountGhs: c.discountGhs ? String(c.discountGhs) : '',
       paidGhs: String(c.paidGhs),
+      paidDate: isoToDateInput(c.paidAt),
       paymentMethod: (c.paymentMethod ?? 'momo') as any,
       dueDate: isoToDateInput(c.dueAt),
       repName: c.repName ?? '',
@@ -263,6 +266,7 @@ export function B2bPaymentsView() {
     }
     const dueAt = form.dueDate.trim() ? dateToIsoNoon(form.dueDate) : undefined
     const invoiceAt = form.invoiceDate.trim() ? dateToIsoNoon(form.invoiceDate) : undefined
+    const paidAt = form.paidDate.trim() ? dateToIsoNoon(form.paidDate) : undefined
     const items = form.items
       .map((it) => {
         const name = it.name.trim()
@@ -288,6 +292,7 @@ export function B2bPaymentsView() {
           amountGhs,
           discountGhs: discountGhs > 0 ? discountGhs : undefined,
           paidGhs,
+          paidAt,
           paymentMethod: form.paymentMethod,
           items,
           dueAt,
@@ -336,6 +341,7 @@ export function B2bPaymentsView() {
     }
     const dueAt = editForm.dueDate.trim() ? dateToIsoNoon(editForm.dueDate) : null
     const invoiceAt = editForm.invoiceDate.trim() ? dateToIsoNoon(editForm.invoiceDate) : null
+    const paidAt = editForm.paidDate.trim() ? dateToIsoNoon(editForm.paidDate) : null
     const items = editForm.items
       .map((it) => {
         const name = it.name.trim()
@@ -361,6 +367,7 @@ export function B2bPaymentsView() {
           amountGhs,
           discountGhs: discountGhs > 0 ? discountGhs : null,
           paidGhs,
+          paidAt,
           paymentMethod: editForm.paymentMethod,
           items,
           dueAt,
@@ -412,6 +419,7 @@ export function B2bPaymentsView() {
       'outlet',
       'invoice',
       'invoiceDate',
+      'paidDate',
       'paymentMethod',
       'amount',
       'paid',
@@ -429,6 +437,7 @@ export function B2bPaymentsView() {
           esc(c.outletName),
           esc(c.invoiceNumber),
           c.invoiceAt ?? '',
+          c.paidAt ?? '',
           c.paymentMethod ?? '',
           c.amountGhs,
           c.paidGhs,
@@ -613,12 +622,6 @@ export function B2bPaymentsView() {
                 if (f) void handleImportExcel(f)
               }}
             />
-            <Button variant="outline" size="sm" className="gap-1.5" asChild>
-              <Link href="/dtc/finance-layer">
-                Finance Layer
-                <ExternalLink className="ml-1 h-3.5 w-3.5" />
-              </Link>
-            </Button>
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5">
@@ -724,6 +727,15 @@ export function B2bPaymentsView() {
                           value={form.paidGhs}
                           onChange={(e) => setForm((f) => ({ ...f, paidGhs: e.target.value }))}
                           placeholder="0.00"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="b2b-paid-date">Paid date</Label>
+                        <Input
+                          id="b2b-paid-date"
+                          type="date"
+                          value={form.paidDate}
+                          onChange={(e) => setForm((f) => ({ ...f, paidDate: e.target.value }))}
                         />
                       </div>
                     </div>
@@ -923,9 +935,7 @@ export function B2bPaymentsView() {
                 <p className="mt-1 text-xl font-bold tabular-nums sm:text-2xl">
                   {formatGhs(kpis.outstandingGhs)}
                 </p>
-                <Button variant="link" className="h-auto p-0 text-xs" asChild>
-                  <Link href="/dtc/finance-layer">Adjust in Finance Layer</Link>
-                </Button>
+                <p className="text-xs text-muted-foreground">Balance across invoices</p>
               </Card>
               <Card className="p-4">
                 <p className="text-xs font-medium uppercase text-muted-foreground">
@@ -995,15 +1005,16 @@ export function B2bPaymentsView() {
                     <TableHead>Outlet</TableHead>
                     <TableHead>Invoice</TableHead>
                     <TableHead className="hidden lg:table-cell">Invoice date</TableHead>
-                    <TableHead className="hidden lg:table-cell">Payment</TableHead>
-                    <TableHead className="hidden md:table-cell text-right">Items</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                     <TableHead className="hidden md:table-cell text-right">Discount</TableHead>
                     <TableHead className="text-right">Paid</TableHead>
+                    <TableHead className="hidden lg:table-cell">Paid date</TableHead>
                     <TableHead className="text-right">Balance</TableHead>
                     <TableHead className="hidden lg:table-cell text-right">Due</TableHead>
+                    <TableHead className="hidden lg:table-cell">Payment</TableHead>
                     <TableHead className="hidden lg:table-cell">Rep</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead className="hidden md:table-cell text-right">Items</TableHead>
                     <TableHead className="w-[88px] text-right" />
                   </TableRow>
                 </TableHeader>
@@ -1015,6 +1026,22 @@ export function B2bPaymentsView() {
                       <TableCell className="hidden lg:table-cell text-muted-foreground">
                         {c.invoiceAt ? format(new Date(c.invoiceAt), 'd MMM yyyy') : '—'}
                       </TableCell>
+                      <TableCell className="text-right font-medium tabular-nums">
+                        {formatGhs(c.amountGhs)}
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
+                        {c.discountGhs ? `−${formatGhs(c.discountGhs)}` : '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatGhs(c.paidGhs)}</TableCell>
+                      <TableCell className="hidden lg:table-cell text-muted-foreground">
+                        {c.paidAt ? format(new Date(c.paidAt), 'd MMM yyyy') : '—'}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold tabular-nums">
+                        {formatGhs(c.balanceGhs)}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell text-right text-sm text-muted-foreground tabular-nums">
+                        {c.dueAt ? format(new Date(c.dueAt), 'd MMM yyyy') : '—'}
+                      </TableCell>
                       <TableCell className="hidden lg:table-cell">
                         {c.paymentMethod ? (
                           <span className="text-xs text-muted-foreground">
@@ -1022,6 +1049,18 @@ export function B2bPaymentsView() {
                           </span>
                         ) : (
                           '—'
+                        )}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell text-muted-foreground">
+                        {c.repName ?? '—'}
+                      </TableCell>
+                      <TableCell>
+                        {c.status === 'paid' ? (
+                          <span className="text-emerald-600">Paid</span>
+                        ) : c.status === 'overdue' ? (
+                          <span className="text-destructive">Overdue</span>
+                        ) : (
+                          <span className="text-muted-foreground">Open</span>
                         )}
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
@@ -1036,31 +1075,6 @@ export function B2bPaymentsView() {
                         >
                           <Eye className={c.items?.length ? 'h-4 w-4' : 'h-4 w-4 opacity-40'} />
                         </Button>
-                      </TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {formatGhs(c.amountGhs)}
-                      </TableCell>
-                      <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
-                        {c.discountGhs ? `−${formatGhs(c.discountGhs)}` : '—'}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{formatGhs(c.paidGhs)}</TableCell>
-                      <TableCell className="text-right font-semibold tabular-nums">
-                        {formatGhs(c.balanceGhs)}
-                      </TableCell>
-                      <TableCell className="hidden lg:table-cell text-right text-sm text-muted-foreground tabular-nums">
-                        {c.dueAt ? format(new Date(c.dueAt), 'd MMM yyyy') : '—'}
-                      </TableCell>
-                      <TableCell className="hidden lg:table-cell text-muted-foreground">
-                        {c.repName ?? '—'}
-                      </TableCell>
-                      <TableCell>
-                        {c.status === 'paid' ? (
-                          <span className="text-emerald-600">Paid</span>
-                        ) : c.status === 'overdue' ? (
-                          <span className="text-destructive">Overdue</span>
-                        ) : (
-                          <span className="text-muted-foreground">Open</span>
-                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-0.5">
@@ -1201,6 +1215,18 @@ export function B2bPaymentsView() {
                       setEditForm((f) => ({ ...f, paidGhs: e.target.value }))
                     }
                     placeholder="0.00"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-b2b-paid-date">Paid date</Label>
+                  <Input
+                    id="edit-b2b-paid-date"
+                    type="date"
+                    value={editForm.paidDate}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, paidDate: e.target.value }))
+                    }
+                    placeholder="Clear to remove"
                   />
                 </div>
               </div>

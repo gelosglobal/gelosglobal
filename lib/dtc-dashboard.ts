@@ -1,8 +1,14 @@
 import type { Db } from 'mongodb'
 import { subDays } from 'date-fns'
 import { DTC_ORDERS_COLLECTION } from '@/lib/dtc-orders'
-import { computeInventoryStats, listDtcInventory } from '@/lib/dtc-inventory'
+import { computeInventoryStats, computeStockHealth, listDtcInventory } from '@/lib/dtc-inventory'
 import { computeFinanceLayerSnapshot } from '@/lib/dtc-finance'
+
+export type DtcDashboardAlert = {
+  id: string
+  severity: 'high' | 'medium'
+  text: string
+}
 
 export type DtcDashboardSnapshot = {
   generatedAt: string
@@ -24,6 +30,7 @@ export type DtcDashboardSnapshot = {
     units: number
     revenueGhs: number
   }>
+  alerts: DtcDashboardAlert[]
 }
 
 export async function computeDtcDashboardSnapshot(
@@ -104,6 +111,38 @@ export async function computeDtcDashboardSnapshot(
   const revenueGhs = finance.snapshot.dtcRevenue
   const avgOrderValueGhs = orders.length === 0 ? 0 : revenueGhs / orders.length
 
+  const alerts: DtcDashboardAlert[] = []
+
+  let invAlerts = 0
+  for (const row of inventory) {
+    if (invAlerts >= 10) break
+    const h = computeStockHealth(row.onHand, row.safetyStock)
+    if (h === 'critical' || h === 'low') {
+      invAlerts += 1
+      alerts.push({
+        id: `inv-${row._id.toHexString()}`,
+        severity: h === 'critical' ? 'high' : 'medium',
+        text: `[Stock] ${row.warehouse}: ${row.name} (${row.sku}) — ${row.onHand} on hand vs ${row.safetyStock} safety`,
+      })
+    }
+  }
+
+  if (awaitingFulfillment > 0) {
+    alerts.push({
+      id: 'orders-awaiting-fulfillment',
+      severity: awaitingFulfillment >= 10 ? 'high' : 'medium',
+      text: `[Orders] ${awaitingFulfillment.toLocaleString()} orders awaiting fulfillment`,
+    })
+  }
+
+  if (finance.snapshot.b2bOutstandingGhs >= 5_000) {
+    alerts.push({
+      id: 'fin-b2b-outstanding',
+      severity: finance.snapshot.b2bOutstandingGhs >= 20_000 ? 'high' : 'medium',
+      text: `[B2B] Outstanding receivables: GHS ${finance.snapshot.b2bOutstandingGhs.toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+    })
+  }
+
   return {
     generatedAt: now.toISOString(),
     periodDays,
@@ -119,6 +158,7 @@ export async function computeDtcDashboardSnapshot(
       belowSafety: invStats.belowSafety,
     },
     topSkus: topSkuAgg,
+    alerts: alerts.slice(0, 25),
   }
 }
 

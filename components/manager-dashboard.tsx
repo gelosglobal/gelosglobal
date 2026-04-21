@@ -113,7 +113,6 @@ type OrderRow = {
 
 const QUICK_LINKS: { href: string; label: string; icon: typeof Package }[] = [
   { href: '/dtc/orders-engine', label: 'Orders Engine', icon: Package },
-  { href: '/dtc/finance-layer', label: 'Finance Layer', icon: BarChart3 },
   { href: '/dtc/inventory', label: 'DTC Inventory', icon: Package },
   { href: '/sf/dashboard', label: 'Retail Dashboard', icon: Target },
   { href: '/sf/shop-visits', label: 'Shop Visits', icon: Store },
