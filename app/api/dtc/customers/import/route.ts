@@ -26,6 +26,12 @@ const rowSchema = z.object({
   source: sourceSchema.optional(),
   joinDate: z.string().datetime().optional(),
   segment: segmentSchema.optional(),
+  riderAssigned: z.string().trim().min(0).max(120).optional(),
+  amountToBeCollectedGhs: z.number().optional(),
+  acCashCollectedGhs: z.number().optional(),
+  acMomoGhs: z.number().optional(),
+  acPaystackGhs: z.number().optional(),
+  remarks: z.string().trim().min(0).max(2000).optional(),
 })
 
 const bodySchema = z.object({
@@ -66,7 +72,30 @@ export async function POST(request: Request) {
           source: r.source ?? 'other',
           joinDate: r.joinDate ? new Date(r.joinDate) : now,
           segment: r.segment ?? undefined,
+          riderAssigned: r.riderAssigned ?? undefined,
+          amountToBeCollectedGhs: r.amountToBeCollectedGhs ?? undefined,
+          acCashCollectedGhs: r.acCashCollectedGhs ?? undefined,
+          acMomoGhs: r.acMomoGhs ?? undefined,
+          acPaystackGhs: r.acPaystackGhs ?? undefined,
+          remarks: r.remarks ?? undefined,
           createdAt: now,
+        },
+        $set: {
+          updatedAt: now,
+          ...(r.phone !== undefined ? { phone: r.phone } : {}),
+          ...(r.email !== undefined ? { email: r.email } : {}),
+          ...(r.location !== undefined ? { location: r.location } : {}),
+          ...(r.source !== undefined ? { source: r.source } : {}),
+          ...(r.joinDate !== undefined ? { joinDate: new Date(r.joinDate) } : {}),
+          ...(r.segment !== undefined ? { segment: r.segment } : {}),
+          ...(r.riderAssigned !== undefined ? { riderAssigned: r.riderAssigned } : {}),
+          ...(r.amountToBeCollectedGhs !== undefined
+            ? { amountToBeCollectedGhs: r.amountToBeCollectedGhs }
+            : {}),
+          ...(r.acCashCollectedGhs !== undefined ? { acCashCollectedGhs: r.acCashCollectedGhs } : {}),
+          ...(r.acMomoGhs !== undefined ? { acMomoGhs: r.acMomoGhs } : {}),
+          ...(r.acPaystackGhs !== undefined ? { acPaystackGhs: r.acPaystackGhs } : {}),
+          ...(r.remarks !== undefined ? { remarks: r.remarks } : {}),
         },
       },
       upsert: true,

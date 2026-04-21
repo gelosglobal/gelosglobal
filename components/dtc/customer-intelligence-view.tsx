@@ -252,16 +252,50 @@ export function CustomerIntelligenceView() {
         return
       }
 
+      const normalizeHeader = (h: unknown) =>
+        String(h ?? '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, ' ')
+          .replace(/[()]/g, '')
+
+      const get = (row: Record<string, unknown>, ...candidates: string[]) => {
+        for (const k of Object.keys(row)) {
+          const nk = normalizeHeader(k)
+          if (candidates.includes(nk)) return row[k]
+        }
+        return undefined
+      }
+
+      const parseMoney = (v: unknown): number | undefined => {
+        if (typeof v === 'number' && Number.isFinite(v)) return v
+        const s = String(v ?? '').trim()
+        if (!s) return undefined
+        const n = Number(s.replace(/[^0-9.\-]/g, ''))
+        return Number.isFinite(n) ? n : undefined
+      }
+
       const rows = json
         .map((r) => {
-          const customer = String(r.customer ?? r.Customer ?? r.name ?? r.Name ?? '').trim()
+          const customer = String(
+            get(r, 'customer', 'name') ?? r.customer ?? r.Customer ?? r.name ?? r.Name ?? '',
+          ).trim()
           if (!customer) return null
-          const phone = String(r.phone ?? r.Phone ?? '').trim()
-          const email = String(r.email ?? r.Email ?? '').trim()
-          const location = String(r.location ?? r.Location ?? '').trim()
-          const sourceRaw = String(r.source ?? r.Source ?? '').trim().toLowerCase()
-          const joinDateRaw = String(r.joinDate ?? r.JoinDate ?? r.join_date ?? '').trim()
-          const segmentRaw = String(r.segment ?? r.Segment ?? '').trim()
+          const phone = String(get(r, 'phone', 'number') ?? r.phone ?? r.Phone ?? '').trim()
+          const email = String(get(r, 'email') ?? r.email ?? r.Email ?? '').trim()
+          const location = String(get(r, 'location') ?? r.location ?? r.Location ?? '').trim()
+          const riderAssigned = String(get(r, 'rider assigned', 'rider') ?? '').trim()
+          const amountToBeCollectedGhs = parseMoney(
+            get(r, 'amount to be collected', 'amount_to_be_collected') ?? '',
+          )
+          const acCashCollectedGhs = parseMoney(get(r, 'ac cash collected', 'ac cash') ?? '')
+          const acMomoGhs = parseMoney(get(r, 'ac momo', 'acmomo') ?? '')
+          const acPaystackGhs = parseMoney(get(r, 'ac paystack', 'paystack') ?? '')
+          const remarks = String(get(r, 'remarks', 'remark', 'notes') ?? '').trim()
+
+          const sourceRaw = String(get(r, 'source') ?? r.source ?? r.Source ?? '').trim().toLowerCase()
+          const joinDateRaw = String(get(r, 'joindate', 'join date', 'join_date') ?? r.joinDate ?? r.JoinDate ?? r.join_date ?? '').trim()
+          const segmentRaw = String(get(r, 'segment') ?? r.segment ?? r.Segment ?? '').trim()
 
           const source =
             sourceRaw === 'walk_in' || sourceRaw === 'walk in'
@@ -297,6 +331,12 @@ export function CustomerIntelligenceView() {
             source,
             joinDate,
             segment,
+            riderAssigned: riderAssigned || undefined,
+            amountToBeCollectedGhs,
+            acCashCollectedGhs,
+            acMomoGhs,
+            acPaystackGhs,
+            remarks: remarks || undefined,
           }
         })
         .filter((x): x is NonNullable<typeof x> => Boolean(x))
