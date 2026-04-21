@@ -1,7 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, BarChart3, Loader2, RefreshCw, ShoppingCart, TriangleAlert, Wallet } from 'lucide-react'
+import {
+  AlertTriangle,
+  BarChart3,
+  CheckCircle2,
+  CircleDot,
+  Loader2,
+  RefreshCw,
+  ShoppingCart,
+  TriangleAlert,
+  Wallet,
+} from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { toast } from 'sonner'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
@@ -9,6 +19,13 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -42,6 +59,18 @@ type DtcDashboardSnapshot = {
   alerts: Array<{ id: string; severity: 'high' | 'medium'; text: string }>
 }
 
+type RepTaskRow = {
+  id: string
+  repName: string
+  title: string
+  dueAt: string | null
+  priority: 'low' | 'medium' | 'high'
+  status: 'started' | 'in_progress' | 'done'
+  notes: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 function severityBadge(s: 'high' | 'medium') {
   if (s === 'high') return <Badge variant="destructive">High</Badge>
   return <Badge variant="secondary">Medium</Badge>
@@ -50,6 +79,8 @@ function severityBadge(s: 'high' | 'medium') {
 export function DtcDashboardView() {
   const [data, setData] = useState<DtcDashboardSnapshot | null>(null)
   const [loading, setLoading] = useState(true)
+  const [tasksLoading, setTasksLoading] = useState(true)
+  const [tasks, setTasks] = useState<RepTaskRow[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -71,6 +102,49 @@ export function DtcDashboardView() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const loadTasks = useCallback(async () => {
+    setTasksLoading(true)
+    try {
+      const res = await fetch('/api/rep/tasks', { credentials: 'include' })
+      if (res.status === 401) return
+      if (!res.ok) throw new Error('Failed')
+      const json = (await res.json()) as { tasks: RepTaskRow[] }
+      setTasks(Array.isArray(json.tasks) ? json.tasks : [])
+    } catch {
+      setTasks([])
+    } finally {
+      setTasksLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadTasks()
+  }, [loadTasks])
+
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      void loadTasks()
+    }, 30_000)
+    return () => window.clearInterval(t)
+  }, [loadTasks])
+
+  async function updateTaskStatus(t: RepTaskRow, status: RepTaskRow['status']) {
+    const prev = t.status
+    setTasks((p) => p.map((x) => (x.id === t.id ? { ...x, status } : x)))
+    try {
+      const res = await fetch(`/api/rep/tasks/${t.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      })
+      if (!res.ok) throw new Error('Failed')
+    } catch {
+      toast.error('Could not update task')
+      setTasks((p) => p.map((x) => (x.id === t.id ? { ...x, status: prev } : x)))
+    }
+  }
 
   const generatedLabel = useMemo(() => {
     if (!data) return ''
@@ -231,6 +305,73 @@ export function DtcDashboardView() {
                     >
                       <p className="text-sm text-foreground">{a.text}</p>
                       {severityBadge(a.severity)}
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="mb-3 flex items-center gap-2">
+                <TriangleAlert className="h-5 w-5 text-emerald-600" />
+                <h2 className="text-sm font-semibold uppercase tracking-wide">My tasks</h2>
+              </div>
+              {tasksLoading ? (
+                <p className="text-sm text-muted-foreground">Loading tasks…</p>
+              ) : tasks.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No tasks assigned to you.</p>
+              ) : (
+                <div className="space-y-2">
+                  {tasks.slice(0, 12).map((t) => (
+                    <Card
+                      key={t.id}
+                      className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground">{t.title}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {t.dueAt ? `Due ${formatDistanceToNow(new Date(t.dueAt), { addSuffix: true })}` : 'No due date'}
+                          {t.priority ? ` · ${t.priority}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant={
+                            t.priority === 'high'
+                              ? 'destructive'
+                              : t.priority === 'medium'
+                                ? 'secondary'
+                                : 'outline'
+                          }
+                        >
+                          {t.priority}
+                        </Badge>
+                        <Select value={t.status} onValueChange={(v) => void updateTaskStatus(t, v as RepTaskRow['status'])}>
+                          <SelectTrigger className="h-8 w-[150px]">
+                            <SelectValue placeholder="Status" />
+                          </SelectTrigger>
+                          <SelectContent>
+                          <SelectItem value="started">
+                            <span className="flex items-center gap-2">
+                              <CircleDot className="h-4 w-4 text-slate-500" />
+                              Started
+                            </span>
+                          </SelectItem>
+                          <SelectItem value="in_progress">
+                            <span className="flex items-center gap-2">
+                              <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
+                              In progress
+                            </span>
+                          </SelectItem>
+                          <SelectItem value="done">
+                            <span className="flex items-center gap-2">
+                              <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                              Done
+                            </span>
+                          </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </Card>
                   ))}
                 </div>

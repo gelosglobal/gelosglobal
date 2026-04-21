@@ -111,6 +111,20 @@ type OrderRow = {
   orderedAt: string
 }
 
+type RepTaskPriority = 'low' | 'medium' | 'high'
+type RepTaskStatus = 'started' | 'in_progress' | 'done'
+type RepTaskRow = {
+  id: string
+  repName: string
+  title: string
+  dueAt: string | null
+  priority: RepTaskPriority
+  status: RepTaskStatus
+  notes: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 const QUICK_LINKS: { href: string; label: string; icon: typeof Package }[] = [
   { href: '/dtc/orders-engine', label: 'Orders Engine', icon: Package },
   { href: '/dtc/inventory', label: 'DTC Inventory', icon: Package },
@@ -189,6 +203,17 @@ export function ManagerDashboard() {
   const [sf, setSf] = useState<SfDashboardPayload | null>(null)
   const [finance, setFinance] = useState<FinancePayload | null>(null)
   const [orders, setOrders] = useState<OrderRow[]>([])
+  const [tasks, setTasks] = useState<RepTaskRow[]>([])
+
+  const [taskOpen, setTaskOpen] = useState(false)
+  const [taskSaving, setTaskSaving] = useState(false)
+  const [taskForm, setTaskForm] = useState({
+    repName: '',
+    title: '',
+    dueDate: '',
+    priority: 'medium' as RepTaskPriority,
+    notes: '',
+  })
 
   const [rangePreset, setRangePreset] = useState<RangePreset>('30d')
   const [customOpen, setCustomOpen] = useState(false)
@@ -258,7 +283,7 @@ export function ManagerDashboard() {
         finQs.set('end', endIso)
       }
 
-      const [sfRes, finRes, ordRes] = await Promise.all([
+      const [sfRes, finRes, ordRes, taskRes] = await Promise.all([
         fetch(`/api/sf/dashboard${sfQs.toString() ? `?${sfQs.toString()}` : ''}`, {
           credentials: 'include',
         }),
@@ -266,29 +291,38 @@ export function ManagerDashboard() {
           credentials: 'include',
         }),
         fetch('/api/dtc/orders', { credentials: 'include' }),
+        fetch('/api/master/rep-tasks', { credentials: 'include' }),
       ])
 
-      if (sfRes.status === 401 || finRes.status === 401 || ordRes.status === 401) {
+      if (
+        sfRes.status === 401 ||
+        finRes.status === 401 ||
+        ordRes.status === 401 ||
+        taskRes.status === 401
+      ) {
         toast.error('Session expired. Sign in again.')
         return
       }
 
-      if (!sfRes.ok || !finRes.ok || !ordRes.ok) {
+      if (!sfRes.ok || !finRes.ok || !ordRes.ok || !taskRes.ok) {
         throw new Error('One or more requests failed')
       }
 
       const sfJson = (await sfRes.json()) as SfDashboardPayload
       const finJson = (await finRes.json()) as FinancePayload
       const ordJson = (await ordRes.json()) as { orders: OrderRow[] }
+      const taskJson = (await taskRes.json()) as { tasks: RepTaskRow[] }
 
       setSf(sfJson)
       setFinance(finJson)
       setOrders(ordJson.orders ?? [])
+      setTasks(taskJson.tasks ?? [])
     } catch {
       toast.error('Could not load master dashboard data')
       setSf(null)
       setFinance(null)
       setOrders([])
+      setTasks([])
     } finally {
       setLoading(false)
     }
@@ -321,6 +355,48 @@ export function ManagerDashboard() {
   const recentOrders = orders.slice(0, 6)
   const upcoming = sf?.upcomingVisits.slice(0, 6) ?? []
   const alerts = sf?.alerts.slice(0, 10) ?? []
+  const repOptions = Array.from(new Set((sf?.repPulse ?? []).map((r) => r.rep))).sort((a, b) =>
+    a.localeCompare(b),
+  )
+
+  async function createTask(e: React.FormEvent) {
+    e.preventDefault()
+    const repName = taskForm.repName.trim()
+    const title = taskForm.title.trim()
+    if (!repName) return toast.error('Pick a rep')
+    if (!title) return toast.error('Task title is required')
+    setTaskSaving(true)
+    try {
+      const dueAt = taskForm.dueDate.trim()
+        ? new Date(`${taskForm.dueDate}T12:00:00.000Z`).toISOString()
+        : undefined
+      const res = await fetch('/api/master/rep-tasks', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          repName,
+          title,
+          dueAt,
+          priority: taskForm.priority,
+          notes: taskForm.notes.trim() || undefined,
+        }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      if (!res.ok) throw new Error('Failed to create task')
+      toast.success('Task assigned')
+      setTaskOpen(false)
+      setTaskForm({ repName: '', title: '', dueDate: '', priority: 'medium', notes: '' })
+      await load()
+    } catch {
+      toast.error('Could not assign task')
+    } finally {
+      setTaskSaving(false)
+    }
+  }
 
   const headerDate = format(new Date(), 'd MMM yyyy')
   const rangeLabel = (() => {
@@ -627,6 +703,69 @@ export function ManagerDashboard() {
             )}
           </Card>
         </div>
+
+        <Card className="border-l-4 border-l-emerald-600 border-r-0 border-t-0 border-b-0 p-6">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <SectionCardTitle icon={LayoutGrid}>Rep tasks</SectionCardTitle>
+            <Button type="button" className="gap-1.5" onClick={() => setTaskOpen(true)} disabled={loading}>
+              Assign task
+            </Button>
+          </div>
+
+          {tasks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No tasks assigned yet.</p>
+          ) : (
+            <div className="space-y-3">
+              {tasks.slice(0, 10).map((t) => (
+                <div
+                  key={t.id}
+                  className="flex flex-col gap-2 border-b border-border pb-3 last:border-0 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-foreground">{t.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {t.repName}
+                      {t.dueAt ? ` · due ${format(new Date(t.dueAt), 'd MMM')}` : ''}
+                      {t.priority ? ` · ${t.priority}` : ''}
+                      {t.status ? ` · ${t.status}` : ''}
+                    </p>
+                    {t.notes ? (
+                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{t.notes}</p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Badge
+                      variant={
+                        t.priority === 'high'
+                          ? 'destructive'
+                          : t.priority === 'medium'
+                            ? 'secondary'
+                            : 'outline'
+                      }
+                    >
+                      {t.priority}
+                    </Badge>
+                    <Badge
+                      variant={
+                        t.status === 'done'
+                          ? 'secondary'
+                          : t.status === 'in_progress'
+                            ? 'outline'
+                            : 'outline'
+                      }
+                    >
+                      {t.status === 'done'
+                        ? 'Done'
+                        : t.status === 'in_progress'
+                          ? 'In progress'
+                          : 'Started'}
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       </div>
 
       <Dialog open={customOpen} onOpenChange={setCustomOpen}>
@@ -670,6 +809,103 @@ export function ManagerDashboard() {
               Apply
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={taskOpen} onOpenChange={setTaskOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <form onSubmit={createTask}>
+            <DialogHeader>
+              <DialogTitle>Assign task</DialogTitle>
+              <DialogDescription>Assign a task to a rep (Master only).</DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label>Rep</Label>
+                <Select
+                  value={taskForm.repName}
+                  onValueChange={(v) => setTaskForm((f) => ({ ...f, repName: v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select rep" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {repOptions.map((r) => (
+                      <SelectItem key={r} value={r}>
+                        {r}
+                      </SelectItem>
+                    ))}
+                    {repOptions.length === 0 ? <SelectItem value="Unknown">Unknown</SelectItem> : null}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="task-title">Task</Label>
+                <Input
+                  id="task-title"
+                  value={taskForm.title}
+                  onChange={(e) => setTaskForm((f) => ({ ...f, title: e.target.value }))}
+                  placeholder="e.g. Visit 10 outlets and collect balances"
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="task-due">Due date (optional)</Label>
+                  <Input
+                    id="task-due"
+                    type="date"
+                    value={taskForm.dueDate}
+                    onChange={(e) => setTaskForm((f) => ({ ...f, dueDate: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Priority</Label>
+                  <Select
+                    value={taskForm.priority}
+                    onValueChange={(v) =>
+                      setTaskForm((f) => ({ ...f, priority: v as RepTaskPriority }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Low</SelectItem>
+                      <SelectItem value="medium">Medium</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="task-notes">Notes (optional)</Label>
+                <Input
+                  id="task-notes"
+                  value={taskForm.notes}
+                  onChange={(e) => setTaskForm((f) => ({ ...f, notes: e.target.value }))}
+                  placeholder="Optional context"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setTaskOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={taskSaving}>
+                {taskSaving ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Assigning
+                  </>
+                ) : (
+                  'Assign task'
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

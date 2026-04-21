@@ -13,6 +13,7 @@ import {
   Store,
   Target,
   TrendingUp,
+  Wallet,
   Users,
 } from 'lucide-react'
 
@@ -47,6 +48,7 @@ export const dtcNavItems: NavItemConfig[] = [
 
 export const sellInNavItems: NavItemConfig[] = [
   { label: 'Sell-in', href: '/sell-in', icon: TrendingUp },
+  { label: 'Expenses', href: '/sell-in/expenses', icon: Wallet },
 ]
 
 export const salesForceNavItems: NavItemConfig[] = [
@@ -66,6 +68,7 @@ export const salesForceNavItems: NavItemConfig[] = [
 
 const pathTitleEntries: [string, string][] = [
   ['/sell-in', 'Sell-in'],
+  ['/sell-in/expenses', 'Expenses'],
   ['/sf/dashboard', 'Retail Dashboard'],
   ['/sf/outlet-scouting', 'Outlet Scouting'],
   ['/sf/shop-visits', 'Shop Visits'],
