@@ -258,7 +258,7 @@ export function SfDashboardView() {
       {
         label: 'B2B sell-in',
         value: formatGhs(kpis.b2bSellInGhs),
-        subtitle: 'B2B portal orders (DTC engine) · selected range',
+        subtitle: 'B2B Payments (invoiced net) · selected range',
         icon: TrendingUp,
         accent: 'border-l-violet-600',
       },

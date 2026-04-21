@@ -1,5 +1,9 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
-import { serializeSfInventoryItem, updateSfInventoryItem } from '@/lib/sf-inventory'
+import {
+  SF_INVENTORY_COLLECTION,
+  serializeSfInventoryItem,
+  updateSfInventoryItem,
+} from '@/lib/sf-inventory'
 import { getMongo } from '@/lib/mongodb'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
@@ -74,5 +78,31 @@ export async function PATCH(
   }
 
   return NextResponse.json({ item: serializeSfInventoryItem(updated) })
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const session = await requireSession()
+  if (!session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const { id } = await context.params
+  if (!ObjectId.isValid(id)) {
+    return NextResponse.json({ error: 'Invalid id' }, { status: 400 })
+  }
+
+  const { db } = getMongo()
+  const res = await db
+    .collection(SF_INVENTORY_COLLECTION)
+    .deleteOne({ _id: new ObjectId(id) })
+
+  if (!res.deletedCount) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
+  return NextResponse.json({ ok: true })
 }
 

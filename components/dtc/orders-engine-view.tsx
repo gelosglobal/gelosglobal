@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
-import { Download, Filter, Loader2, Plus, Trash2 } from 'lucide-react'
+import { Download, Eye, Filter, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
 import { Badge } from '@/components/ui/badge'
@@ -102,6 +102,20 @@ export function OrdersEngineView() {
   const [filter, setFilter] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [viewOpen, setViewOpen] = useState(false)
+  const [viewOrder, setViewOrder] = useState<OrderRow | null>(null)
+  const [editOpen, setEditOpen] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editOrder, setEditOrder] = useState<OrderRow | null>(null)
+  const [editForm, setEditForm] = useState({
+    customer: '',
+    channel: 'Web' as (typeof CHANNELS)[number],
+    orderedAt: toDatetimeLocalValue(new Date()),
+    paymentMethod: 'momo' as PaymentMethod,
+    status: 'processing' as OrderStatus,
+    discountGhs: '',
+    items: [{ sku: '', name: '', qty: '1', unitPrice: '' } satisfies DraftItem],
+  })
   const [form, setForm] = useState({
     customer: '',
     channel: 'Web' as (typeof CHANNELS)[number],
@@ -172,6 +186,26 @@ export function OrdersEngineView() {
   const computedTotal = useMemo(() => {
     return Math.max(0, computedSubtotal - computedDiscount)
   }, [computedDiscount, computedSubtotal])
+
+  const editComputedSubtotal = useMemo(() => {
+    return editForm.items.reduce((sum, item) => {
+      const qty = Number.parseInt(item.qty, 10)
+      const unit = Number.parseFloat(item.unitPrice)
+      if (!Number.isFinite(qty) || qty <= 0) return sum
+      if (!Number.isFinite(unit) || unit <= 0) return sum
+      return sum + qty * unit
+    }, 0)
+  }, [editForm.items])
+
+  const editComputedDiscount = useMemo(() => {
+    const d = Number.parseFloat(editForm.discountGhs)
+    if (!Number.isFinite(d) || d <= 0) return 0
+    return Math.min(editComputedSubtotal, d)
+  }, [editComputedSubtotal, editForm.discountGhs])
+
+  const editComputedTotal = useMemo(() => {
+    return Math.max(0, editComputedSubtotal - editComputedDiscount)
+  }, [editComputedDiscount, editComputedSubtotal])
 
   async function removeOrder(order: Pick<OrderRow, 'id' | 'orderNumber'>) {
     if (!window.confirm(`Remove order ${order.orderNumber}? This cannot be undone.`)) return
@@ -276,6 +310,112 @@ export function OrdersEngineView() {
     } finally {
       setSubmitting(false)
     }
+  }
+
+  function openEditOrder(o: OrderRow) {
+    setEditOrder(o)
+    setEditForm({
+      customer: o.customer,
+      channel: (CHANNELS.includes(o.channel as any) ? (o.channel as any) : 'Other') as (typeof CHANNELS)[number],
+      orderedAt: toDatetimeLocalValue(new Date(o.orderedAt)),
+      paymentMethod: o.paymentMethod as PaymentMethod,
+      status: o.status,
+      discountGhs: o.discountGhs ? String(o.discountGhs) : '',
+      items: (o.items ?? []).length
+        ? o.items.map((it) => ({
+            sku: it.sku ?? '',
+            name: it.name ?? '',
+            qty: String(it.qty ?? 1),
+            unitPrice: String(it.unitPrice ?? ''),
+          }))
+        : [{ sku: '', name: '', qty: '1', unitPrice: '' }],
+    })
+    setEditOpen(true)
+  }
+
+  async function handleEditSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editOrder) return
+
+    if (!editForm.customer.trim()) {
+      toast.error('Enter a customer')
+      return
+    }
+    if (!editForm.orderedAt) {
+      toast.error('Select an order date')
+      return
+    }
+    if (editForm.items.length === 0) {
+      toast.error('Add at least one item')
+      return
+    }
+
+    const items = editForm.items
+      .map((i) => ({
+        sku: i.sku.trim() ? i.sku.trim() : undefined,
+        name: i.name.trim(),
+        qty: Number.parseInt(i.qty, 10),
+        unitPrice: Number.parseFloat(i.unitPrice),
+      }))
+      .filter((i) => i.name)
+    if (items.length === 0) {
+      toast.error('Add at least one item name')
+      return
+    }
+    if (items.some((i) => !Number.isFinite(i.qty) || i.qty <= 0)) {
+      toast.error('Each item must have a valid quantity')
+      return
+    }
+    if (items.some((i) => !Number.isFinite(i.unitPrice) || i.unitPrice <= 0)) {
+      toast.error('Each item must have a valid unit price')
+      return
+    }
+
+    const discountGhs =
+      editForm.discountGhs.trim() === '' ? null : Number.parseFloat(editForm.discountGhs)
+    if (discountGhs !== null && (!Number.isFinite(discountGhs) || discountGhs < 0)) {
+      toast.error('Enter a valid discount amount')
+      return
+    }
+
+    setEditing(true)
+    try {
+      const res = await fetch(`/api/dtc/orders/${editOrder.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer: editForm.customer.trim(),
+          channel: editForm.channel,
+          orderedAt: new Date(editForm.orderedAt).toISOString(),
+          paymentMethod: editForm.paymentMethod,
+          items,
+          discountGhs: discountGhs === 0 ? null : discountGhs,
+          status: editForm.status,
+        }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired')
+        return
+      }
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error ?? 'Could not update order')
+      }
+      toast.success('Order updated')
+      setEditOpen(false)
+      setEditOrder(null)
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update order')
+    } finally {
+      setEditing(false)
+    }
+  }
+
+  function openViewOrder(o: OrderRow) {
+    setViewOrder(o)
+    setViewOpen(true)
   }
 
   function handleExport() {
@@ -653,6 +793,350 @@ export function OrdersEngineView() {
                 </form>
               </DialogContent>
             </Dialog>
+            <Dialog open={editOpen} onOpenChange={setEditOpen}>
+              <DialogContent className="sm:max-w-3xl">
+                <form onSubmit={handleEditSubmit}>
+                  <DialogHeader>
+                    <DialogTitle>Edit order</DialogTitle>
+                    <DialogDescription>
+                      Update customer, items, discount, and status. Totals are recalculated.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="edit-customer">Customer</Label>
+                      <Input
+                        id="edit-customer"
+                        value={editForm.customer}
+                        onChange={(e) => setEditForm((f) => ({ ...f, customer: e.target.value }))}
+                        required
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-orderedAt">Order date</Label>
+                        <Input
+                          id="edit-orderedAt"
+                          type="datetime-local"
+                          value={editForm.orderedAt}
+                          onChange={(e) => setEditForm((f) => ({ ...f, orderedAt: e.target.value }))}
+                          required
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Payment method</Label>
+                        <Select
+                          value={editForm.paymentMethod}
+                          onValueChange={(v) =>
+                            setEditForm((f) => ({ ...f, paymentMethod: v as PaymentMethod }))
+                          }
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {PAYMENT_METHODS.map((m) => (
+                              <SelectItem key={m.value} value={m.value}>
+                                {m.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Channel</Label>
+                      <Select
+                        value={editForm.channel}
+                        onValueChange={(v) =>
+                          setEditForm((f) => ({ ...f, channel: v as (typeof CHANNELS)[number] }))
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CHANNELS.map((c) => (
+                            <SelectItem key={c} value={c}>
+                              {c}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <Label>Order items</Label>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setEditForm((f) => ({
+                              ...f,
+                              items: [...f.items, { sku: '', name: '', qty: '1', unitPrice: '' }],
+                            }))
+                          }
+                        >
+                          Add item
+                        </Button>
+                      </div>
+                      <div className="space-y-3">
+                        {editForm.items.map((it, idx) => (
+                          <div key={idx} className="rounded-lg border border-border p-3">
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div className="space-y-2">
+                                <Label htmlFor={`edit-item-name-${idx}`}>Item name</Label>
+                                <Input
+                                  id={`edit-item-name-${idx}`}
+                                  value={it.name}
+                                  onChange={(e) =>
+                                    setEditForm((f) => {
+                                      const items = [...f.items]
+                                      items[idx] = { ...items[idx], name: e.target.value }
+                                      return { ...f, items }
+                                    })
+                                  }
+                                  required={idx === 0}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor={`edit-item-sku-${idx}`}>SKU (optional)</Label>
+                                <Input
+                                  id={`edit-item-sku-${idx}`}
+                                  value={it.sku}
+                                  onChange={(e) =>
+                                    setEditForm((f) => {
+                                      const items = [...f.items]
+                                      items[idx] = { ...items[idx], sku: e.target.value }
+                                      return { ...f, items }
+                                    })
+                                  }
+                                />
+                              </div>
+                            </div>
+                            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                              <div className="space-y-2">
+                                <Label htmlFor={`edit-item-qty-${idx}`}>Qty</Label>
+                                <Input
+                                  id={`edit-item-qty-${idx}`}
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={1}
+                                  step={1}
+                                  value={it.qty}
+                                  onChange={(e) =>
+                                    setEditForm((f) => {
+                                      const items = [...f.items]
+                                      items[idx] = { ...items[idx], qty: e.target.value }
+                                      return { ...f, items }
+                                    })
+                                  }
+                                  required={idx === 0}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor={`edit-item-unit-${idx}`}>Unit price (GHS)</Label>
+                                <Input
+                                  id={`edit-item-unit-${idx}`}
+                                  type="number"
+                                  inputMode="decimal"
+                                  min={0}
+                                  step="0.01"
+                                  value={it.unitPrice}
+                                  onChange={(e) =>
+                                    setEditForm((f) => {
+                                      const items = [...f.items]
+                                      items[idx] = { ...items[idx], unitPrice: e.target.value }
+                                      return { ...f, items }
+                                    })
+                                  }
+                                  required={idx === 0}
+                                />
+                              </div>
+                              <div className="flex items-end justify-between gap-2">
+                                <div className="text-sm text-muted-foreground">
+                                  <span className="block">Line total</span>
+                                  <span className="font-medium text-foreground">
+                                    {(() => {
+                                      const q = Number.parseInt(it.qty, 10)
+                                      const u = Number.parseFloat(it.unitPrice)
+                                      if (!Number.isFinite(q) || !Number.isFinite(u)) return '—'
+                                      return formatGhs(q * u)
+                                    })()}
+                                  </span>
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  onClick={() =>
+                                    setEditForm((f) => ({
+                                      ...f,
+                                      items: f.items.filter((_, i) => i !== idx),
+                                    }))
+                                  }
+                                  disabled={editForm.items.length === 1}
+                                  aria-label="Remove item"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor="edit-order-discount">Discount (GHS)</Label>
+                          <Input
+                            id="edit-order-discount"
+                            inputMode="decimal"
+                            value={editForm.discountGhs}
+                            onChange={(e) =>
+                              setEditForm((f) => ({ ...f, discountGhs: e.target.value }))
+                            }
+                            placeholder="0.00"
+                          />
+                        </div>
+                        <div className="rounded-lg bg-muted/30 px-3 py-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs text-muted-foreground">Subtotal</p>
+                            <p className="text-xs font-medium tabular-nums text-foreground">
+                              {formatGhs(editComputedSubtotal)}
+                            </p>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between">
+                            <p className="text-xs text-muted-foreground">Discount</p>
+                            <p className="text-xs font-medium tabular-nums text-foreground">
+                              {editComputedDiscount > 0 ? `−${formatGhs(editComputedDiscount)}` : '—'}
+                            </p>
+                          </div>
+                          <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
+                            <p className="text-sm font-medium text-foreground">Total</p>
+                            <p className="text-sm font-semibold tabular-nums text-foreground">
+                              {formatGhs(editComputedTotal)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Status</Label>
+                      <Select
+                        value={editForm.status}
+                        onValueChange={(v) =>
+                          setEditForm((f) => ({ ...f, status: v as OrderStatus }))
+                        }
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="processing">Processing</SelectItem>
+                          <SelectItem value="pending_payment">Pending payment</SelectItem>
+                          <SelectItem value="fulfilled">Fulfilled</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={editing || !editOrder}>
+                      {editing ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Saving…
+                        </>
+                      ) : (
+                        'Save changes'
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+            <Dialog
+              open={viewOpen}
+              onOpenChange={(open) => {
+                setViewOpen(open)
+                if (!open) setViewOrder(null)
+              }}
+            >
+              <DialogContent className="sm:max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Order items</DialogTitle>
+                  <DialogDescription>
+                    {viewOrder ? (
+                      <>
+                        <span className="font-mono font-medium">{viewOrder.orderNumber}</span> ·{' '}
+                        <span className="font-medium">{viewOrder.customer}</span>
+                      </>
+                    ) : null}
+                  </DialogDescription>
+                </DialogHeader>
+
+                {viewOrder ? (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Item</TableHead>
+                            <TableHead className="hidden sm:table-cell">SKU</TableHead>
+                            <TableHead className="text-right">Qty</TableHead>
+                            <TableHead className="text-right">Unit</TableHead>
+                            <TableHead className="text-right">Line total</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {viewOrder.items.map((it, idx) => (
+                            <TableRow key={`${viewOrder.id}-${idx}`}>
+                              <TableCell className="font-medium">{it.name}</TableCell>
+                              <TableCell className="hidden sm:table-cell font-mono text-xs text-muted-foreground">
+                                {it.sku ?? '—'}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">{it.qty}</TableCell>
+                              <TableCell className="text-right tabular-nums text-muted-foreground">
+                                {formatGhs(it.unitPrice)}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums font-medium">
+                                {formatGhs(it.qty * it.unitPrice)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+
+                    <div className="rounded-lg bg-muted/30 px-3 py-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-muted-foreground">Discount</p>
+                        <p className="text-xs font-medium tabular-nums text-foreground">
+                          {viewOrder.discountGhs > 0
+                            ? `−${formatGhs(viewOrder.discountGhs)}`
+                            : '—'}
+                        </p>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
+                        <p className="text-sm font-medium text-foreground">Total</p>
+                        <p className="text-sm font-semibold tabular-nums text-foreground">
+                          {formatGhs(viewOrder.totalAmount)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={() => setViewOpen(false)}>
+                    Close
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
           </>
         }
       />
@@ -762,16 +1246,38 @@ export function OrdersEngineView() {
                       {format(new Date(o.orderedAt), 'dd MMM yyyy, HH:mm')}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-destructive hover:text-destructive"
-                        onClick={() => void removeOrder(o)}
-                        aria-label="Remove order"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => openViewOrder(o)}
+                          aria-label="View order items"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => openEditOrder(o)}
+                          aria-label="Edit order"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => void removeOrder(o)}
+                          aria-label="Remove order"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

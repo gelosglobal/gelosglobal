@@ -1,12 +1,22 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Download, Loader2, Pencil, Plus, ScanBarcode } from 'lucide-react'
+import { Download, Loader2, Pencil, Plus, ScanBarcode, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { SfPageHeader } from '@/components/sf/sf-page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {
   Dialog,
   DialogContent,
@@ -106,6 +116,8 @@ export function SfInventoryView() {
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editRow, setEditRow] = useState<InventoryRow | null>(null)
+  const [deleteRow, setDeleteRow] = useState<InventoryRow | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [editForm, setEditForm] = useState({
     name: '',
     outlet: '',
@@ -323,6 +335,32 @@ export function SfInventoryView() {
       toast.error('Could not add outlet SKU')
     } finally {
       setCreating(false)
+    }
+  }
+
+  async function handleDeleteConfirmed() {
+    if (!deleteRow) return
+    setDeleting(true)
+    try {
+      const res = await fetch(`/api/sf/inventory/${deleteRow.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error ?? 'Delete failed')
+      }
+      toast.success('Outlet SKU deleted')
+      setDeleteRow(null)
+      void load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -663,16 +701,28 @@ export function SfInventoryView() {
                     </TableCell>
                     <TableCell>{healthBadge(row.health)}</TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => openEdit(row)}
-                        aria-label={`Edit ${row.outlet} ${row.sku}`}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => openEdit(row)}
+                          aria-label={`Edit ${row.outlet} ${row.sku}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => setDeleteRow(row)}
+                          aria-label={`Delete ${row.outlet} ${row.sku}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -811,6 +861,29 @@ export function SfInventoryView() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteRow} onOpenChange={(open) => (open ? null : setDeleteRow(null))}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete outlet SKU?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteRow ? (
+                <>
+                  This will permanently remove{' '}
+                  <span className="font-medium">{deleteRow.outlet}</span> ·{' '}
+                  <span className="font-mono font-medium">{deleteRow.sku}</span>.
+                </>
+              ) : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction disabled={deleting} onClick={handleDeleteConfirmed}>
+              {deleting ? 'Deleting…' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

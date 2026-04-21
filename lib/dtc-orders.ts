@@ -125,6 +125,64 @@ export async function deleteDtcOrder(db: Db, id: ObjectId): Promise<boolean> {
   return res.deletedCount === 1
 }
 
+export type UpdateDtcOrderInput = Partial<{
+  customer: string
+  channel: string
+  paymentMethod: PaymentMethod
+  items: DtcOrderItem[]
+  discountGhs: number | null
+  status: OrderStatus
+  orderedAt: Date
+}>
+
+export async function updateDtcOrder(
+  db: Db,
+  id: ObjectId,
+  patch: UpdateDtcOrderInput,
+): Promise<DtcOrderDoc | null> {
+  const $set: Record<string, unknown> = {}
+
+  if (patch.customer !== undefined) $set.customer = patch.customer.trim()
+  if (patch.channel !== undefined) $set.channel = patch.channel
+  if (patch.paymentMethod !== undefined) $set.paymentMethod = patch.paymentMethod
+  if (patch.status !== undefined) $set.status = patch.status
+  if (patch.orderedAt !== undefined) $set.orderedAt = patch.orderedAt
+
+  let recomputeTotals = false
+  if (patch.items !== undefined) {
+    $set.items = patch.items
+    recomputeTotals = true
+  }
+  if (patch.discountGhs !== undefined) {
+    $set.discountGhs = patch.discountGhs ?? undefined
+    recomputeTotals = true
+  }
+
+  if (Object.keys($set).length === 0) return null
+
+  if (recomputeTotals) {
+    const existing = await ordersCollection(db).findOne({ _id: id })
+    if (!existing) return null
+    const items = (patch.items ?? (existing as DtcOrderDoc).items) as DtcOrderItem[]
+    const subtotal = items.reduce((sum, item) => sum + item.qty * item.unitPrice, 0)
+    const discountInput =
+      patch.discountGhs === undefined
+        ? (existing as DtcOrderDoc).discountGhs ?? 0
+        : patch.discountGhs ?? 0
+    const discount = Math.max(0, Math.min(subtotal, discountInput))
+    const totalAmount = Math.max(0, subtotal - discount)
+    $set.discountGhs = discount > 0 ? discount : undefined
+    $set.totalAmount = totalAmount
+  }
+
+  const res = await ordersCollection(db).findOneAndUpdate(
+    { _id: id },
+    { $set },
+    { returnDocument: 'after' },
+  )
+  return res as DtcOrderDoc | null
+}
+
 export function computeOrderStats(
   orders: Pick<DtcOrderDoc, 'orderedAt' | 'totalAmount' | 'status'>[],
 ) {

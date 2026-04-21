@@ -9,7 +9,6 @@ import {
   listDtcInventory,
   type DtcInventoryDoc,
 } from '@/lib/dtc-inventory'
-import { DTC_ORDERS_COLLECTION } from '@/lib/dtc-orders'
 import { SF_B2B_INVOICES_COLLECTION } from '@/lib/sf-b2b-invoices'
 import { REP_ACTIVITY_COLLECTION } from '@/lib/rep-activity'
 
@@ -117,21 +116,31 @@ export type SfDashboardSnapshot = {
   alerts: SfDashboardAlert[]
 }
 
-async function sumB2BPortalRevenue(
-  db: Db,
-  since: Date,
-  until: Date,
-): Promise<number> {
+async function sumB2bPaymentsInvoicedNet(db: Db, since: Date, until: Date): Promise<number> {
   const rows = await db
-    .collection(DTC_ORDERS_COLLECTION)
+    .collection(SF_B2B_INVOICES_COLLECTION)
     .aggregate<{ t: number }>([
       {
         $match: {
-          channel: 'B2B portal',
-          orderedAt: { $gte: since, $lte: until },
+          createdAt: { $gte: since, $lte: until },
         },
       },
-      { $group: { _id: null, t: { $sum: '$totalAmount' } } },
+      {
+        $project: {
+          net: {
+            $max: [
+              0,
+              {
+                $subtract: [
+                  { $ifNull: ['$amountGhs', 0] },
+                  { $ifNull: ['$discountGhs', 0] },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      { $group: { _id: null, t: { $sum: '$net' } } },
     ])
     .toArray()
   return rows[0]?.t ?? 0
@@ -239,9 +248,9 @@ export async function computeSfDashboardSnapshot(
       status: 'completed',
       visitedAt: { $gte: rangeStart, $lte: rangeEnd },
     }),
-    sumB2BPortalRevenue(db, rangeStart, rangeEnd),
+    sumB2bPaymentsInvoicedNet(db, rangeStart, rangeEnd),
     sumB2bPaymentsPaid(db, rangeStart, rangeEnd),
-    sumB2BPortalRevenue(db, monthStart, now),
+    sumB2bPaymentsInvoicedNet(db, monthStart, now),
     sumB2bPaymentsPaid(db, monthStart, now),
     visitsCollection(db)
       .find({
