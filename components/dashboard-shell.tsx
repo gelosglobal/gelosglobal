@@ -40,12 +40,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }, [pathname, title])
 
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-screen min-w-0 overflow-x-hidden bg-background">
       <div className="hidden lg:flex">
         <Sidebar />
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
         <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4 lg:hidden">
           <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>
@@ -71,7 +71,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           <h1 className="truncate text-base font-semibold text-foreground">{title}</h1>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+          {children}
+        </div>
       </div>
     </div>
   )

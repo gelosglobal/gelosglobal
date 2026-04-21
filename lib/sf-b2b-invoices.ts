@@ -3,6 +3,8 @@ import { ObjectId } from 'mongodb'
 
 export const SF_B2B_INVOICES_COLLECTION = 'sf_b2b_invoices'
 
+export type SfB2bPaymentMethod = 'momo' | 'cash' | 'bank_transfer' | 'cheque'
+
 export type SfB2bInvoiceItem = {
   name: string
   sku?: string
@@ -14,9 +16,12 @@ export type SfB2bInvoiceDoc = {
   _id: ObjectId
   outletName: string
   invoiceNumber: string
+  /** Date on the invoice document (optional; defaults to createdAt). */
+  invoiceAt?: Date
   amountGhs: number
   discountGhs?: number
   paidGhs: number
+  paymentMethod?: SfB2bPaymentMethod
   items?: SfB2bInvoiceItem[]
   dueAt?: Date
   repName?: string
@@ -31,10 +36,12 @@ export type SfB2bInvoiceJson = {
   id: string
   outletName: string
   invoiceNumber: string
+  invoiceAt: string | null
   amountGhs: number
   discountGhs: number
   paidGhs: number
   balanceGhs: number
+  paymentMethod: SfB2bPaymentMethod | null
   items: SfB2bInvoiceItem[]
   dueAt: string | null
   repName: string | null
@@ -66,10 +73,12 @@ export function serializeSfB2bInvoice(doc: SfB2bInvoiceDoc, now = new Date()): S
     id: doc._id.toHexString(),
     outletName: doc.outletName,
     invoiceNumber: doc.invoiceNumber,
+    invoiceAt: doc.invoiceAt ? doc.invoiceAt.toISOString() : null,
     amountGhs: doc.amountGhs,
     discountGhs: Number.isFinite(doc.discountGhs as number) ? (doc.discountGhs as number) : 0,
     paidGhs: doc.paidGhs,
     balanceGhs,
+    paymentMethod: doc.paymentMethod ?? null,
     items: Array.isArray(doc.items) ? doc.items : [],
     dueAt: doc.dueAt ? doc.dueAt.toISOString() : null,
     repName: doc.repName ?? null,
@@ -96,9 +105,11 @@ export async function listSfB2bInvoices(db: Db): Promise<SfB2bInvoiceDoc[]> {
 export type CreateSfB2bInvoiceInput = {
   outletName: string
   invoiceNumber: string
+  invoiceAt?: Date
   amountGhs: number
   discountGhs?: number
   paidGhs: number
+  paymentMethod?: SfB2bPaymentMethod
   items?: SfB2bInvoiceItem[]
   dueAt?: Date
   repName?: string
@@ -114,9 +125,11 @@ export async function createSfB2bInvoice(
   const doc: WithoutId<SfB2bInvoiceDoc> = {
     outletName: input.outletName.trim(),
     invoiceNumber: input.invoiceNumber.trim(),
+    invoiceAt: input.invoiceAt,
     amountGhs: input.amountGhs,
     discountGhs: discount > 0 ? discount : undefined,
     paidGhs: input.paidGhs,
+    paymentMethod: input.paymentMethod,
     items: input.items?.map((it) => ({
       name: it.name.trim(),
       sku: it.sku?.trim() ? it.sku.trim() : undefined,
@@ -136,9 +149,11 @@ export async function createSfB2bInvoice(
 export type UpdateSfB2bInvoiceInput = Partial<{
   outletName: string
   invoiceNumber: string
+  invoiceAt: Date | null
   amountGhs: number
   discountGhs: number | null
   paidGhs: number
+  paymentMethod: SfB2bPaymentMethod | null
   items: SfB2bInvoiceItem[] | null
   dueAt: Date | null
   repName: string | null
@@ -153,9 +168,11 @@ export async function updateSfB2bInvoice(
   const $set: Record<string, unknown> = { updatedAt: new Date() }
   if (patch.outletName !== undefined) $set.outletName = patch.outletName.trim()
   if (patch.invoiceNumber !== undefined) $set.invoiceNumber = patch.invoiceNumber.trim()
+  if (patch.invoiceAt !== undefined) $set.invoiceAt = patch.invoiceAt ?? undefined
   if (patch.amountGhs !== undefined) $set.amountGhs = patch.amountGhs
   if (patch.discountGhs !== undefined) $set.discountGhs = patch.discountGhs ?? undefined
   if (patch.paidGhs !== undefined) $set.paidGhs = patch.paidGhs
+  if (patch.paymentMethod !== undefined) $set.paymentMethod = patch.paymentMethod ?? undefined
   if (patch.items !== undefined) {
     $set.items =
       patch.items == null

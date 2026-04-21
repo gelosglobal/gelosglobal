@@ -22,9 +22,11 @@ const itemSchema = z.object({
 const postBodySchema = z.object({
   outletName: z.string().trim().min(1).max(200),
   invoiceNumber: z.string().trim().min(1).max(64),
+  invoiceAt: z.string().datetime().optional(),
   amountGhs: z.coerce.number().min(0).max(1_000_000_000),
   discountGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
   paidGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  paymentMethod: z.enum(['momo', 'cash', 'bank_transfer', 'cheque']).optional(),
   items: z.array(itemSchema).max(200).optional(),
   dueAt: z.coerce.date().optional(),
   repName: z.string().trim().max(120).optional(),
@@ -88,9 +90,11 @@ export async function POST(request: Request) {
   const doc = await createSfB2bInvoice(db, {
     outletName: d.outletName,
     invoiceNumber: d.invoiceNumber,
+    invoiceAt: d.invoiceAt ? new Date(d.invoiceAt) : undefined,
     amountGhs: d.amountGhs,
     discountGhs: d.discountGhs,
     paidGhs: d.paidGhs ?? 0,
+    paymentMethod: d.paymentMethod,
     items: d.items,
     dueAt: d.dueAt,
     repName: d.repName,

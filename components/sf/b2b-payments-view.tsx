@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import * as XLSX from 'xlsx'
 import { SfPageHeader } from '@/components/sf/sf-page-header'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -55,10 +56,12 @@ type CollectionRow = {
   id: string
   outletName: string
   invoiceNumber: string
+  invoiceAt: string | null
   amountGhs: number
   discountGhs: number
   paidGhs: number
   balanceGhs: number
+  paymentMethod: 'momo' | 'cash' | 'bank_transfer' | 'cheque' | null
   items: { name: string; sku?: string; qty: number; unitPriceGhs: number }[]
   dueAt: string | null
   repName: string | null
@@ -96,9 +99,11 @@ function emptyForm() {
   return {
     outletName: '',
     invoiceNumber: '',
+    invoiceDate: '',
     amountGhs: '',
     discountGhs: '',
     paidGhs: '',
+    paymentMethod: 'momo' as const,
     dueDate: '',
     repName: '',
     notes: '',
@@ -119,6 +124,7 @@ export function B2bPaymentsView() {
   const [kpis, setKpis] = useState<B2bPaymentsKpis | null>(null)
   const [periodDays, setPeriodDays] = useState<number>(30)
   const [query, setQuery] = useState('')
+  const [importing, setImporting] = useState(false)
 
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -163,29 +169,51 @@ export function B2bPaymentsView() {
   }, [load])
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return collections
-    return collections.filter(
-      (c) =>
-        c.outletName.toLowerCase().includes(q) ||
-        c.invoiceNumber.toLowerCase().includes(q) ||
-        String(c.amountGhs).includes(q) ||
-        String(c.paidGhs).includes(q) ||
-        String(c.balanceGhs).includes(q) ||
-        (c.repName?.toLowerCase().includes(q) ?? false) ||
-        (c.notes?.toLowerCase().includes(q) ?? false) ||
-        c.status.toLowerCase().includes(q),
-    )
+    const raw = query.trim().toLowerCase()
+    if (!raw) return collections
+    const tokens = raw.split(/\s+/).filter(Boolean)
+    return collections.filter((c) => {
+      const haystack = [
+        c.outletName,
+        c.invoiceNumber,
+        c.repName ?? '',
+        c.notes ?? '',
+        c.status,
+        c.paymentMethod ?? '',
+        String(c.amountGhs),
+        String(c.paidGhs),
+        String(c.balanceGhs),
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      // All tokens must match somewhere (keyword search).
+      return tokens.every((t) => haystack.includes(t))
+    })
   }, [collections, query])
+
+  const filteredTotals = useMemo(() => {
+    let amount = 0
+    let paid = 0
+    let balance = 0
+    for (const c of filtered) {
+      amount += Number(c.amountGhs) || 0
+      paid += Number(c.paidGhs) || 0
+      balance += Number(c.balanceGhs) || 0
+    }
+    return { amount, paid, balance, count: filtered.length }
+  }, [filtered])
 
   function openEdit(c: CollectionRow) {
     setEditId(c.id)
     setEditForm({
       outletName: c.outletName,
       invoiceNumber: c.invoiceNumber,
+      invoiceDate: isoToDateInput(c.invoiceAt),
       amountGhs: String(c.amountGhs),
       discountGhs: c.discountGhs ? String(c.discountGhs) : '',
       paidGhs: String(c.paidGhs),
+      paymentMethod: (c.paymentMethod ?? 'momo') as any,
       dueDate: isoToDateInput(c.dueAt),
       repName: c.repName ?? '',
       notes: c.notes ?? '',
@@ -234,6 +262,7 @@ export function B2bPaymentsView() {
       return
     }
     const dueAt = form.dueDate.trim() ? dateToIsoNoon(form.dueDate) : undefined
+    const invoiceAt = form.invoiceDate.trim() ? dateToIsoNoon(form.invoiceDate) : undefined
     const items = form.items
       .map((it) => {
         const name = it.name.trim()
@@ -255,9 +284,11 @@ export function B2bPaymentsView() {
         body: JSON.stringify({
           outletName,
           invoiceNumber,
+          invoiceAt,
           amountGhs,
           discountGhs: discountGhs > 0 ? discountGhs : undefined,
           paidGhs,
+          paymentMethod: form.paymentMethod,
           items,
           dueAt,
           repName: form.repName.trim() || undefined,
@@ -304,6 +335,7 @@ export function B2bPaymentsView() {
       return
     }
     const dueAt = editForm.dueDate.trim() ? dateToIsoNoon(editForm.dueDate) : null
+    const invoiceAt = editForm.invoiceDate.trim() ? dateToIsoNoon(editForm.invoiceDate) : null
     const items = editForm.items
       .map((it) => {
         const name = it.name.trim()
@@ -325,9 +357,11 @@ export function B2bPaymentsView() {
         body: JSON.stringify({
           outletName,
           invoiceNumber,
+          invoiceAt,
           amountGhs,
           discountGhs: discountGhs > 0 ? discountGhs : null,
           paidGhs,
+          paymentMethod: editForm.paymentMethod,
           items,
           dueAt,
           repName: editForm.repName.trim() === '' ? null : editForm.repName.trim(),
@@ -377,6 +411,8 @@ export function B2bPaymentsView() {
     const header = [
       'outlet',
       'invoice',
+      'invoiceDate',
+      'paymentMethod',
       'amount',
       'paid',
       'balance',
@@ -392,6 +428,8 @@ export function B2bPaymentsView() {
         [
           esc(c.outletName),
           esc(c.invoiceNumber),
+          c.invoiceAt ?? '',
+          c.paymentMethod ?? '',
           c.amountGhs,
           c.paidGhs,
           c.balanceGhs,
@@ -416,8 +454,108 @@ export function B2bPaymentsView() {
     toast.success('Download started')
   }
 
+  async function handleImportExcel(file: File) {
+    setImporting(true)
+    try {
+      const buf = await file.arrayBuffer()
+      const wb = XLSX.read(buf, { type: 'array' })
+      const sheet = wb.Sheets['Invoices'] ?? wb.Sheets[wb.SheetNames[0] ?? '']
+      if (!sheet) {
+        toast.error('No sheets found in this file')
+        return
+      }
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+      if (!Array.isArray(json) || json.length === 0) {
+        toast.error('No rows found in the sheet')
+        return
+      }
+
+      const parseMoney = (v: unknown): number | undefined => {
+        const n = typeof v === 'number' ? v : Number(String(v).replace(/,/g, '').trim())
+        if (!Number.isFinite(n)) return undefined
+        return n
+      }
+
+      const parseDateIso = (v: unknown): string | undefined => {
+        const s = String(v ?? '').trim()
+        if (!s) return undefined
+        const d = new Date(s)
+        if (Number.isNaN(d.getTime())) return undefined
+        return d.toISOString()
+      }
+
+      const normalizeMethod = (v: unknown): CollectionRow['paymentMethod'] => {
+        const s = String(v ?? '').trim().toLowerCase()
+        if (s === 'momo' || s === 'mobile money' || s === 'mobile_money') return 'momo'
+        if (s === 'cash') return 'cash'
+        if (s === 'bank transfer' || s === 'bank_transfer' || s === 'transfer') return 'bank_transfer'
+        if (s === 'cheque' || s === 'check') return 'cheque'
+        return null
+      }
+
+      const rows = json
+        .map((r) => {
+          const outletName = String(r.outletName ?? r.outlet ?? r.Outlet ?? '').trim()
+          const invoiceNumber = String(r.invoiceNumber ?? r.invoice ?? r.Invoice ?? '').trim()
+          if (!outletName || !invoiceNumber) return null
+
+          const amountGhs = parseMoney(r.amountGhs ?? r.amount ?? r.Amount)
+          if (amountGhs === undefined) return null
+
+          const discountGhs = parseMoney(r.discountGhs ?? r.discount ?? r.Discount)
+          const paidGhs = parseMoney(r.paidGhs ?? r.paid ?? r.Paid)
+          const invoiceAt = parseDateIso(r.invoiceAt ?? r.invoiceDate ?? r.InvoiceDate)
+          const dueAt = parseDateIso(r.dueAt ?? r.due ?? r.Due)
+          const paymentMethod = normalizeMethod(r.paymentMethod ?? r.payment ?? r.Payment)
+          const repName = String(r.repName ?? r.rep ?? r.Rep ?? '').trim()
+          const notes = String(r.notes ?? r.Notes ?? '').trim()
+
+          return {
+            outletName,
+            invoiceNumber,
+            invoiceAt,
+            amountGhs,
+            discountGhs,
+            paidGhs,
+            paymentMethod: paymentMethod ?? undefined,
+            dueAt,
+            repName: repName || undefined,
+            notes: notes || undefined,
+          }
+        })
+        .filter((x): x is NonNullable<typeof x> => Boolean(x))
+
+      if (rows.length === 0) {
+        toast.error('No valid invoice rows found (need outletName, invoiceNumber, amountGhs)')
+        return
+      }
+
+      const res = await fetch('/api/sf/b2b-payments/import', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error ?? 'Import failed')
+      }
+
+      toast.success(`Imported ${rows.length.toLocaleString()} rows`)
+      void load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Import failed')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
-    <div className="flex min-h-0 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-col overflow-x-hidden">
       <SfPageHeader
         title="B2B Payments"
         description="Invoice ledger for B2B receivables. Track amount, paid, balance, due dates, and rep attribution."
@@ -453,6 +591,28 @@ export function B2bPaymentsView() {
               <Download className="h-4 w-4" />
               Export CSV
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              type="button"
+              disabled={importing || loading}
+              onClick={() => document.getElementById('b2b-import')?.click()}
+            >
+              <Download className="h-4 w-4" />
+              Import Excel
+            </Button>
+            <input
+              id="b2b-import"
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                e.target.value = ''
+                if (f) void handleImportExcel(f)
+              }}
+            />
             <Button variant="outline" size="sm" className="gap-1.5" asChild>
               <Link href="/dtc/finance-layer">
                 Finance Layer
@@ -475,6 +635,39 @@ export function B2bPaymentsView() {
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4 py-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="b2b-invoice-date">Invoice date</Label>
+                        <Input
+                          id="b2b-invoice-date"
+                          type="date"
+                          value={form.invoiceDate}
+                          onChange={(e) => setForm((f) => ({ ...f, invoiceDate: e.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Payment method</Label>
+                        <Select
+                          value={form.paymentMethod}
+                          onValueChange={(v) =>
+                            setForm((f) => ({
+                              ...f,
+                              paymentMethod: v as any,
+                            }))
+                          }
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="momo">Mobile money</SelectItem>
+                            <SelectItem value="cash">Cash</SelectItem>
+                            <SelectItem value="bank_transfer">Bank transfer</SelectItem>
+                            <SelectItem value="cheque">Cheque</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
                     <div className="space-y-2">
                       <Label htmlFor="b2b-outlet">Outlet</Label>
                       <Input
@@ -703,7 +896,7 @@ export function B2bPaymentsView() {
         }
       />
 
-      <div className="flex-1 space-y-6 p-4 sm:p-6">
+      <div className="flex-1 min-w-0 space-y-6 overflow-x-hidden p-4 sm:p-6">
         {kpis ? (
           <div className="space-y-2">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -764,13 +957,19 @@ export function B2bPaymentsView() {
           </Label>
           <Input
             id="b2b-search"
-            placeholder="Outlet, invoice, amount, rep, status…"
+            placeholder="Keywords (e.g. melcom overdue momo)…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          {query.trim() ? (
+            <p className="text-xs text-muted-foreground">
+              {filteredTotals.count.toLocaleString()} invoices · Invoiced {formatGhs(filteredTotals.amount)} · Paid{' '}
+              {formatGhs(filteredTotals.paid)} · Balance {formatGhs(filteredTotals.balance)}
+            </p>
+          ) : null}
         </div>
 
-        <Card className="p-0">
+        <Card className="p-0 overflow-hidden">
           {loading ? (
             <div className="flex justify-center py-16">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -789,93 +988,109 @@ export function B2bPaymentsView() {
               </EmptyHeader>
             </Empty>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Outlet</TableHead>
-                  <TableHead>Invoice</TableHead>
-                  <TableHead className="hidden md:table-cell text-right">Items</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="hidden md:table-cell text-right">Discount</TableHead>
-                  <TableHead className="text-right">Paid</TableHead>
-                  <TableHead className="text-right">Balance</TableHead>
-                  <TableHead className="hidden lg:table-cell text-right">Due</TableHead>
-                  <TableHead className="hidden lg:table-cell">Rep</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="w-[88px] text-right" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((c) => (
-                  <TableRow key={c.id}>
-                    <TableCell className="font-medium">{c.outletName}</TableCell>
-                    <TableCell className="font-mono text-xs font-medium">{c.invoiceNumber}</TableCell>
-                    <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => openItems(c)}
-                        aria-label="View items"
-                        title={c.items?.length ? 'View items' : 'No items saved yet'}
-                      >
-                        <Eye className={c.items?.length ? 'h-4 w-4' : 'h-4 w-4 opacity-40'} />
-                      </Button>
-                    </TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">
-                      {formatGhs(c.amountGhs)}
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
-                      {c.discountGhs ? `−${formatGhs(c.discountGhs)}` : '—'}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{formatGhs(c.paidGhs)}</TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums">
-                      {formatGhs(c.balanceGhs)}
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell text-right text-sm text-muted-foreground tabular-nums">
-                      {c.dueAt ? format(new Date(c.dueAt), 'd MMM yyyy') : '—'}
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell text-muted-foreground">
-                      {c.repName ?? '—'}
-                    </TableCell>
-                    <TableCell>
-                      {c.status === 'paid' ? (
-                        <span className="text-emerald-600">Paid</span>
-                      ) : c.status === 'overdue' ? (
-                        <span className="text-destructive">Overdue</span>
-                      ) : (
-                        <span className="text-muted-foreground">Open</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-0.5">
+            <div className="max-w-full overflow-x-auto">
+              <Table className="min-w-[980px] w-full">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Outlet</TableHead>
+                    <TableHead>Invoice</TableHead>
+                    <TableHead className="hidden lg:table-cell">Invoice date</TableHead>
+                    <TableHead className="hidden lg:table-cell">Payment</TableHead>
+                    <TableHead className="hidden md:table-cell text-right">Items</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="hidden md:table-cell text-right">Discount</TableHead>
+                    <TableHead className="text-right">Paid</TableHead>
+                    <TableHead className="text-right">Balance</TableHead>
+                    <TableHead className="hidden lg:table-cell text-right">Due</TableHead>
+                    <TableHead className="hidden lg:table-cell">Rep</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="w-[88px] text-right" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map((c) => (
+                    <TableRow key={c.id}>
+                      <TableCell className="font-medium">{c.outletName}</TableCell>
+                      <TableCell className="font-mono text-xs font-medium">{c.invoiceNumber}</TableCell>
+                      <TableCell className="hidden lg:table-cell text-muted-foreground">
+                        {c.invoiceAt ? format(new Date(c.invoiceAt), 'd MMM yyyy') : '—'}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell">
+                        {c.paymentMethod ? (
+                          <span className="text-xs text-muted-foreground">
+                            {c.paymentMethod.replace(/_/g, ' ')}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
-                          onClick={() => openEdit(c)}
-                          aria-label="Edit invoice"
+                          onClick={() => openItems(c)}
+                          aria-label="View items"
+                          title={c.items?.length ? 'View items' : 'No items saved yet'}
                         >
-                          <Pencil className="h-4 w-4" />
+                          <Eye className={c.items?.length ? 'h-4 w-4' : 'h-4 w-4 opacity-40'} />
                         </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => void remove(c.id)}
-                          aria-label="Delete invoice"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                      </TableCell>
+                      <TableCell className="text-right font-medium tabular-nums">
+                        {formatGhs(c.amountGhs)}
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
+                        {c.discountGhs ? `−${formatGhs(c.discountGhs)}` : '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatGhs(c.paidGhs)}</TableCell>
+                      <TableCell className="text-right font-semibold tabular-nums">
+                        {formatGhs(c.balanceGhs)}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell text-right text-sm text-muted-foreground tabular-nums">
+                        {c.dueAt ? format(new Date(c.dueAt), 'd MMM yyyy') : '—'}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell text-muted-foreground">
+                        {c.repName ?? '—'}
+                      </TableCell>
+                      <TableCell>
+                        {c.status === 'paid' ? (
+                          <span className="text-emerald-600">Paid</span>
+                        ) : c.status === 'overdue' ? (
+                          <span className="text-destructive">Overdue</span>
+                        ) : (
+                          <span className="text-muted-foreground">Open</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-0.5">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => openEdit(c)}
+                            aria-label="Edit invoice"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={() => void remove(c.id)}
+                            aria-label="Delete invoice"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </Card>
 
@@ -894,6 +1109,44 @@ export function B2bPaymentsView() {
               <DialogDescription>Update amount, paid, due date, or attribution.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-b2b-invoice-date">Invoice date</Label>
+                  <Input
+                    id="edit-b2b-invoice-date"
+                    type="date"
+                    value={editForm.invoiceDate}
+                    onChange={(e) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        invoiceDate: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Payment method</Label>
+                  <Select
+                    value={editForm.paymentMethod}
+                    onValueChange={(v) =>
+                      setEditForm((f) => ({
+                        ...f,
+                        paymentMethod: v as any,
+                      }))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="momo">Mobile money</SelectItem>
+                      <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="bank_transfer">Bank transfer</SelectItem>
+                      <SelectItem value="cheque">Cheque</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-b2b-outlet">Outlet</Label>
                 <Input

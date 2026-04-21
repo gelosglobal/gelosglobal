@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { formatDistanceToNowStrict } from 'date-fns'
 import { Download, Loader2, Plus, Users } from 'lucide-react'
 import { toast } from 'sonner'
+import * as XLSX from 'xlsx'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -81,6 +82,7 @@ export function CustomerIntelligenceView() {
   const [query, setQuery] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [createForm, setCreateForm] = useState({
     customer: '',
     phone: '',
@@ -178,6 +180,156 @@ export function CustomerIntelligenceView() {
     toast.success('Download started')
   }
 
+  function handleExportExcel() {
+    if (customers.length === 0) {
+      toast.message('No customers to export yet')
+      return
+    }
+
+    const wb = XLSX.utils.book_new()
+
+    const customersSheet = XLSX.utils.json_to_sheet(
+      customers.map((c) => ({
+        customer: c.customer,
+        phone: c.phone,
+        email: c.email,
+        location: c.location,
+        source: c.source,
+        joinDate: c.joinDate,
+        segment: c.segment,
+        computedSegment: c.computedSegment,
+        orders: c.orders,
+        ltv: c.ltv,
+        firstOrderAt: c.firstOrderAt,
+        lastOrderAt: c.lastOrderAt,
+      })),
+    )
+    XLSX.utils.book_append_sheet(wb, customersSheet, 'Customers')
+
+    const segmentsSheet = XLSX.utils.json_to_sheet([
+      {
+        customersTracked: totals.totalCustomers,
+        totalLtv: totals.totalLtv,
+        avgLtv: totals.avgLtv,
+        highLtv: segments?.highLtv ?? 0,
+        atRisk: segments?.atRisk ?? 0,
+        new30d: segments?.new30d ?? 0,
+        core: segments?.core ?? 0,
+      },
+    ])
+    XLSX.utils.book_append_sheet(wb, segmentsSheet, 'Segments')
+
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+    const blob = new Blob([out], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `dtc-customer-intelligence-${new Date().toISOString().slice(0, 10)}.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('Excel download started')
+  }
+
+  async function handleImportExcel(file: File) {
+    setImporting(true)
+    try {
+      const buf = await file.arrayBuffer()
+      const wb = XLSX.read(buf, { type: 'array' })
+
+      const sheet =
+        wb.Sheets['Customers'] ??
+        wb.Sheets[wb.SheetNames[0] ?? '']
+      if (!sheet) {
+        toast.error('No sheets found in this file')
+        return
+      }
+
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+      if (!Array.isArray(json) || json.length === 0) {
+        toast.error('No rows found in the sheet')
+        return
+      }
+
+      const rows = json
+        .map((r) => {
+          const customer = String(r.customer ?? r.Customer ?? r.name ?? r.Name ?? '').trim()
+          if (!customer) return null
+          const phone = String(r.phone ?? r.Phone ?? '').trim()
+          const email = String(r.email ?? r.Email ?? '').trim()
+          const location = String(r.location ?? r.Location ?? '').trim()
+          const sourceRaw = String(r.source ?? r.Source ?? '').trim().toLowerCase()
+          const joinDateRaw = String(r.joinDate ?? r.JoinDate ?? r.join_date ?? '').trim()
+          const segmentRaw = String(r.segment ?? r.Segment ?? '').trim()
+
+          const source =
+            sourceRaw === 'walk_in' || sourceRaw === 'walk in'
+              ? 'walk_in'
+              : sourceRaw === 'instagram'
+                ? 'instagram'
+                : sourceRaw === 'web'
+                  ? 'web'
+                  : sourceRaw === 'referral'
+                    ? 'referral'
+                    : sourceRaw === 'sales_rep' || sourceRaw === 'sales rep'
+                      ? 'sales_rep'
+                      : sourceRaw
+                        ? 'other'
+                        : undefined
+
+          let joinDate: string | undefined
+          if (joinDateRaw) {
+            const d = new Date(joinDateRaw)
+            if (!Number.isNaN(d.getTime())) joinDate = d.toISOString()
+          }
+
+          const segment =
+            segmentRaw === 'High LTV' || segmentRaw === 'At risk' || segmentRaw === 'New (30d)' || segmentRaw === 'Core'
+              ? (segmentRaw as any)
+              : undefined
+
+          return {
+            customer,
+            phone: phone || undefined,
+            email: email || undefined,
+            location: location || undefined,
+            source,
+            joinDate,
+            segment,
+          }
+        })
+        .filter((x): x is NonNullable<typeof x> => Boolean(x))
+
+      if (rows.length === 0) {
+        toast.error('No valid customer rows found (missing customer name)')
+        return
+      }
+
+      const res = await fetch('/api/dtc/customers/import', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error ?? 'Import failed')
+      }
+
+      toast.success(`Imported ${rows.length.toLocaleString()} rows`)
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Import failed')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   async function handleCreateCustomer(e: React.FormEvent) {
     e.preventDefault()
     const name = createForm.customer.trim()
@@ -235,6 +387,28 @@ export function CustomerIntelligenceView() {
         description="Segment DTC buyers, compare lifetime value, and spot churn risk before sell-out momentum drops."
         actions={
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              type="button"
+              disabled={importing || loading}
+              onClick={() => document.getElementById('ci-import')?.click()}
+            >
+              <Download className="h-4 w-4" />
+              Import Excel
+            </Button>
+            <input
+              id="ci-import"
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                e.target.value = ''
+                if (f) void handleImportExcel(f)
+              }}
+            />
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5" type="button">
@@ -393,6 +567,17 @@ export function CustomerIntelligenceView() {
             >
               <Download className="h-4 w-4" />
               Export
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              type="button"
+              onClick={handleExportExcel}
+              disabled={loading || customers.length === 0}
+            >
+              <Download className="h-4 w-4" />
+              Export Excel
             </Button>
           </>
         }

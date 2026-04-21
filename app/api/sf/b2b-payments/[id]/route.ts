@@ -23,9 +23,11 @@ const patchBodySchema = z
   .object({
     outletName: z.string().trim().min(1).max(200).optional(),
     invoiceNumber: z.string().trim().min(1).max(64).optional(),
+    invoiceAt: z.string().datetime().nullable().optional(),
     amountGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
     discountGhs: z.coerce.number().min(0).max(1_000_000_000).nullable().optional(),
     paidGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+    paymentMethod: z.enum(['momo', 'cash', 'bank_transfer', 'cheque']).nullable().optional(),
     items: z.array(itemSchema).max(200).nullable().optional(),
     dueAt: z.coerce.date().nullable().optional(),
     repName: z.string().trim().max(120).nullable().optional(),
@@ -70,7 +72,15 @@ export async function PATCH(
   }
 
   const { db } = getMongo()
-  const updated = await updateSfB2bInvoice(db, new ObjectId(id), parsed.data)
+  const updated = await updateSfB2bInvoice(db, new ObjectId(id), {
+    ...parsed.data,
+    invoiceAt:
+      parsed.data.invoiceAt === undefined
+        ? undefined
+        : parsed.data.invoiceAt === null
+          ? null
+          : new Date(parsed.data.invoiceAt),
+  })
   if (!updated) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
