@@ -3,18 +3,22 @@ import { ObjectId } from 'mongodb'
 import { computeDaysCover, computeStockHealth, type StockHealth } from '@/lib/dtc-inventory'
 
 export const SF_INVENTORY_COLLECTION = 'sf_inventory'
+export const SF_INVENTORY_DEFAULT_OUTLET = 'Retail'
 
 export type SfInventoryDoc = {
   _id: ObjectId
   sku: string
   name: string
-  outlet: string
+  // Legacy field (we no longer model inventory per-outlet in the UI)
+  outlet?: string
   /** Optional rep/merchandiser who last counted / owns the outlet. */
   repName?: string
   costGhs?: number
   priceGhs?: number
   onHand: number
   safetyStock: number
+  /** Optional suggested reorder quantity. */
+  reorderQty?: number
   /** Optional demand rate to estimate days of cover. */
   dailyDemand: number
   /** When the stock was last physically counted. */
@@ -27,12 +31,12 @@ export type SfInventoryJson = {
   id: string
   sku: string
   name: string
-  outlet: string
   repName?: string
   costGhs: number | null
   priceGhs: number | null
   onHand: number
   safetyStock: number
+  reorderQty: number | null
   dailyDemand: number
   daysCover: number | null
   health: StockHealth
@@ -47,12 +51,13 @@ export function serializeSfInventoryItem(doc: SfInventoryDoc): SfInventoryJson {
     id: doc._id.toHexString(),
     sku: doc.sku,
     name: doc.name,
-    outlet: doc.outlet,
     repName: doc.repName,
     costGhs: typeof doc.costGhs === 'number' && Number.isFinite(doc.costGhs) ? doc.costGhs : null,
     priceGhs: typeof doc.priceGhs === 'number' && Number.isFinite(doc.priceGhs) ? doc.priceGhs : null,
     onHand: doc.onHand,
     safetyStock: doc.safetyStock,
+    reorderQty:
+      typeof doc.reorderQty === 'number' && Number.isFinite(doc.reorderQty) ? doc.reorderQty : null,
     dailyDemand: doc.dailyDemand,
     daysCover,
     health: computeStockHealth(doc.onHand, doc.safetyStock),
@@ -69,7 +74,7 @@ function inventoryCollection(db: Db) {
 export async function listSfInventory(db: Db): Promise<SfInventoryDoc[]> {
   const rows = await inventoryCollection(db)
     .find({})
-    .sort({ outlet: 1, sku: 1 })
+    .sort({ sku: 1 })
     .limit(4000)
     .toArray()
   return rows.map((r) => r as SfInventoryDoc)
@@ -78,12 +83,12 @@ export async function listSfInventory(db: Db): Promise<SfInventoryDoc[]> {
 export type CreateSfInventoryInput = {
   sku: string
   name: string
-  outlet: string
   repName?: string
   costGhs?: number
   priceGhs?: number
   onHand: number
   safetyStock: number
+  reorderQty?: number
   dailyDemand?: number
   lastCountedAt?: Date
 }
@@ -96,12 +101,13 @@ export async function createSfInventoryItem(
   const doc: WithoutId<SfInventoryDoc> = {
     sku: input.sku.trim().toUpperCase(),
     name: input.name.trim(),
-    outlet: input.outlet.trim(),
+    outlet: SF_INVENTORY_DEFAULT_OUTLET,
     repName: input.repName?.trim() || undefined,
     costGhs: input.costGhs,
     priceGhs: input.priceGhs,
     onHand: input.onHand,
     safetyStock: input.safetyStock,
+    reorderQty: input.reorderQty,
     dailyDemand: input.dailyDemand ?? 0,
     lastCountedAt: input.lastCountedAt,
     createdAt: now,
@@ -113,12 +119,12 @@ export async function createSfInventoryItem(
 
 export type UpdateSfInventoryInput = Partial<{
   name: string
-  outlet: string
   repName: string | null
   costGhs: number | null
   priceGhs: number | null
   onHand: number
   safetyStock: number
+  reorderQty: number | null
   dailyDemand: number
   lastCountedAt: Date | null
 }>
@@ -130,12 +136,12 @@ export async function updateSfInventoryItem(
 ): Promise<SfInventoryDoc | null> {
   const $set: Record<string, unknown> = { updatedAt: new Date() }
   if (patch.name !== undefined) $set.name = patch.name.trim()
-  if (patch.outlet !== undefined) $set.outlet = patch.outlet.trim()
   if (patch.repName !== undefined) $set.repName = patch.repName ? patch.repName.trim() : undefined
   if (patch.costGhs !== undefined) $set.costGhs = patch.costGhs ?? undefined
   if (patch.priceGhs !== undefined) $set.priceGhs = patch.priceGhs ?? undefined
   if (patch.onHand !== undefined) $set.onHand = patch.onHand
   if (patch.safetyStock !== undefined) $set.safetyStock = patch.safetyStock
+  if (patch.reorderQty !== undefined) $set.reorderQty = patch.reorderQty ?? undefined
   if (patch.dailyDemand !== undefined) $set.dailyDemand = patch.dailyDemand
   if (patch.lastCountedAt !== undefined)
     $set.lastCountedAt = patch.lastCountedAt ?? undefined
@@ -149,13 +155,11 @@ export async function updateSfInventoryItem(
 }
 
 export function computeSfInventoryStats(rows: SfInventoryDoc[]) {
-  const outletSet = new Set<string>()
   const skuSet = new Set<string>()
   let belowSafety = 0
   let critical = 0
 
   for (const r of rows) {
-    if (r.outlet) outletSet.add(r.outlet)
     if (r.sku) skuSet.add(r.sku)
     const health = computeStockHealth(r.onHand, r.safetyStock)
     if (health === 'critical') critical += 1
@@ -163,7 +167,6 @@ export function computeSfInventoryStats(rows: SfInventoryDoc[]) {
   }
 
   return {
-    outletsTracked: outletSet.size,
     skusTracked: skuSet.size,
     belowSafety,
     critical,

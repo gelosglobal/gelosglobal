@@ -29,6 +29,7 @@ import {
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -51,12 +52,12 @@ type InventoryRow = {
   id: string
   sku: string
   name: string
-  outlet: string
   repName?: string
   costGhs: number | null
   priceGhs: number | null
   onHand: number
   safetyStock: number
+  reorderQty: number | null
   dailyDemand: number
   daysCover: number | null
   health: StockHealth
@@ -66,7 +67,6 @@ type InventoryRow = {
 }
 
 type StatsPayload = {
-  outletsTracked: number
   skusTracked: number
   belowSafety: number
   critical: number
@@ -87,29 +87,30 @@ export function SfInventoryView() {
   const [stats, setStats] = useState<StatsPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
-  const [outletFilter, setOutletFilter] = useState<string>('all')
+  const [reorderDrafts, setReorderDrafts] = useState<Record<string, string>>({})
+  const [reorderSaving, setReorderSaving] = useState<Record<string, boolean>>({})
 
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createForm, setCreateForm] = useState<{
     sku: string
     name: string
-    outlet: string
     repName: string
     costGhs: string
     priceGhs: string
     onHand: string
     safetyStock: string
+    reorderQty: string
     lastCountedAt: string
   }>({
     sku: '',
     name: '',
-    outlet: '',
     repName: '',
     costGhs: '',
     priceGhs: '',
     onHand: '',
     safetyStock: '',
+    reorderQty: '',
     lastCountedAt: '',
   })
 
@@ -120,12 +121,12 @@ export function SfInventoryView() {
   const [deleting, setDeleting] = useState(false)
   const [editForm, setEditForm] = useState({
     name: '',
-    outlet: '',
     repName: '',
     costGhs: '',
     priceGhs: '',
     onHand: '',
     safetyStock: '',
+    reorderQty: '',
     lastCountedAt: '',
   })
 
@@ -155,38 +156,63 @@ export function SfInventoryView() {
     void load()
   }, [load])
 
-  const outletOptions = useMemo(() => {
-    const set = new Set<string>()
-    for (const row of items) {
-      if (row.outlet) set.add(row.outlet)
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b))
-  }, [items])
-
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return items.filter((row) => {
-      if (outletFilter !== 'all' && row.outlet !== outletFilter) return false
       if (!q) return true
       return (
         row.sku.toLowerCase().includes(q) ||
         row.name.toLowerCase().includes(q) ||
-        row.outlet.toLowerCase().includes(q) ||
         (row.repName ?? '').toLowerCase().includes(q)
       )
     })
-  }, [items, outletFilter, query])
+  }, [items, query])
+
+  function stockPct(row: InventoryRow): number {
+    const safety = Math.max(0, row.safetyStock)
+    if (safety <= 0) return 100
+    return Math.max(0, Math.min(100, Math.round((row.onHand / safety) * 100)))
+  }
+
+  function stockColorClass(h: StockHealth): string {
+    if (h === 'critical') return 'bg-destructive'
+    if (h === 'low') return 'bg-amber-600'
+    return 'bg-emerald-600'
+  }
+
+  async function saveReorder(row: InventoryRow, next: number | null) {
+    setReorderSaving((s) => ({ ...s, [row.id]: true }))
+    try {
+      const res = await fetch(`/api/sf/inventory/${row.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reorderQty: next }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      if (!res.ok) throw new Error('Update failed')
+      setItems((prev) => prev.map((r) => (r.id === row.id ? { ...r, reorderQty: next } : r)))
+      toast.success('Reorder saved')
+    } catch {
+      toast.error('Could not save reorder')
+    } finally {
+      setReorderSaving((s) => ({ ...s, [row.id]: false }))
+    }
+  }
 
   function openEdit(row: InventoryRow) {
     setEditRow(row)
     setEditForm({
       name: row.name,
-      outlet: row.outlet,
       repName: row.repName ?? '',
       costGhs: row.costGhs != null ? String(row.costGhs) : '',
       priceGhs: row.priceGhs != null ? String(row.priceGhs) : '',
       onHand: String(row.onHand),
       safetyStock: String(row.safetyStock),
+      reorderQty: row.reorderQty == null ? '' : String(row.reorderQty),
       lastCountedAt: row.lastCountedAt ? row.lastCountedAt.slice(0, 16) : '',
     })
     setEditOpen(true)
@@ -197,9 +223,8 @@ export function SfInventoryView() {
     if (!editRow) return
 
     const name = editForm.name.trim()
-    const outlet = editForm.outlet.trim()
-    if (!name || !outlet) {
-      toast.error('Product name and outlet are required')
+    if (!name) {
+      toast.error('Product name is required')
       return
     }
 
@@ -207,6 +232,7 @@ export function SfInventoryView() {
     const safetyStock = Number(editForm.safetyStock)
     const costGhs = editForm.costGhs.trim() === '' ? null : Number(editForm.costGhs)
     const priceGhs = editForm.priceGhs.trim() === '' ? null : Number(editForm.priceGhs)
+    const reorderQty = editForm.reorderQty.trim() === '' ? null : Number(editForm.reorderQty)
     if (!Number.isFinite(onHand) || !Number.isFinite(safetyStock) || onHand < 0 || safetyStock < 0) {
       toast.error('Enter valid numbers for stock fields')
       return
@@ -218,6 +244,13 @@ export function SfInventoryView() {
       toast.error('Enter valid numbers for cost and price')
       return
     }
+    if (
+      reorderQty !== null &&
+      (!Number.isFinite(reorderQty) || !Number.isInteger(reorderQty) || reorderQty < 0)
+    ) {
+      toast.error('Reorder must be a whole number')
+      return
+    }
 
     setEditing(true)
     try {
@@ -227,12 +260,12 @@ export function SfInventoryView() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
-          outlet,
           repName: editForm.repName.trim() ? editForm.repName.trim() : null,
           costGhs,
           priceGhs,
           onHand,
           safetyStock,
+          reorderQty,
           lastCountedAt: editForm.lastCountedAt
             ? new Date(editForm.lastCountedAt).toISOString()
             : null,
@@ -261,9 +294,8 @@ export function SfInventoryView() {
     e.preventDefault()
     const sku = createForm.sku.trim()
     const name = createForm.name.trim()
-    const outlet = createForm.outlet.trim()
-    if (!sku || !name || !outlet) {
-      toast.error('SKU, product name, and outlet are required')
+    if (!sku || !name) {
+      toast.error('SKU and product name are required')
       return
     }
 
@@ -271,6 +303,7 @@ export function SfInventoryView() {
     const safetyStock = Number(createForm.safetyStock)
     const costGhs = createForm.costGhs.trim() === '' ? undefined : Number(createForm.costGhs)
     const priceGhs = createForm.priceGhs.trim() === '' ? undefined : Number(createForm.priceGhs)
+    const reorderQty = createForm.reorderQty.trim() === '' ? undefined : Number(createForm.reorderQty)
     if (
       !Number.isFinite(onHand) ||
       !Number.isFinite(safetyStock) ||
@@ -287,6 +320,13 @@ export function SfInventoryView() {
       toast.error('Enter valid numbers for cost and price')
       return
     }
+    if (
+      reorderQty !== undefined &&
+      (!Number.isFinite(reorderQty) || !Number.isInteger(reorderQty) || reorderQty < 0)
+    ) {
+      toast.error('Reorder must be a whole number')
+      return
+    }
 
     setCreating(true)
     try {
@@ -297,12 +337,12 @@ export function SfInventoryView() {
         body: JSON.stringify({
           sku,
           name,
-          outlet,
           repName: createForm.repName.trim() || undefined,
           costGhs,
           priceGhs,
           onHand,
           safetyStock,
+          reorderQty,
           lastCountedAt: createForm.lastCountedAt
             ? new Date(createForm.lastCountedAt).toISOString()
             : undefined,
@@ -313,21 +353,21 @@ export function SfInventoryView() {
         return
       }
       if (res.status === 409) {
-        toast.error('That SKU already exists for this outlet')
+        toast.error('That SKU already exists in retail inventory')
         return
       }
       if (!res.ok) throw new Error('Create failed')
-      toast.success('Outlet SKU added')
+      toast.success('Retail SKU added')
       setCreateOpen(false)
       setCreateForm({
         sku: '',
         name: '',
-        outlet: '',
         repName: '',
         costGhs: '',
         priceGhs: '',
         onHand: '',
         safetyStock: '',
+        reorderQty: '',
         lastCountedAt: '',
       })
       void load()
@@ -354,7 +394,7 @@ export function SfInventoryView() {
         const err = (await res.json().catch(() => ({}))) as { error?: string }
         throw new Error(err.error ?? 'Delete failed')
       }
-      toast.success('Outlet SKU deleted')
+      toast.success('Retail SKU deleted')
       setDeleteRow(null)
       void load()
     } catch (err) {
@@ -370,7 +410,6 @@ export function SfInventoryView() {
       return
     }
     const header = [
-      'outlet',
       'repName',
       'sku',
       'name',
@@ -388,7 +427,6 @@ export function SfInventoryView() {
       header.join(','),
       ...items.map((r) =>
         [
-          `"${r.outlet.replace(/"/g, '""')}"`,
           `"${(r.repName ?? '').replace(/"/g, '""')}"`,
           r.sku,
           `"${r.name.replace(/"/g, '""')}"`,
@@ -435,13 +473,13 @@ export function SfInventoryView() {
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5">
                   <Plus className="h-4 w-4" />
-                  Add outlet SKU
+                  Add SKU
                 </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-lg">
                 <form onSubmit={handleCreate}>
                   <DialogHeader>
-                    <DialogTitle>Add outlet stock line</DialogTitle>
+                    <DialogTitle>Add retail stock line</DialogTitle>
                     <DialogDescription>
                       Create a SKU line per outlet. Use safety stock and demand (optional) to
                       surface health and days of cover.
@@ -484,14 +522,9 @@ export function SfInventoryView() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="sf-outlet">Outlet</Label>
-                      <Input
-                        id="sf-outlet"
-                        value={createForm.outlet}
-                        onChange={(e) => setCreateForm((f) => ({ ...f, outlet: e.target.value }))}
-                        placeholder="Melcom Spintex"
-                        required
-                      />
+                      <p className="text-xs text-muted-foreground">
+                        Retail inventory is SKU-level (not outlet-level).
+                      </p>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
@@ -518,6 +551,18 @@ export function SfInventoryView() {
                           placeholder="10"
                         />
                       </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="sf-reorder">Reorder (optional)</Label>
+                      <Input
+                        id="sf-reorder"
+                        inputMode="numeric"
+                        value={createForm.reorderQty}
+                        onChange={(e) =>
+                          setCreateForm((f) => ({ ...f, reorderQty: e.target.value }))
+                        }
+                        placeholder="e.g. 24"
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="sf-counted">Last counted (optional)</Label>
@@ -584,13 +629,7 @@ export function SfInventoryView() {
       />
 
       <div className="flex-1 space-y-6 p-4 sm:p-6">
-        <div className="grid gap-4 sm:grid-cols-4">
-          <Card className="p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">Outlets tracked</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums">
-              {loading ? '—' : (stats?.outletsTracked ?? 0)}
-            </p>
-          </Card>
+        <div className="grid gap-4 sm:grid-cols-3">
           <Card className="p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">SKUs tracked</p>
             <p className="mt-2 text-3xl font-bold tabular-nums">
@@ -618,35 +657,16 @@ export function SfInventoryView() {
             </Label>
             <Input
               id="sf-inv-search"
-              placeholder="Outlet, rep, SKU, product…"
+              placeholder="Rep, SKU, product…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-          </div>
-          <div className="flex flex-col gap-2 sm:w-72">
-            <Label className="flex items-center gap-1.5 text-muted-foreground">
-              <ScanBarcode className="h-3.5 w-3.5" />
-              Outlet
-            </Label>
-            <Select value={outletFilter} onValueChange={setOutletFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="All outlets" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All outlets</SelectItem>
-                {outletOptions.map((o) => (
-                  <SelectItem key={o} value={o}>
-                    {o}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
         </div>
 
         <Card className="p-0">
           <div className="border-b border-border px-4 py-3 sm:px-6">
-            <h2 className="text-sm font-semibold uppercase tracking-wide">Outlet stock</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-wide">Retail stock</h2>
           </div>
           {loading ? (
             <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -658,9 +678,9 @@ export function SfInventoryView() {
                 <EmptyMedia variant="icon">
                   <ScanBarcode className="h-6 w-6" />
                 </EmptyMedia>
-                <EmptyTitle>No outlet lines yet</EmptyTitle>
+                <EmptyTitle>No retail lines yet</EmptyTitle>
                 <EmptyDescription>
-                  Add outlet stock lines to track on-hand levels and surface low / critical outlets.
+                  Add retail stock lines to track on-hand levels and surface low / critical SKUs.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -668,13 +688,13 @@ export function SfInventoryView() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Outlet</TableHead>
                   <TableHead className="hidden lg:table-cell">Rep</TableHead>
                   <TableHead>SKU</TableHead>
                   <TableHead>Product</TableHead>
                   <TableHead className="hidden md:table-cell text-right">Cost</TableHead>
                   <TableHead className="hidden md:table-cell text-right">Price</TableHead>
-                  <TableHead className="text-right">On hand</TableHead>
+              <TableHead>Stock</TableHead>
+              <TableHead className="text-right">Reorder</TableHead>
                   <TableHead className="hidden text-right sm:table-cell">Days cover</TableHead>
                   <TableHead>Health</TableHead>
                   <TableHead className="w-[52px] text-right" />
@@ -683,7 +703,6 @@ export function SfInventoryView() {
               <TableBody>
                 {filtered.map((row) => (
                   <TableRow key={row.id}>
-                    <TableCell className="font-medium">{row.outlet}</TableCell>
                     <TableCell className="hidden text-muted-foreground lg:table-cell">
                       {row.repName ?? '—'}
                     </TableCell>
@@ -695,7 +714,57 @@ export function SfInventoryView() {
                     <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
                       {row.priceGhs == null ? '—' : formatGhs(row.priceGhs)}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{row.onHand}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        <div className="min-w-0 flex-1">
+                          <Progress
+                            value={stockPct(row)}
+                            className="h-2"
+                          />
+                          <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                            <span className="tabular-nums">{row.onHand.toLocaleString()} on hand</span>
+                            <span className="tabular-nums">{row.safetyStock.toLocaleString()} safety</span>
+                          </div>
+                        </div>
+                        <div
+                          className={`h-2 w-2 shrink-0 rounded-full ${stockColorClass(row.health)}`}
+                          aria-hidden="true"
+                        />
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Input
+                        className="h-8 w-20 text-right tabular-nums"
+                        inputMode="numeric"
+                        value={
+                          reorderDrafts[row.id] ??
+                          (row.reorderQty == null ? '' : String(row.reorderQty))
+                        }
+                        placeholder="—"
+                        onChange={(e) =>
+                          setReorderDrafts((d) => ({ ...d, [row.id]: e.target.value }))
+                        }
+                        onBlur={() => {
+                          const raw = (reorderDrafts[row.id] ?? '').trim()
+                          if (raw === '') {
+                            void saveReorder(row, null)
+                            return
+                          }
+                          const n = Number(raw)
+                          if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+                            toast.error('Reorder must be a whole number')
+                            setReorderDrafts((d) => {
+                              const copy = { ...d }
+                              delete copy[row.id]
+                              return copy
+                            })
+                            return
+                          }
+                          void saveReorder(row, n)
+                        }}
+                        disabled={reorderSaving[row.id] === true}
+                      />
+                    </TableCell>
                     <TableCell className="hidden text-right tabular-nums sm:table-cell">
                       {row.daysCover === null ? '—' : `${row.daysCover}d`}
                     </TableCell>
@@ -708,7 +777,7 @@ export function SfInventoryView() {
                           size="icon"
                           className="h-8 w-8"
                           onClick={() => openEdit(row)}
-                          aria-label={`Edit ${row.outlet} ${row.sku}`}
+                          aria-label={`Edit ${row.sku}`}
                         >
                           <Pencil className="h-4 w-4" />
                         </Button>
@@ -718,7 +787,7 @@ export function SfInventoryView() {
                           size="icon"
                           className="h-8 w-8 text-destructive hover:text-destructive"
                           onClick={() => setDeleteRow(row)}
-                          aria-label={`Delete ${row.outlet} ${row.sku}`}
+                          aria-label={`Delete ${row.sku}`}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -733,7 +802,7 @@ export function SfInventoryView() {
 
         {!loading && items.length > 0 && filtered.length === 0 ? (
           <p className="text-center text-sm text-muted-foreground">
-            No rows match your filters. Try another search or outlet.
+            No rows match your search.
           </p>
         ) : null}
       </div>
@@ -742,12 +811,11 @@ export function SfInventoryView() {
         <DialogContent className="sm:max-w-lg">
           <form onSubmit={handleEditSubmit}>
             <DialogHeader>
-              <DialogTitle>Update outlet stock</DialogTitle>
+              <DialogTitle>Update retail stock</DialogTitle>
               <DialogDescription>
                 {editRow ? (
                   <>
                     Adjust levels for{' '}
-                    <span className="font-medium">{editRow.outlet}</span> ·{' '}
                     <span className="font-mono font-medium">{editRow.sku}</span>.
                   </>
                 ) : null}
@@ -756,14 +824,6 @@ export function SfInventoryView() {
             {editRow ? (
               <div className="grid gap-4 py-4">
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="sf-edit-outlet">Outlet</Label>
-                    <Input
-                      id="sf-edit-outlet"
-                      value={editForm.outlet}
-                      onChange={(e) => setEditForm((f) => ({ ...f, outlet: e.target.value }))}
-                    />
-                  </div>
                   <div className="space-y-2">
                     <Label htmlFor="sf-edit-rep">Rep (optional)</Label>
                     <Input
@@ -803,6 +863,16 @@ export function SfInventoryView() {
                       }
                     />
                   </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="sf-edit-reorder">Reorder (optional)</Label>
+                  <Input
+                    id="sf-edit-reorder"
+                    inputMode="numeric"
+                    value={editForm.reorderQty}
+                    onChange={(e) => setEditForm((f) => ({ ...f, reorderQty: e.target.value }))}
+                    placeholder="e.g. 24"
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="sf-edit-counted">Last counted</Label>
@@ -865,12 +935,11 @@ export function SfInventoryView() {
       <AlertDialog open={!!deleteRow} onOpenChange={(open) => (open ? null : setDeleteRow(null))}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete outlet SKU?</AlertDialogTitle>
+            <AlertDialogTitle>Delete retail SKU?</AlertDialogTitle>
             <AlertDialogDescription>
               {deleteRow ? (
                 <>
                   This will permanently remove{' '}
-                  <span className="font-medium">{deleteRow.outlet}</span> ·{' '}
                   <span className="font-mono font-medium">{deleteRow.sku}</span>.
                 </>
               ) : null}
