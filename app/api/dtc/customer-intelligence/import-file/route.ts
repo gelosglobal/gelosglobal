@@ -142,6 +142,8 @@ export async function POST(request: Request) {
     const paystack = Number(row.paystackCollectedGhs ?? 0) || 0
     const returnedCount = isReturned(row.deliveryStatus ?? '') || isReturned(row.remarks ?? '') ? 1 : 0
     const dt = toDateOrNull(row.orderedAt)
+    // Each ledger row counts as exactly 1 order.
+    const orderCountForDate = 1
 
     const existing = groups.get(key)
     if (!existing) {
@@ -150,7 +152,7 @@ export async function POST(request: Request) {
         phone: phoneKey(row.phoneNumber) || undefined,
         location: row.location,
         riderAssigned: row.riderAssigned,
-        orders: 1,
+        orders: orderCountForDate,
         billed,
         collected,
         cash,
@@ -163,7 +165,7 @@ export async function POST(request: Request) {
       })
       continue
     }
-    existing.orders += 1
+    existing.orders += orderCountForDate
     existing.billed += billed
     existing.collected += collected
     existing.cash += cash

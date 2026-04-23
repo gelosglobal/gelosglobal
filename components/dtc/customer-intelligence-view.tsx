@@ -220,12 +220,20 @@ export function CustomerIntelligenceView() {
   }, [ledgerRows, query, sortBy])
 
   const totals = useMemo(() => {
-    const totalCustomers = customers.length
+    const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
+    const uniqueCustomerKeys = new Set(
+      ledgerRows.map((r) => {
+        const p = normalizePhone(r.phoneNumber ?? '')
+        // Unique identifier is phone number; if missing, fall back to name so blanks don't collapse.
+        return p ? `p:${p}` : `n:${String(r.customerName ?? '').trim().toLowerCase()}`
+      }),
+    )
+    const totalCustomers = uniqueCustomerKeys.size
     const totalOrders = customers.reduce((sum, c) => sum + (Number.isFinite(c.totalOrders) ? c.totalOrders : 0), 0)
     const totalBilled = customers.reduce((sum, c) => sum + c.totalBilled, 0)
     const avgTotalBilled = totalCustomers === 0 ? 0 : totalBilled / totalCustomers
     return { totalCustomers, totalOrders, totalBilled, avgTotalBilled }
-  }, [customers])
+  }, [customers, ledgerRows])
 
   function handleExport() {
     if (ledgerRows.length === 0) {
@@ -700,7 +708,7 @@ export function CustomerIntelligenceView() {
                 <TableRow>
                   <TableHead className="w-10 min-w-10 text-right tabular-nums text-muted-foreground">#</TableHead>
                   <TableHead className="whitespace-nowrap">Date</TableHead>
-                  <TableHead className="whitespace-nowrap">Order #</TableHead>
+                  <TableHead className="whitespace-nowrap">Orders (count)</TableHead>
                   <TableHead className="min-w-[10rem] whitespace-nowrap">Customer Name</TableHead>
                   <TableHead className="min-w-[7rem] whitespace-nowrap">Phone Number</TableHead>
                   <TableHead className="min-w-[8rem] whitespace-nowrap">Location</TableHead>
@@ -728,7 +736,7 @@ export function CustomerIntelligenceView() {
                         {c.orderedAt ? fmtTableDate(c.orderedAt.slice(0, 10)) : '—'}
                       </TableCell>
                       <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
-                        {c.orderNumber || '—'}
+                        1
                       </TableCell>
                       <TableCell className="font-medium whitespace-nowrap">{c.customerName}</TableCell>
                       <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">

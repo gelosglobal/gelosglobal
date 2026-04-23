@@ -151,6 +151,8 @@ export function OrdersEngineView() {
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [intelAgg, setIntelAgg] = useState<CustomerIntelAgg | null>(null)
   const [sheetCustomers, setSheetCustomers] = useState<DtcOrdersEngineCustomerJson[]>([])
+  const [intelUniqueCustomers, setIntelUniqueCustomers] = useState<number | null>(null)
+  const [intelOrdersByKey, setIntelOrdersByKey] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [importingCustomers, setImportingCustomers] = useState(false)
   const [filter, setFilter] = useState('')
@@ -206,10 +208,11 @@ export function OrdersEngineView() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [ordersRes, sheetRes, customersRes] = await Promise.all([
+      const [ordersRes, sheetRes, customersRes, ledgerRes] = await Promise.all([
         fetch('/api/dtc/orders', { credentials: 'include' }),
         fetch('/api/dtc/orders-engine/customers', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/dtc/customers', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/dtc/customer-intelligence', { credentials: 'include', cache: 'no-store' }),
       ])
       if (ordersRes.status === 401 || sheetRes.status === 401 || customersRes.status === 401) {
         toast.error('Session expired. Sign in again.')
@@ -232,24 +235,91 @@ export function OrdersEngineView() {
       if (customersRes.ok) {
         const json = (await customersRes.json()) as { customers?: CustomerRow[] }
         const rows = Array.isArray(json.customers) ? json.customers : []
-        // KPI cards should reflect Customer Intelligence totals (e.g. total orders = 30,021).
-        setIntelAgg(
-          aggregateCustomerIntel(
-            rows.map((c) => ({
-              totalOrders: c.totalOrders,
-              totalBilledGhs: c.totalBilled,
-              totalCollectedGhs: c.totalCollected,
-              returned: c.returned,
-            })),
-          ),
+        const baseAgg = aggregateCustomerIntel(
+          rows.map((c) => ({
+            totalOrders: c.totalOrders,
+            totalBilledGhs: c.totalBilled,
+            totalCollectedGhs: c.totalCollected,
+            returned: c.returned,
+          })),
         )
+
+        // Total orders should represent "how many order rows exist" in Customer Intelligence ledger.
+        // (each ledger row = 1 order, including duplicates).
+        let ledgerOrders: number | null = null
+        let uniqueCustomersByPhone: number | null = null
+        let ledgerReturnedCount: number | null = null
+        if (ledgerRes.ok) {
+          try {
+            const ledgerJson = (await ledgerRes.json()) as {
+              rows?: Array<{
+                phoneNumber?: string
+                customerName?: string
+                deliveryStatus?: string
+                remarks?: string
+                additionalRemarks?: string
+              }>
+            }
+            if (Array.isArray(ledgerJson.rows)) {
+              ledgerOrders = ledgerJson.rows.length
+              const norm = (p: string) => p.replace(/[^\d+]/g, '').trim()
+              const orderCounts: Record<string, number> = {}
+              const keys = new Set(
+                ledgerJson.rows.map((r) => {
+                  const p = norm(String(r.phoneNumber ?? ''))
+                  const k = p ? `p:${p}` : `n:${String(r.customerName ?? '').trim().toLowerCase()}`
+                  orderCounts[k] = (orderCounts[k] ?? 0) + 1
+                  return k
+                }),
+              )
+              uniqueCustomersByPhone = keys.size
+              setIntelOrdersByKey(orderCounts)
+
+              const isReturnedish = (s: string) => {
+                const t = s.trim().toLowerCase()
+                return t.includes('returned') || t.includes('return')
+              }
+              ledgerReturnedCount = ledgerJson.rows.reduce((s, r) => {
+                const hit =
+                  isReturnedish(String(r.deliveryStatus ?? '')) ||
+                  isReturnedish(String(r.remarks ?? '')) ||
+                  isReturnedish(String(r.additionalRemarks ?? ''))
+                return s + (hit ? 1 : 0)
+              }, 0)
+            } else {
+              ledgerOrders = null
+              uniqueCustomersByPhone = null
+              ledgerReturnedCount = null
+              setIntelOrdersByKey({})
+            }
+          } catch {
+            ledgerOrders = null
+            uniqueCustomersByPhone = null
+            ledgerReturnedCount = null
+            setIntelOrdersByKey({})
+          }
+        }
+
+        setIntelAgg({
+          ...baseAgg,
+          totalOrders: ledgerOrders ?? baseAgg.totalOrders,
+          returnedFormatted:
+            ledgerReturnedCount && ledgerReturnedCount > 0
+              ? ledgerReturnedCount.toLocaleString()
+              : '—',
+        })
+        setIntelUniqueCustomers(uniqueCustomersByPhone)
       } else {
         setIntelAgg(null)
+        setIntelUniqueCustomers(null)
+        setIntelOrdersByKey({})
       }
     } catch {
       toast.error('Could not load orders')
       setSheetCustomers([])
       setIntelAgg(null)
+      setIntelUniqueCustomers(null)
+      setIntelOrdersByKey({})
     } finally {
       setLoading(false)
     }
@@ -356,7 +426,15 @@ export function OrdersEngineView() {
   }, [filter, sheetCustomers, sortBy])
 
   const sheetTotals = useMemo(() => {
-    const totalCustomers = sheetCustomers.length
+    const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
+    const uniqueCustomerKeys = new Set(
+      sheetCustomers.map((c) => {
+        const p = normalizePhone(c.phoneNumber ?? '')
+        return p ? `p:${p}` : `n:${normSortText(c.customerName)}`
+      }),
+    )
+    const totalCustomers = uniqueCustomerKeys.size
+    const rowCount = sheetCustomers.length
     const totalOrders = sheetCustomers.reduce(
       (s, c) => s + (Number.isFinite(Number(c.totalOrders)) ? Number(c.totalOrders) : 0),
       0,
@@ -369,8 +447,18 @@ export function OrdersEngineView() {
       (s, c) => s + (Number.isFinite(Number(c.totalCollectedGhs)) ? Number(c.totalCollectedGhs) : 0),
       0,
     )
-    return { totalCustomers, totalOrders, totalBilledGhs, totalCollectedGhs }
+    return { totalCustomers, rowCount, totalOrders, totalBilledGhs, totalCollectedGhs }
   }, [sheetCustomers])
+
+  const ordersForSheetRow = useCallback(
+    (c: Pick<DtcOrdersEngineCustomerJson, 'phoneNumber' | 'customerName' | 'totalOrders'>) => {
+      const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
+      const p = normalizePhone(c.phoneNumber ?? '')
+      const k = p ? `p:${p}` : `n:${normSortText(c.customerName)}`
+      return intelOrdersByKey[k] ?? Number(c.totalOrders ?? 0) ?? 0
+    },
+    [intelOrdersByKey],
+  )
 
   const computedSubtotal = useMemo(() => {
     return form.items.reduce((sum, item) => {
@@ -1643,7 +1731,11 @@ export function OrdersEngineView() {
               <p className="mt-2 text-2xl font-bold tabular-nums">
                 {loading || intelAgg === null ? '—' : intelAgg.totalOrders.toLocaleString()}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">Across all customers</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {intelUniqueCustomers == null
+                  ? 'Across all customers'
+                  : `${intelUniqueCustomers.toLocaleString()} unique customers (by phone)`}
+              </p>
             </Card>
             <Card className="border-l-4 border-l-cyan-600 p-5">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -1687,9 +1779,12 @@ export function OrdersEngineView() {
             </p>
             {!loading && sheetCustomers.length > 0 ? (
               <p className="mt-2 text-xs text-muted-foreground">
-                {sheetTotals.totalCustomers.toLocaleString()} customers · Total orders{' '}
-                {sheetTotals.totalOrders.toLocaleString()} · Billed {formatGhs(sheetTotals.totalBilledGhs)} ·
-                Collected {formatGhs(sheetTotals.totalCollectedGhs)}
+                {sheetTotals.totalCustomers.toLocaleString()} unique customers (by phone){' '}
+                {sheetTotals.rowCount !== sheetTotals.totalCustomers
+                  ? `· ${sheetTotals.rowCount.toLocaleString()} rows`
+                  : ''}{' '}
+                · Total orders {sheetTotals.totalOrders.toLocaleString()} · Billed{' '}
+                {formatGhs(sheetTotals.totalBilledGhs)} · Collected {formatGhs(sheetTotals.totalCollectedGhs)}
               </p>
             ) : null}
           </div>
@@ -1733,7 +1828,7 @@ export function OrdersEngineView() {
                         {c.phoneNumber || '—'}
                       </TableCell>
                       <TableCell className="text-right tabular-nums whitespace-nowrap">
-                        {Number(c.totalOrders ?? 0).toLocaleString()}
+                        {ordersForSheetRow(c).toLocaleString()}
                       </TableCell>
                       <TableCell className="text-right font-medium tabular-nums whitespace-nowrap">
                         {formatGhs(Number(c.totalBilledGhs ?? 0))}
