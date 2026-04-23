@@ -59,7 +59,7 @@ import {
 } from '@/components/ui/select'
 import { formatGhs } from '@/lib/dtc-orders'
 
-type RangePreset = '24h' | '7d' | '30d' | 'today' | 'mtd' | 'custom'
+type RangePreset = 'all' | '24h' | '7d' | '30d' | 'today' | 'mtd' | 'custom'
 
 type SfDashboardPayload = {
   generatedAt: string
@@ -97,6 +97,10 @@ type FinancePayload = {
   b2bInvoicePaidGhs?: number
   totalRevenue: number
   marketingSpendGhs: number
+}
+
+type DtcCustomerRow = {
+  totalCollected: number
 }
 
 type OrderRow = {
@@ -203,6 +207,8 @@ export function ManagerDashboard() {
   const [b2bPaymentsOutstandingGhs, setB2bPaymentsOutstandingGhs] = useState<number | null>(null)
   /** Net invoiced amount (after discounts) from B2B Payments. */
   const [b2bPaymentsInvoicedGhs, setB2bPaymentsInvoicedGhs] = useState<number | null>(null)
+  /** DTC revenue as sum of Customer Intelligence totalCollected. */
+  const [dtcCollectedFromIntelGhs, setDtcCollectedFromIntelGhs] = useState<number | null>(null)
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [tasks, setTasks] = useState<RepTaskRow[]>([])
 
@@ -237,7 +243,8 @@ export function ManagerDashboard() {
   function applyPreset(preset: Exclude<RangePreset, 'custom'>) {
     const end = new Date()
     let start: Date
-    if (preset === '24h') start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
+    if (preset === 'all') start = new Date(0)
+    else if (preset === '24h') start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
     else if (preset === '7d') start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000)
     else if (preset === '30d') start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000)
     else if (preset === 'today') start = startOfDay(end)
@@ -284,14 +291,16 @@ export function ManagerDashboard() {
         finQs.set('end', endIso)
       }
 
-      const [sfRes, finRes, b2bPayRes, ordRes, taskRes] = await Promise.all([
+      const [sfRes, finRes, b2bPayRes, dtcCustomersRes, ordRes, taskRes] = await Promise.all([
         fetch(`/api/sf/dashboard${sfQs.toString() ? `?${sfQs.toString()}` : ''}`, {
           credentials: 'include',
         }),
         fetch(`/api/dtc/finance-layer${finQs.toString() ? `?${finQs.toString()}` : ''}`, {
           credentials: 'include',
         }),
-        fetch('/api/sf/b2b-payments', { credentials: 'include', cache: 'no-store' }),
+        // Master dashboard should use all-time B2B invoice totals/outstanding (not a due-date window).
+        fetch('/api/sf/b2b-payments?periodDays=0', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/dtc/customers', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/dtc/orders', { credentials: 'include' }),
         fetch('/api/master/rep-tasks', { credentials: 'include' }),
       ])
@@ -300,6 +309,7 @@ export function ManagerDashboard() {
         sfRes.status === 401 ||
         finRes.status === 401 ||
         b2bPayRes.status === 401 ||
+        dtcCustomersRes.status === 401 ||
         ordRes.status === 401 ||
         taskRes.status === 401
       ) {
@@ -307,7 +317,14 @@ export function ManagerDashboard() {
         return
       }
 
-      if (!sfRes.ok || !finRes.ok || !b2bPayRes.ok || !ordRes.ok || !taskRes.ok) {
+      if (
+        !sfRes.ok ||
+        !finRes.ok ||
+        !b2bPayRes.ok ||
+        !dtcCustomersRes.ok ||
+        !ordRes.ok ||
+        !taskRes.ok
+      ) {
         throw new Error('One or more requests failed')
       }
 
@@ -316,6 +333,7 @@ export function ManagerDashboard() {
       const b2bPayJson = (await b2bPayRes.json()) as {
         kpis?: { outstandingGhs?: number; invoicedGhs?: number }
       }
+      const dtcCustomersJson = (await dtcCustomersRes.json()) as { customers?: DtcCustomerRow[] }
       const ordJson = (await ordRes.json()) as { orders: OrderRow[] }
       const taskJson = (await taskRes.json()) as { tasks: RepTaskRow[] }
 
@@ -329,6 +347,13 @@ export function ManagerDashboard() {
       setB2bPaymentsInvoicedGhs(
         typeof inv === 'number' && Number.isFinite(inv) ? Math.max(0, inv) : 0,
       )
+
+      const collected = (dtcCustomersJson.customers ?? []).reduce(
+        (s, c) => s + (Number.isFinite(Number(c.totalCollected)) ? Number(c.totalCollected) : 0),
+        0,
+      )
+      setDtcCollectedFromIntelGhs(collected)
+
       setOrders(ordJson.orders ?? [])
       setTasks(taskJson.tasks ?? [])
     } catch {
@@ -337,6 +362,7 @@ export function ManagerDashboard() {
       setFinance(null)
       setB2bPaymentsOutstandingGhs(null)
       setB2bPaymentsInvoicedGhs(null)
+      setDtcCollectedFromIntelGhs(null)
       setOrders([])
       setTasks([])
     } finally {
@@ -444,6 +470,7 @@ export function ManagerDashboard() {
               <SelectValue placeholder="Range" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="all">All time</SelectItem>
               <SelectItem value="24h">Last 24 hours</SelectItem>
               <SelectItem value="7d">Last 7 days</SelectItem>
               <SelectItem value="30d">Last 30 days</SelectItem>
@@ -509,8 +536,10 @@ export function ManagerDashboard() {
             iconWrapClass="bg-purple-600/10"
             iconClass="text-purple-600"
             label="DTC revenue"
-            value={finance ? formatGhs(finance.dtcRevenue) : '—'}
-            subtitle="Excludes B2B portal orders"
+            value={
+              dtcCollectedFromIntelGhs === null ? '—' : formatGhs(dtcCollectedFromIntelGhs)
+            }
+            subtitle="Customer Intelligence · Total collected"
           />
           <MasterKpiCard
             borderAccent="border-l-green-600"

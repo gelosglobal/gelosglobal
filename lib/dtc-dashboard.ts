@@ -4,6 +4,8 @@ import { DTC_ORDERS_COLLECTION } from '@/lib/dtc-orders'
 import { computeInventoryStats, computeStockHealth, listDtcInventory } from '@/lib/dtc-inventory'
 import { computeFinanceLayerSnapshot } from '@/lib/dtc-finance'
 
+const DTC_CUSTOMERS_COLLECTION = 'dtc_customers'
+
 export type DtcDashboardAlert = {
   id: string
   severity: 'high' | 'medium'
@@ -38,15 +40,34 @@ export async function computeDtcDashboardSnapshot(
   periodDays = 7,
 ): Promise<DtcDashboardSnapshot> {
   const now = new Date()
-  const since = subDays(now, periodDays)
+  const since = periodDays <= 0 ? new Date(0) : subDays(now, periodDays)
 
-  const [inventory, finance, topSkuAgg] = await Promise.all([
+  const dateCoerceStages = [
+    {
+      $addFields: {
+        orderedAtDate: {
+          $convert: { input: '$orderedAt', to: 'date', onError: null, onNull: null },
+        },
+      },
+    },
+    { $match: { orderedAtDate: { $gte: since, $lte: now } } },
+  ] as const
+
+  const [
+    inventory,
+    finance,
+    topSkuAgg,
+    allTimeKpis,
+    allTimeCount,
+    allTimeRevenueSum,
+    customerIntelTotals,
+  ] = await Promise.all([
     listDtcInventory(db),
     computeFinanceLayerSnapshot(db, periodDays),
     db
       .collection(DTC_ORDERS_COLLECTION)
       .aggregate<{ sku: string; name: string; units: number; revenueGhs: number }>([
-        { $match: { orderedAt: { $gte: since, $lte: now } } },
+        ...dateCoerceStages,
         { $unwind: '$items' },
         {
           $project: {
@@ -83,33 +104,162 @@ export async function computeDtcDashboardSnapshot(
         },
       ])
       .toArray(),
+    db
+      .collection(DTC_ORDERS_COLLECTION)
+      .aggregate<{
+        orders: number
+        units: number
+        revenueGhs: number
+        awaitingFulfillment: number
+      }>([
+        // Use item-based math so revenue works even if `totalAmount` is missing/0/incorrect.
+        { $project: { status: 1, totalAmount: 1, items: { $ifNull: ['$items', []] } } },
+        { $unwind: { path: '$items', preserveNullAndEmptyArrays: true } },
+        {
+          $project: {
+            status: { $ifNull: ['$status', '' ] },
+            totalAmount: {
+              $convert: { input: '$totalAmount', to: 'double', onError: 0, onNull: 0 },
+            },
+            qty: { $convert: { input: '$items.qty', to: 'double', onError: 0, onNull: 0 } },
+            unitPrice: {
+              $convert: { input: '$items.unitPrice', to: 'double', onError: 0, onNull: 0 },
+            },
+          },
+        },
+        {
+          // Collapse back to one row per order so we don't double-count after unwind.
+          $group: {
+            _id: '$_id',
+            status: { $first: '$status' },
+            totalAmount: { $first: '$totalAmount' },
+            units: { $sum: '$qty' },
+            revenueFromItems: { $sum: { $multiply: ['$qty', '$unitPrice'] } },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            orders: { $sum: 1 },
+            revenueGhs: {
+              $sum: {
+                $cond: [
+                  { $gt: ['$totalAmount', 0] },
+                  '$totalAmount',
+                  '$revenueFromItems',
+                ],
+              },
+            },
+            units: { $sum: '$units' },
+            awaitingFulfillment: {
+              $sum: {
+                $cond: [
+                  { $in: ['$status', ['processing', 'pending_payment']] },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+        { $project: { _id: 0, orders: 1, units: 1, revenueGhs: 1, awaitingFulfillment: 1 } },
+      ])
+      .toArray(),
+    db.collection(DTC_ORDERS_COLLECTION).countDocuments({}),
+    db
+      .collection(DTC_ORDERS_COLLECTION)
+      .aggregate<{ revenueGhs: number }>([
+        {
+          $project: {
+            totalAmount: {
+              $convert: { input: '$totalAmount', to: 'double', onError: 0, onNull: 0 },
+            },
+          },
+        },
+        { $group: { _id: null, revenueGhs: { $sum: '$totalAmount' } } },
+        { $project: { _id: 0, revenueGhs: 1 } },
+      ])
+      .toArray(),
+    db
+      .collection(DTC_CUSTOMERS_COLLECTION)
+      .aggregate<{ totalOrders: number; totalCollectedGhs: number }>([
+        { $match: { customer: { $type: 'string', $ne: '' } } },
+        {
+          $lookup: {
+            from: DTC_ORDERS_COLLECTION,
+            localField: 'customer',
+            foreignField: 'customer',
+            as: 'orders',
+          },
+        },
+        {
+          $addFields: {
+            aggOrderCount: { $size: '$orders' },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            // Match `/api/dtc/customers` logic:
+            // - totalOrders: null => 0, defined => value, undefined => aggOrderCount
+            // - totalCollected: null => 0, defined => value, undefined => 0
+            totalOrders: {
+              $cond: [
+                { $eq: ['$importTotalOrders', null] },
+                0,
+                {
+                  $cond: [
+                    { $ne: [{ $type: '$importTotalOrders' }, 'missing'] },
+                    { $toDouble: '$importTotalOrders' },
+                    { $toDouble: '$aggOrderCount' },
+                  ],
+                },
+              ],
+            },
+            totalCollectedGhs: {
+              $cond: [
+                { $eq: ['$importTotalCollectedGhs', null] },
+                0,
+                {
+                  $cond: [
+                    { $ne: [{ $type: '$importTotalCollectedGhs' }, 'missing'] },
+                    { $toDouble: '$importTotalCollectedGhs' },
+                    0,
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            totalOrders: { $sum: '$totalOrders' },
+            totalCollectedGhs: { $sum: '$totalCollectedGhs' },
+          },
+        },
+        { $project: { _id: 0, totalOrders: 1, totalCollectedGhs: 1 } },
+      ])
+      .toArray(),
   ])
 
   const invStats = computeInventoryStats(inventory)
-  const orders = (await db
-    .collection(DTC_ORDERS_COLLECTION)
-    .find({ orderedAt: { $gte: since, $lte: now } })
-    .project({ totalAmount: 1, status: 1, items: 1 })
-    .limit(20000)
-    .toArray()) as Array<{
-    totalAmount: number
-    status: string
-    items: Array<{ qty: number }>
-  }>
-
-  let units = 0
-  let awaitingFulfillment = 0
-  for (const o of orders) {
-    if (o.status === 'processing' || o.status === 'pending_payment') {
-      awaitingFulfillment += 1
-    }
-    for (const it of o.items ?? []) {
-      units += Number(it.qty) || 0
-    }
+  const base = allTimeKpis?.[0] ?? {
+    orders: 0,
+    units: 0,
+    revenueGhs: 0,
+    awaitingFulfillment: 0,
   }
-
-  const revenueGhs = finance.snapshot.dtcRevenue
-  const avgOrderValueGhs = orders.length === 0 ? 0 : revenueGhs / orders.length
+  const sumTotalAmount = allTimeRevenueSum?.[0]?.revenueGhs ?? 0
+  const k = {
+    ...base,
+    orders: Math.max(base.orders, allTimeCount ?? 0),
+    revenueGhs: Math.max(base.revenueGhs, sumTotalAmount),
+  }
+  const intel = customerIntelTotals?.[0]
+  const intelOrders = intel?.totalOrders ?? 0
+  const intelCollected = intel?.totalCollectedGhs ?? 0
+  const avgOrderValueGhs = k.orders === 0 ? 0 : k.revenueGhs / k.orders
 
   const alerts: DtcDashboardAlert[] = []
 
@@ -127,11 +277,11 @@ export async function computeDtcDashboardSnapshot(
     }
   }
 
-  if (awaitingFulfillment > 0) {
+  if (k.awaitingFulfillment > 0) {
     alerts.push({
       id: 'orders-awaiting-fulfillment',
-      severity: awaitingFulfillment >= 10 ? 'high' : 'medium',
-      text: `[Orders] ${awaitingFulfillment.toLocaleString()} orders awaiting fulfillment`,
+      severity: k.awaitingFulfillment >= 10 ? 'high' : 'medium',
+      text: `[Orders] ${k.awaitingFulfillment.toLocaleString()} orders awaiting fulfillment`,
     })
   }
 
@@ -149,11 +299,12 @@ export async function computeDtcDashboardSnapshot(
     periodStart: since.toISOString(),
     periodEnd: now.toISOString(),
     kpis: {
-      orders: orders.length,
-      units,
-      revenueGhs,
-      avgOrderValueGhs,
-      awaitingFulfillment,
+      // User requirement: use Customer Intelligence totals for revenue + orders.
+      orders: intelOrders,
+      units: k.units,
+      revenueGhs: intelCollected,
+      avgOrderValueGhs: intelOrders === 0 ? 0 : intelCollected / intelOrders,
+      awaitingFulfillment: k.awaitingFulfillment,
       skusTracked: invStats.skusTracked,
       belowSafety: invStats.belowSafety,
     },

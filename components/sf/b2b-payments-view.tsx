@@ -81,7 +81,7 @@ type B2bPaymentsKpis = {
   totalInvoices: number
 }
 
-const PERIOD_OPTIONS = [7, 14, 30, 60, 90] as const
+const PERIOD_OPTIONS = [0, 7, 14, 30, 60, 90] as const
 
 function dateToIsoNoon(value: string): string | undefined {
   const v = value.trim()
@@ -584,7 +584,7 @@ export function B2bPaymentsView() {
                 <SelectContent>
                   {PERIOD_OPTIONS.map((d) => (
                     <SelectItem key={d} value={String(d)}>
-                      Last {d} days
+                      {d === 0 ? 'All time' : `Last ${d} days`}
                     </SelectItem>
                   ))}
                 </SelectContent>

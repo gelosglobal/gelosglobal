@@ -20,7 +20,7 @@ export async function GET() {
   }
 
   const { db } = getMongo()
-  const snapshot = await computeDtcDashboardSnapshot(db, 7)
+  const snapshot = await computeDtcDashboardSnapshot(db, 0)
   return NextResponse.json(snapshot)
 }
 

@@ -6,6 +6,7 @@ import {
   listSfB2bInvoices,
   serializeSfB2bInvoice,
 } from '@/lib/sf-b2b-invoices'
+import { subDays } from 'date-fns'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -39,7 +40,9 @@ function parsePeriodDays(url: URL): number {
   const raw = url.searchParams.get('periodDays')
   const n = raw ? Number(raw) : 30
   if (!Number.isFinite(n)) return 30
-  return Math.min(365, Math.max(7, Math.round(n)))
+  const rounded = Math.round(n)
+  if (rounded <= 0) return 0
+  return Math.min(365, Math.max(7, rounded))
 }
 
 async function requireSession() {
@@ -57,7 +60,19 @@ export async function GET(request: Request) {
 
   const { db } = getMongo()
   const now = new Date()
-  const rows = await listSfB2bInvoices(db)
+  const periodDays = parsePeriodDays(new URL(request.url))
+
+  const rowsAll = await listSfB2bInvoices(db)
+  const rows =
+    periodDays <= 0
+      ? rowsAll
+      : rowsAll.filter((r) => {
+          // Date filter uses *due dates* (not invoiceAt/paidAt/createdAt).
+          const d = r.dueAt
+          if (!d || Number.isNaN(d.getTime())) return false
+          const since = subDays(now, periodDays)
+          return d >= since && d <= now
+        })
   const kpis = computeInvoiceKpis(rows, now)
 
   return NextResponse.json({
