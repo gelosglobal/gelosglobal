@@ -116,7 +116,7 @@ function aggregateCustomerIntel(customers: Array<Pick<DtcOrdersEngineCustomerJso
   const returnedFormatted =
     returnedSum === 0
       ? '—'
-      : formatGhs(returnedSum)
+      : returnedSum.toLocaleString()
 
   return {
     totalOrders,
@@ -1636,7 +1636,7 @@ export function OrdersEngineView() {
                 {loading || intelAgg === null ? '—' : intelAgg.returnedFormatted}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Sum of Returned column (GHS or count, matching your sheet)
+                Sum of Returned column (count)
               </p>
             </Card>
           </div>
@@ -1703,7 +1703,7 @@ export function OrdersEngineView() {
                         {c.location || '—'}
                       </TableCell>
                       <TableCell className="text-right tabular-nums whitespace-nowrap">
-                        {formatGhs(Number(c.returned ?? 0))}
+                        {Number(c.returned ?? 0).toLocaleString()}
                       </TableCell>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
                         {c.firstOrderDate ? format(new Date(`${c.firstOrderDate}T12:00:00`), 'dd MMM yyyy') : '—'}

@@ -209,10 +209,11 @@ export function ManagerDashboard() {
   const [b2bPaymentsInvoicedGhs, setB2bPaymentsInvoicedGhs] = useState<number | null>(null)
   /** DTC revenue as sum of Customer Intelligence totalCollected. */
   const [dtcCollectedFromIntelGhs, setDtcCollectedFromIntelGhs] = useState<number | null>(null)
+  const b2bCollectedForTotalRevenue = finance?.b2bInvoicePaidGhs ?? 0
   const totalRevenueDtcPlusB2bGhs =
-    b2bPaymentsInvoicedGhs === null || dtcCollectedFromIntelGhs === null
+    dtcCollectedFromIntelGhs === null
       ? null
-      : Math.max(0, b2bPaymentsInvoicedGhs) + Math.max(0, dtcCollectedFromIntelGhs)
+      : Math.max(0, b2bCollectedForTotalRevenue) + Math.max(0, dtcCollectedFromIntelGhs)
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [tasks, setTasks] = useState<RepTaskRow[]>([])
 
@@ -554,7 +555,7 @@ export function ManagerDashboard() {
             iconClass="text-amber-700"
             label="Total revenue (DTC + B2B)"
             value={totalRevenueDtcPlusB2bGhs === null ? '—' : formatGhs(totalRevenueDtcPlusB2bGhs)}
-            subtitle="DTC collected + B2B invoiced · Combined"
+            subtitle="DTC collected + B2B collected · Combined"
           />
           <MasterKpiCard
             borderAccent="border-l-green-600"

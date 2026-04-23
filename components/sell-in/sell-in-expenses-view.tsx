@@ -586,7 +586,7 @@ export function SellInExpensesView() {
             <p className="mt-2 text-2xl font-bold tabular-nums">{formatGhs(totals.total)}</p>
             <p className="text-xs text-muted-foreground">{rows.length.toLocaleString()} entries</p>
           </Card>
-          {accounts.slice(0, 2).map((a) => {
+          {accounts.map((a) => {
             const budget = budgets[a.id] ?? 0
             const spent = byAccount[a.id] ?? 0
             const remaining = Math.max(0, budget - spent)
