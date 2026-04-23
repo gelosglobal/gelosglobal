@@ -355,6 +355,23 @@ export function OrdersEngineView() {
     return rows
   }, [filter, sheetCustomers, sortBy])
 
+  const sheetTotals = useMemo(() => {
+    const totalCustomers = sheetCustomers.length
+    const totalOrders = sheetCustomers.reduce(
+      (s, c) => s + (Number.isFinite(Number(c.totalOrders)) ? Number(c.totalOrders) : 0),
+      0,
+    )
+    const totalBilledGhs = sheetCustomers.reduce(
+      (s, c) => s + (Number.isFinite(Number(c.totalBilledGhs)) ? Number(c.totalBilledGhs) : 0),
+      0,
+    )
+    const totalCollectedGhs = sheetCustomers.reduce(
+      (s, c) => s + (Number.isFinite(Number(c.totalCollectedGhs)) ? Number(c.totalCollectedGhs) : 0),
+      0,
+    )
+    return { totalCustomers, totalOrders, totalBilledGhs, totalCollectedGhs }
+  }, [sheetCustomers])
+
   const computedSubtotal = useMemo(() => {
     return form.items.reduce((sum, item) => {
       const qty = Number.parseInt(item.qty, 10)
@@ -1668,6 +1685,13 @@ export function OrdersEngineView() {
             <p className="mt-1 text-xs text-muted-foreground">
               This table stays empty until you import an Excel file with the headers above.
             </p>
+            {!loading && sheetCustomers.length > 0 ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {sheetTotals.totalCustomers.toLocaleString()} customers · Total orders{' '}
+                {sheetTotals.totalOrders.toLocaleString()} · Billed {formatGhs(sheetTotals.totalBilledGhs)} ·
+                Collected {formatGhs(sheetTotals.totalCollectedGhs)}
+              </p>
+            ) : null}
           </div>
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
