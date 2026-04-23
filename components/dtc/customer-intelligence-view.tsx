@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
-import { Download, Loader2, Plus, Users } from 'lucide-react'
+import { Download, Loader2, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import * as XLSX from 'xlsx'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
@@ -38,6 +38,28 @@ import { cn } from '@/lib/utils'
 import { formatGhs } from '@/lib/dtc-orders'
 
 export type CustomerSegment = 'High LTV' | 'At risk' | 'New (30d)' | 'Core'
+
+/** Must match `app/api/dtc/customers/reset/route.ts`. */
+const CLEAR_DTC_CUSTOMERS_CONFIRM = 'CLEAR_ALL_DTC_CUSTOMERS'
+
+export type CustomerIntelLedgerRow = {
+  id: string
+  orderedAt: string | null
+  orderNumber: string
+  customerName: string
+  phoneNumber: string
+  location: string
+  riderAssigned: string
+  amountToCollectGhs: number
+  cashCollectedGhs: number
+  momoCollectedGhs: number
+  paystackCollectedGhs: number
+  totalCollectedGhs: number
+  paymentMethod: string
+  deliveryStatus: string
+  remarks: string
+  additionalRemarks: string
+}
 
 /** Matches GET `/api/dtc/customers` — same field names as the on-page table headers. */
 export type CustomerRow = {
@@ -80,8 +102,13 @@ function fmtTableDate(s: string): string {
 export function CustomerIntelligenceView() {
   const [loading, setLoading] = useState(true)
   const [customers, setCustomers] = useState<CustomerRow[]>([])
+  const [ledgerRows, setLedgerRows] = useState<CustomerIntelLedgerRow[]>([])
   const [segments, setSegments] = useState<SegmentCounts | null>(null)
   const [query, setQuery] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [clearOpen, setClearOpen] = useState(false)
+  const [clearPhrase, setClearPhrase] = useState('')
+  const [clearing, setClearing] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [sortBy, setSortBy] = useState<CustomerSortKey>('billed')
@@ -102,21 +129,24 @@ export function CustomerIntelligenceView() {
   async function load() {
     setLoading(true)
     try {
-      const res = await fetch('/api/dtc/customers', {
-        credentials: 'include',
-        cache: 'no-store',
-      })
-      if (res.status === 401) {
+      const [ledgerRes, customersRes] = await Promise.all([
+        fetch('/api/dtc/customer-intelligence', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/dtc/customers', { credentials: 'include', cache: 'no-store' }),
+      ])
+      if (ledgerRes.status === 401 || customersRes.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
       }
-      if (!res.ok) throw new Error('Failed to load customer intelligence')
-      const data = (await res.json()) as {
+      if (!ledgerRes.ok || !customersRes.ok) throw new Error('Failed to load customer intelligence')
+
+      const ledgerJson = (await ledgerRes.json()) as { rows: CustomerIntelLedgerRow[] }
+      const customersJson = (await customersRes.json()) as {
         customers: CustomerRow[]
         segments: SegmentCounts
       }
-      setCustomers(data.customers)
-      setSegments(data.segments)
+      setLedgerRows(Array.isArray(ledgerJson.rows) ? ledgerJson.rows : [])
+      setCustomers(customersJson.customers)
+      setSegments(customersJson.segments)
     } catch {
       toast.error('Could not load customers')
     } finally {
@@ -131,36 +161,25 @@ export function CustomerIntelligenceView() {
   const displayRows = useMemo(() => {
     const q = query.trim().toLowerCase()
     const base = !q
-      ? [...customers]
-      : customers.filter((c) => c.customerName.toLowerCase().includes(q))
-
-    base.sort((a, b) => {
-      switch (sortBy) {
-        case 'name':
-          return a.customerName.localeCompare(b.customerName)
-        case 'orders':
-          return (
-            b.totalOrders - a.totalOrders ||
-            b.totalBilled - a.totalBilled ||
-            a.customerName.localeCompare(b.customerName)
-          )
-        case 'lastOrder': {
-          const ta = a.lastOrderDate ? new Date(a.lastOrderDate).getTime() : 0
-          const tb = b.lastOrderDate ? new Date(b.lastOrderDate).getTime() : 0
-          return tb - ta || b.totalBilled - a.totalBilled
-        }
-        case 'billed':
-        default:
-          return (
-            b.totalBilled - a.totalBilled ||
-            b.totalOrders - a.totalOrders ||
-            a.customerName.localeCompare(b.customerName)
-          )
-      }
-    })
-
+      ? [...ledgerRows]
+      : ledgerRows.filter((r) => {
+          const hay = [
+            r.customerName,
+            r.phoneNumber,
+            r.location,
+            r.riderAssigned,
+            r.orderNumber,
+            r.paymentMethod,
+            r.deliveryStatus,
+            r.remarks,
+            r.additionalRemarks,
+          ]
+            .join(' ')
+            .toLowerCase()
+          return hay.includes(q)
+        })
     return base
-  }, [customers, query, sortBy])
+  }, [ledgerRows, query])
 
   const totals = useMemo(() => {
     const totalCustomers = customers.length
@@ -170,36 +189,48 @@ export function CustomerIntelligenceView() {
   }, [customers])
 
   function handleExport() {
-    if (customers.length === 0) {
-      toast.message('No customers to export yet')
+    if (ledgerRows.length === 0) {
+      toast.message('No rows to export yet')
       return
     }
     const header = [
       '#',
-      'Customer name',
-      'Phone number',
-      'Total orders',
-      'Total billed',
-      'Total collected',
+      'Date',
+      'Order #',
+      'Customer Name',
+      'Phone Number',
       'Location',
-      'Returned',
-      'First order date',
-      'Last order date',
+      'Rider Assigned',
+      'Amount to Collect (GHC)',
+      'Cash Collected (GHC)',
+      'MoMo Collected (GHC)',
+      'Paystack Collected (GHC)',
+      'Total Collected (GHC)',
+      'Payment Method',
+      'Delivery Status',
+      'Remarks',
+      'Additional Remarks',
     ]
     const lines = [
       header.join(','),
-      ...customers.map((c, i) =>
+      ...ledgerRows.map((r, i) =>
         [
           i + 1,
-          `"${c.customerName.replace(/"/g, '""')}"`,
-          `"${(c.phoneNumber ?? '').replace(/"/g, '""')}"`,
-          c.totalOrders,
-          c.totalBilled,
-          c.totalCollected,
-          `"${(c.location ?? '').replace(/"/g, '""')}"`,
-          c.returned,
-          c.firstOrderDate,
-          c.lastOrderDate,
+          r.orderedAt ? r.orderedAt.slice(0, 10) : '',
+          `"${(r.orderNumber ?? '').replace(/"/g, '""')}"`,
+          `"${(r.customerName ?? '').replace(/"/g, '""')}"`,
+          `"${(r.phoneNumber ?? '').replace(/"/g, '""')}"`,
+          `"${(r.location ?? '').replace(/"/g, '""')}"`,
+          `"${(r.riderAssigned ?? '').replace(/"/g, '""')}"`,
+          r.amountToCollectGhs,
+          r.cashCollectedGhs,
+          r.momoCollectedGhs,
+          r.paystackCollectedGhs,
+          r.totalCollectedGhs,
+          `"${(r.paymentMethod ?? '').replace(/"/g, '""')}"`,
+          `"${(r.deliveryStatus ?? '').replace(/"/g, '""')}"`,
+          `"${(r.remarks ?? '').replace(/"/g, '""')}"`,
+          `"${(r.additionalRemarks ?? '').replace(/"/g, '""')}"`,
         ].join(','),
       ),
     ]
@@ -207,48 +238,41 @@ export function CustomerIntelligenceView() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `dtc-customers-${new Date().toISOString().slice(0, 10)}.csv`
+    a.download = `dtc-customer-intelligence-ledger-${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
     toast.success('Download started')
   }
 
   function handleExportExcel() {
-    if (customers.length === 0) {
-      toast.message('No customers to export yet')
+    if (ledgerRows.length === 0) {
+      toast.message('No rows to export yet')
       return
     }
 
     const wb = XLSX.utils.book_new()
 
-    const customersSheet = XLSX.utils.json_to_sheet(
-      customers.map((c, i) => ({
+    const sheet = XLSX.utils.json_to_sheet(
+      ledgerRows.map((r, i) => ({
         '#': i + 1,
-        'Customer name': c.customerName,
-        'Phone number': c.phoneNumber,
-        'Total orders': c.totalOrders,
-        'Total billed': c.totalBilled,
-        'Total collected': c.totalCollected,
-        Location: c.location,
-        Returned: c.returned,
-        'First order date': c.firstOrderDate,
-        'Last order date': c.lastOrderDate,
+        Date: r.orderedAt ? r.orderedAt.slice(0, 10) : '',
+        'Order #': r.orderNumber,
+        'Customer Name': r.customerName,
+        'Phone Number': r.phoneNumber,
+        Location: r.location,
+        'Rider Assigned': r.riderAssigned,
+        'Amount to Collect (GHC)': r.amountToCollectGhs,
+        'Cash Collected (GHC)': r.cashCollectedGhs,
+        'MoMo Collected (GHC)': r.momoCollectedGhs,
+        'Paystack Collected (GHC)': r.paystackCollectedGhs,
+        'Total Collected (GHC)': r.totalCollectedGhs,
+        'Payment Method': r.paymentMethod,
+        'Delivery Status': r.deliveryStatus,
+        Remarks: r.remarks,
+        'Additional Remarks': r.additionalRemarks,
       })),
     )
-    XLSX.utils.book_append_sheet(wb, customersSheet, 'Customers')
-
-    const segmentsSheet = XLSX.utils.json_to_sheet([
-      {
-        customersTracked: totals.totalCustomers,
-        totalBilled: totals.totalBilled,
-        avgTotalBilled: totals.avgTotalBilled,
-        highLtv: segments?.highLtv ?? 0,
-        atRisk: segments?.atRisk ?? 0,
-        new30d: segments?.new30d ?? 0,
-        core: segments?.core ?? 0,
-      },
-    ])
-    XLSX.utils.book_append_sheet(wb, segmentsSheet, 'Segments')
+    XLSX.utils.book_append_sheet(wb, sheet, 'Customer Intelligence')
 
     const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
     const blob = new Blob([out], {
@@ -257,10 +281,76 @@ export function CustomerIntelligenceView() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `dtc-customer-intelligence-${new Date().toISOString().slice(0, 10)}.xlsx`
+    a.download = `dtc-customer-intelligence-ledger-${new Date().toISOString().slice(0, 10)}.xlsx`
     a.click()
     URL.revokeObjectURL(url)
     toast.success('Excel download started')
+  }
+
+  async function handleImportExcel(file: File) {
+    setImporting(true)
+    try {
+      const fd = new FormData()
+      fd.set('file', file)
+      const res = await fetch('/api/dtc/customer-intelligence/import-file', {
+        method: 'POST',
+        credentials: 'include',
+        body: fd,
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string
+        ledgerRowCount?: number
+      }
+      if (!res.ok) {
+        throw new Error(data.error ?? 'Import failed')
+      }
+      toast.success(`Imported ${Number(data.ledgerRowCount ?? 0).toLocaleString()} rows`)
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Import failed')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  async function handleResetCustomers() {
+    const phrase = clearPhrase.trim()
+    if (phrase !== CLEAR_DTC_CUSTOMERS_CONFIRM) {
+      toast.error(`Type ${CLEAR_DTC_CUSTOMERS_CONFIRM} to confirm`)
+      return
+    }
+    setClearing(true)
+    try {
+      const res = await fetch('/api/dtc/customer-intelligence/reset', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: CLEAR_DTC_CUSTOMERS_CONFIRM }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string
+        deletedLedgerRows?: number
+      }
+      if (!res.ok) {
+        throw new Error(data.error ?? 'Could not clear customers')
+      }
+      toast.success(`Cleared ${Number(data.deletedLedgerRows ?? 0).toLocaleString()} rows`)
+      setClearOpen(false)
+      setClearPhrase('')
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not clear customers')
+    } finally {
+      setClearing(false)
+    }
   }
 
   async function handleCreateCustomer(e: React.FormEvent) {
@@ -339,6 +429,90 @@ export function CustomerIntelligenceView() {
               <Plus className="h-4 w-4" />
               Add customer
             </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              type="button"
+              disabled={importing || loading}
+              onClick={() => document.getElementById('dtc-customer-import')?.click()}
+            >
+              <Download className="h-4 w-4" />
+              Import Excel
+            </Button>
+            <input
+              id="dtc-customer-import"
+              type="file"
+              accept=".xlsx,.xls,.xlsm"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                e.target.value = ''
+                if (f) void handleImportExcel(f)
+              }}
+            />
+
+            <Dialog open={clearOpen} onOpenChange={setClearOpen}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                type="button"
+                disabled={loading || customers.length === 0}
+                onClick={() => setClearOpen(true)}
+              >
+                <Trash2 className="h-4 w-4" />
+                Clear list
+              </Button>
+              <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                  <DialogTitle>Clear all customers?</DialogTitle>
+                  <DialogDescription>
+                    This deletes every row in Customer Intelligence. To confirm, type{' '}
+                    <span className="font-mono">{CLEAR_DTC_CUSTOMERS_CONFIRM}</span>.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2">
+                  <Label htmlFor="dtc-clear-confirm">Confirmation phrase</Label>
+                  <Input
+                    id="dtc-clear-confirm"
+                    value={clearPhrase}
+                    onChange={(e) => setClearPhrase(e.target.value)}
+                    placeholder={CLEAR_DTC_CUSTOMERS_CONFIRM}
+                    autoComplete="off"
+                  />
+                </div>
+                <DialogFooter>
+                  <Button
+                    variant="outline"
+                    type="button"
+                    onClick={() => {
+                      setClearOpen(false)
+                      setClearPhrase('')
+                    }}
+                    disabled={clearing}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={() => void handleResetCustomers()}
+                    disabled={clearing}
+                  >
+                    {clearing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Clearing…
+                      </>
+                    ) : (
+                      'Clear now'
+                    )}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             <Button
               variant="outline"
@@ -492,50 +666,75 @@ export function CustomerIntelligenceView() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-10 min-w-10 text-right tabular-nums text-muted-foreground">#</TableHead>
-                  <TableHead className="min-w-[10rem] whitespace-nowrap">Customer name</TableHead>
-                  <TableHead className="min-w-[7rem] whitespace-nowrap">Phone number</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Total orders</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Total billed</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Total collected</TableHead>
+                  <TableHead className="whitespace-nowrap">Date</TableHead>
+                  <TableHead className="whitespace-nowrap">Order #</TableHead>
+                  <TableHead className="min-w-[10rem] whitespace-nowrap">Customer Name</TableHead>
+                  <TableHead className="min-w-[7rem] whitespace-nowrap">Phone Number</TableHead>
                   <TableHead className="min-w-[8rem] whitespace-nowrap">Location</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Returned</TableHead>
-                  <TableHead className="whitespace-nowrap">First order date</TableHead>
-                  <TableHead className="whitespace-nowrap">Last order date</TableHead>
+                  <TableHead className="min-w-[8rem] whitespace-nowrap">Rider Assigned</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Amount to Collect (GHC)</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Cash Collected (GHC)</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">MoMo Collected (GHC)</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Paystack Collected (GHC)</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Total Collected (GHC)</TableHead>
+                  <TableHead className="whitespace-nowrap">Payment Method</TableHead>
+                  <TableHead className="whitespace-nowrap">Delivery Status</TableHead>
+                  <TableHead className="min-w-[12rem] whitespace-nowrap">Remarks</TableHead>
+                  <TableHead className="min-w-[12rem] whitespace-nowrap">Additional Remarks</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {displayRows.map((c, i) => {
-                  const isAtRisk = c.segment === 'At risk'
                   return (
                     <TableRow key={c.id}>
                       <TableCell className="text-right text-muted-foreground tabular-nums text-sm">
                         {i + 1}
                       </TableCell>
-                      <TableCell className="font-medium">{c.customerName}</TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums">
+                      <TableCell className="text-muted-foreground whitespace-nowrap">
+                        {c.orderedAt ? fmtTableDate(c.orderedAt.slice(0, 10)) : '—'}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
+                        {c.orderNumber || '—'}
+                      </TableCell>
+                      <TableCell className="font-medium whitespace-nowrap">{c.customerName}</TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
                         {c.phoneNumber || '—'}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {c.totalOrders.toLocaleString()}
-                      </TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {c.totalBilledFormatted}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">{c.totalCollectedFormatted}</TableCell>
-                      <TableCell className="max-w-[14rem] truncate text-muted-foreground" title={c.location}>
+                      <TableCell className="text-muted-foreground whitespace-nowrap">
                         {c.location || '—'}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{c.returnedFormatted}</TableCell>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {fmtTableDate(c.firstOrderDate)}
+                        {c.riderAssigned || '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">
+                        {formatGhs(c.amountToCollectGhs)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">
+                        {formatGhs(c.cashCollectedGhs)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">
+                        {formatGhs(c.momoCollectedGhs)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">
+                        {formatGhs(c.paystackCollectedGhs)}
+                      </TableCell>
+                      <TableCell className="text-right font-medium tabular-nums whitespace-nowrap">
+                        {formatGhs(c.totalCollectedGhs)}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground whitespace-nowrap">
+                        {c.paymentMethod || '—'}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground whitespace-nowrap">
+                        {c.deliveryStatus || '—'}
+                      </TableCell>
+                      <TableCell className="max-w-[18rem] truncate text-muted-foreground" title={c.remarks}>
+                        {c.remarks || '—'}
                       </TableCell>
                       <TableCell
-                        className={cn(
-                          'whitespace-nowrap text-muted-foreground',
-                          isAtRisk && 'text-red-600',
-                        )}
+                        className="max-w-[18rem] truncate text-muted-foreground"
+                        title={c.additionalRemarks}
                       >
-                        {fmtTableDate(c.lastOrderDate)}
+                        {c.additionalRemarks || '—'}
                       </TableCell>
                     </TableRow>
                   )

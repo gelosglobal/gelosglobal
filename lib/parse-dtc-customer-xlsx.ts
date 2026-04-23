@@ -787,6 +787,203 @@ export function parseDtcCustomerXlsxBuffer(
   }
 
   if (rows.length === 0) {
+    /**
+     * Order-ledger template (from ops sheet) → aggregate into customer intelligence rows.
+     *
+     * Expected headers (extras ignored):
+     * Date, Order #, Customer Name, Phone Number, Location, Rider Assigned,
+     * Amount to Collect (GHC), Cash Collected (GHC), MoMo Collected (GHC),
+     * Paystack Collected (GHC), Total Collected (GHC), Payment Method,
+     * Delivery Status, Remarks, Additional Remarks
+     */
+    const orderHeaderRowIdx = aoa.findIndex((row) => {
+      const cells = row.map((c) => normalizeHeader(c)).filter(Boolean)
+      const hasCustomer = cells.some((c) => c === 'customer name' || (c.includes('customer') && c.includes('name')))
+      const hasPhone = cells.some((c) => c === 'phone number' || (c.includes('phone') && c.includes('number')))
+      const hasOrder = cells.some((c) => c === 'order' || c === 'order number' || (c.includes('order') && c.includes('number')))
+      const hasDue = cells.some((c) => c === 'date' || c.includes('date'))
+      return hasCustomer && hasPhone && hasOrder && hasDue
+    })
+
+    const rowsFromOrderLedger =
+      orderHeaderRowIdx >= 0
+        ? (() => {
+            const headerRow = aoa[orderHeaderRowIdx] ?? []
+            const colKeys = headerRow.map((c) => normalizeHeader(c))
+            const find = (...aliases: string[]) => {
+              const wants = aliases.map((a) => normalizeHeader(a)).filter(Boolean)
+              return colKeys.findIndex((k) => wants.some((w) => headerKeyMatches(k, w)))
+            }
+
+            const idxDate = find('date')
+            const idxOrderNo = find('order #', 'order number', 'order no', 'order')
+            const idxCustomer = find('customer name', 'customer')
+            const idxPhone = find('phone number', 'phone')
+            const idxLocation = find('location')
+            const idxRider = find('rider assigned', 'rider')
+            const idxAmt = find('amount to collect', 'amount to collect (ghc)', 'amount to collect (ghs)')
+            const idxCash = find('cash collected', 'cash collected (ghc)', 'cash collected (ghs)')
+            const idxMomo = find('momo collected', 'momo collected (ghc)', 'momo collected (ghs)', 'momo')
+            const idxPaystack = find(
+              'paystack collected',
+              'paystack collected (ghc)',
+              'paystack collected (ghs)',
+              'paystack',
+            )
+            const idxTotalCollected = find(
+              'total collected',
+              'total collected (ghc)',
+              'total collected (ghs)',
+            )
+            const idxPaymentMethod = find('payment method', 'payment')
+            const idxDeliveryStatus = find('delivery status', 'status')
+            const idxRemarks = find('remarks', 'remark')
+            const idxAdditional = find('additional remarks', 'additional remark')
+
+            type Agg = {
+              customer: string
+              phone: string
+              location?: string
+              riderAssigned?: string
+              orders: number
+              billed: number
+              collected: number
+              cash: number
+              momo: number
+              paystack: number
+              returnedCount: number
+              firstAt?: Date
+              lastAt?: Date
+              remarks?: string
+            }
+
+            const groups = new Map<string, Agg>()
+
+            const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').slice(0, 40)
+            const isReturnedish = (s: string) => {
+              const t = s.trim().toLowerCase()
+              return t.includes('returned') || t.includes('return')
+            }
+
+            const dataRows = aoa.slice(orderHeaderRowIdx + 1)
+            for (const r of dataRows) {
+              const customer = String(r[idxCustomer] ?? '').trim()
+              if (!customer) continue
+              const phoneRaw = String(idxPhone >= 0 ? (r[idxPhone] ?? '') : '').trim()
+              const phone = normalizePhone(phoneRaw)
+              const key = `${customer}|||${phone}`
+
+              const loc = idxLocation >= 0 ? String(r[idxLocation] ?? '').trim() : ''
+              const rider = idxRider >= 0 ? String(r[idxRider] ?? '').trim() : ''
+              const billed = idxAmt >= 0 ? parseMoney(r[idxAmt]) ?? 0 : 0
+              const cash = idxCash >= 0 ? parseMoney(r[idxCash]) ?? 0 : 0
+              const momo = idxMomo >= 0 ? parseMoney(r[idxMomo]) ?? 0 : 0
+              const paystack = idxPaystack >= 0 ? parseMoney(r[idxPaystack]) ?? 0 : 0
+              const totalCollected =
+                idxTotalCollected >= 0
+                  ? parseMoney(r[idxTotalCollected]) ?? 0
+                  : Math.max(0, cash + momo + paystack)
+
+              const orderNo = idxOrderNo >= 0 ? String(r[idxOrderNo] ?? '').trim() : ''
+              const payMethod = idxPaymentMethod >= 0 ? String(r[idxPaymentMethod] ?? '').trim() : ''
+              const statusRaw = idxDeliveryStatus >= 0 ? String(r[idxDeliveryStatus] ?? '').trim() : ''
+              const remarksRaw = idxRemarks >= 0 ? String(r[idxRemarks] ?? '').trim() : ''
+              const additionalRaw = idxAdditional >= 0 ? String(r[idxAdditional] ?? '').trim() : ''
+
+              const isReturned = isReturnedish(statusRaw) || isReturnedish(remarksRaw) || isReturnedish(additionalRaw)
+
+              const dateCell = idxDate >= 0 ? r[idxDate] : undefined
+              const dtIso = parseOrderDateCell(dateCell, sheetYear)
+              const dt =
+                dtIso && !Number.isNaN(new Date(dtIso).getTime()) ? new Date(dtIso) : undefined
+
+              const existing = groups.get(key)
+              if (!existing) {
+                groups.set(key, {
+                  customer,
+                  phone,
+                  location: loc || undefined,
+                  riderAssigned: rider || undefined,
+                  orders: 1,
+                  billed,
+                  collected: totalCollected,
+                  cash,
+                  momo,
+                  paystack,
+                  returnedCount: isReturned ? 1 : 0,
+                  firstAt: dt ?? undefined,
+                  lastAt: dt ?? undefined,
+                  remarks:
+                    [
+                      orderNo ? `Order ${orderNo}` : '',
+                      payMethod ? `Pay: ${payMethod}` : '',
+                      statusRaw ? `Status: ${statusRaw}` : '',
+                      remarksRaw,
+                      additionalRaw,
+                    ]
+                      .map((x) => String(x ?? '').trim())
+                      .filter(Boolean)
+                      .join(' · ') || undefined,
+                })
+                continue
+              }
+
+              existing.orders += 1
+              existing.billed += billed
+              existing.collected += totalCollected
+              existing.cash += cash
+              existing.momo += momo
+              existing.paystack += paystack
+              if (isReturned) existing.returnedCount += 1
+              if (loc) existing.location = loc
+              if (rider) existing.riderAssigned = rider
+              const combinedRemarks = [existing.remarks ?? '', remarksRaw, additionalRaw]
+                .map((x) => String(x ?? '').trim())
+                .filter(Boolean)
+              existing.remarks =
+                combinedRemarks.length > 0
+                  ? Array.from(new Set(combinedRemarks)).slice(0, 12).join(' · ')
+                  : undefined
+              if (dt) {
+                if (!existing.firstAt || dt.getTime() < existing.firstAt.getTime()) existing.firstAt = dt
+                if (!existing.lastAt || dt.getTime() > existing.lastAt.getTime()) existing.lastAt = dt
+              }
+            }
+
+            return Array.from(groups.values()).map((g) => {
+              const row: ImportRow = {
+                customer: g.customer,
+                phone: g.phone || undefined,
+                location: g.location,
+                riderAssigned: g.riderAssigned,
+                amountToBeCollectedGhs: g.billed,
+                acCashCollectedGhs: g.cash,
+                acMomoGhs: g.momo,
+                acPaystackGhs: g.paystack,
+                remarks: g.remarks,
+                importTotalOrders: g.orders,
+                importTotalBilledGhs: g.billed,
+                importTotalCollectedGhs: g.collected,
+                importReturnedCount: g.returnedCount,
+                importFirstOrderAt: g.firstAt,
+                importLastOrderAt: g.lastAt,
+              }
+              return row
+            })
+          })()
+        : []
+
+    if (rowsFromOrderLedger.length > 0) {
+      rows = rowsFromOrderLedger
+      replaceIntelFields = true
+      const data = aoa.slice(orderHeaderRowIdx + 1)
+      parseStats = {
+        dataRowsInRange: data.length,
+        rowsImported: rows.length,
+        droppedEmptyCustomer: Math.max(0, data.length - rows.length),
+      }
+    }
+
     const headerRowIdx = aoa.findIndex((row) => {
       const cells = row.map((c) => normalizeHeader(c))
       return cells.includes('name') && (cells.includes('number') || cells.includes('phone'))
