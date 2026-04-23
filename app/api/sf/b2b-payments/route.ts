@@ -62,13 +62,27 @@ export async function GET(request: Request) {
   const now = new Date()
   const periodDays = parsePeriodDays(new URL(request.url))
 
+  // Ensure invoiceAt always mirrors dueAt (backfill older/mismatched rows).
+  // Best-effort: if this fails, we still return data (serialization also falls back).
+  try {
+    await db.collection('sf_b2b_invoices').updateMany(
+      {
+        dueAt: { $type: 'date' },
+        $or: [{ invoiceAt: { $exists: false } }, { $expr: { $ne: ['$invoiceAt', '$dueAt'] } }],
+      },
+      [{ $set: { invoiceAt: '$dueAt' } }],
+    )
+  } catch {
+    // ignore
+  }
+
   const rowsAll = await listSfB2bInvoices(db)
   const rows =
     periodDays <= 0
       ? rowsAll
       : rowsAll.filter((r) => {
-          // Date filter uses *due dates* (not invoiceAt/paidAt/createdAt).
-          const d = r.dueAt
+          // Date filter uses *invoice dates*.
+          const d = r.invoiceAt ?? r.dueAt
           if (!d || Number.isNaN(d.getTime())) return false
           const since = subDays(now, periodDays)
           return d >= since && d <= now
@@ -104,17 +118,19 @@ export async function POST(request: Request) {
 
   const d = parsed.data
   const { db } = getMongo()
+  const effectiveDate = d.dueAt ?? (d.invoiceAt ? new Date(d.invoiceAt) : undefined)
   const doc = await createSfB2bInvoice(db, {
     outletName: d.outletName,
     invoiceNumber: d.invoiceNumber,
-    invoiceAt: d.invoiceAt ? new Date(d.invoiceAt) : undefined,
+    // Invoice date mirrors due date (keep them identical).
+    invoiceAt: effectiveDate,
     amountGhs: d.amountGhs,
     discountGhs: d.discountGhs,
     paidGhs: d.paidGhs ?? 0,
     paidAt: d.paidAt ? new Date(d.paidAt) : undefined,
     paymentMethod: d.paymentMethod,
     items: d.items,
-    dueAt: d.dueAt,
+    dueAt: effectiveDate,
     repName: d.repName,
     notes: d.notes,
   })

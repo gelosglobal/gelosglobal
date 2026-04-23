@@ -1,5 +1,6 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
 import {
+  computeSfTargetsMtdSummary,
   computeSfTargetsWithActuals,
   createSfTarget,
   SF_TARGETS_COLLECTION,
@@ -45,8 +46,11 @@ export async function GET(request: Request) {
   }
 
   const { db } = getMongo()
-  const rows = await computeSfTargetsWithActuals(db, month)
-  return NextResponse.json({ month, items: rows })
+  const [rows, mtd] = await Promise.all([
+    computeSfTargetsWithActuals(db, month),
+    computeSfTargetsMtdSummary(db, month),
+  ])
+  return NextResponse.json({ month, items: rows, mtd })
 }
 
 export async function POST(request: Request) {

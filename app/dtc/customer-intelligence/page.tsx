@@ -1,5 +1,5 @@
-import { CustomerIntelligenceView } from '@/components/dtc/customer-intelligence-view'
+import { OrdersEngineView } from '@/components/dtc/orders-engine-view'
 
 export default function CustomerIntelligencePage() {
-  return <CustomerIntelligenceView />
+  return <OrdersEngineView mode="customer-intelligence" />
 }

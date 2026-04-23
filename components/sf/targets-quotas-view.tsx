@@ -72,6 +72,7 @@ export function TargetsQuotasView() {
   const [month, setMonth] = useState(() => monthKeyForDate(new Date()))
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState<TargetRow[]>([])
+  const [mtd, setMtd] = useState<{ completedVisits: number; sellInGhs: number; shopsWon: number } | null>(null)
   const [query, setQuery] = useState('')
   const [regionFilter, setRegionFilter] = useState<string>('all')
 
@@ -107,11 +108,17 @@ export function TargetsQuotasView() {
         return
       }
       if (!res.ok) throw new Error('Failed to load')
-      const data = (await res.json()) as { month: string; items: TargetRow[] }
-      setItems(data.items)
+      const data = (await res.json()) as {
+        month: string
+        items: TargetRow[]
+        mtd?: { completedVisits: number; sellInGhs: number; shopsWon: number }
+      }
+      setItems(Array.isArray(data.items) ? data.items : [])
+      setMtd(data.mtd ?? null)
     } catch {
       toast.error('Could not load targets & quotas')
       setItems([])
+      setMtd(null)
     } finally {
       setLoading(false)
     }
@@ -161,6 +168,14 @@ export function TargetsQuotasView() {
       if ((r.visitsAttainmentPct ?? 0) >= 100) above100Visits += 1
       if ((r.sellInAttainmentPct ?? 0) >= 100) above100SellIn += 1
     }
+
+    // Cards should reflect the real Shop Visits / Outlet Scouting MTD totals (not only targeted reps).
+    if (mtd) {
+      actualVisits = mtd.completedVisits
+      actualSellIn = mtd.sellInGhs
+      newShops = mtd.shopsWon
+    }
+
     const visitsPct =
       targetVisits > 0 ? Math.min(999, Math.round((actualVisits / targetVisits) * 1000) / 10) : null
     const sellInPct =
@@ -179,7 +194,7 @@ export function TargetsQuotasView() {
       visitsPct,
       sellInPct,
     }
-  }, [items])
+  }, [items, mtd])
 
   async function submitCreate(e: React.FormEvent) {
     e.preventDefault()

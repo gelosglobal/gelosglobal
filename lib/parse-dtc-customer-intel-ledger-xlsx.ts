@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx'
 export type DtcLedgerImportRow = {
   orderedAt?: Date
   orderNumber?: string
+  itemsOrdered?: string
   customerName: string
   phoneNumber?: string
   location?: string
@@ -97,6 +98,7 @@ export function parseDtcCustomerIntelLedgerXlsxBuffer(
 
   const idxDate = find('date')
   const idxOrderNo = find('order #', 'order number', 'order no', 'order')
+  const idxItemsOrdered = find('items ordered', 'item ordered', 'items', 'item')
   const idxCustomer = find('customer name', 'customer')
   const idxPhone = find('phone number', 'phone')
   const idxLocation = find('location')
@@ -134,6 +136,7 @@ export function parseDtcCustomerIntelLedgerXlsxBuffer(
     const orderedAt =
       orderedAtIso && !Number.isNaN(new Date(orderedAtIso).getTime()) ? new Date(orderedAtIso) : undefined
     const orderNumber = idxOrderNo >= 0 ? String(r[idxOrderNo] ?? '').trim() : ''
+    const itemsOrdered = idxItemsOrdered >= 0 ? String(r[idxItemsOrdered] ?? '').trim() : ''
     const phoneNumber = idxPhone >= 0 ? String(r[idxPhone] ?? '').trim() : ''
     const location = idxLocation >= 0 ? String(r[idxLocation] ?? '').trim() : ''
     const riderAssigned = idxRider >= 0 ? String(r[idxRider] ?? '').trim() : ''
@@ -155,6 +158,7 @@ export function parseDtcCustomerIntelLedgerXlsxBuffer(
     rows.push({
       orderedAt,
       orderNumber: orderNumber || undefined,
+      itemsOrdered: itemsOrdered || undefined,
       customerName,
       phoneNumber: phoneNumber || undefined,
       location: location || undefined,

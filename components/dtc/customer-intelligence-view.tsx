@@ -15,6 +15,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from '@/components/ui/dialog'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
@@ -36,6 +37,7 @@ import {
 } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import { formatGhs } from '@/lib/dtc-orders'
+import { DtcOrderCustomerField, type DtcOrderCustomerSearchHit } from '@/components/dtc/dtc-order-customer-field'
 
 export type CustomerSegment = 'High LTV' | 'At risk' | 'New (30d)' | 'Core'
 
@@ -46,6 +48,7 @@ export type CustomerIntelLedgerRow = {
   id: string
   orderedAt: string | null
   orderNumber: string
+  itemsOrdered: string
   customerName: string
   phoneNumber: string
   location: string
@@ -59,6 +62,19 @@ export type CustomerIntelLedgerRow = {
   deliveryStatus: string
   remarks: string
   additionalRemarks: string
+}
+
+type OrdersEngineOrderRow = {
+  id: string
+  orderNumber: string
+  customer: string
+  customerPhone?: string
+  customerLocation?: string
+  paymentMethod?: string
+  items?: Array<{ name: string; qty: number }>
+  totalAmount?: number
+  status?: string
+  orderedAt?: string
 }
 
 /** Matches GET `/api/dtc/customers` — same field names as the on-page table headers. */
@@ -99,7 +115,40 @@ function fmtTableDate(s: string): string {
   }
 }
 
-export function CustomerIntelligenceView() {
+export function CustomerIntelligenceView({
+  mode = 'customer-intelligence',
+}: {
+  mode?: 'orders-engine' | 'customer-intelligence'
+} = {}) {
+  type DraftItem = { sku: string; name: string; qty: string; unitPrice: string }
+  const parseItemsOrderedToDraftItems = (s: string): DraftItem[] => {
+    const raw = String(s ?? '').trim()
+    if (!raw) return [{ sku: '', name: '', qty: '1', unitPrice: '' }]
+    const parts = raw
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean)
+    const items = parts.map((p) => {
+      const m = p.match(/^(.*?)(?:\s*x\s*(\d+))?$/i)
+      const name = String(m?.[1] ?? p).trim()
+      const qty = String(m?.[2] ?? '1').trim()
+      return { sku: '', name, qty: qty || '1', unitPrice: '' }
+    })
+    return items.length ? items : [{ sku: '', name: '', qty: '1', unitPrice: '' }]
+  }
+
+  const draftItemsToItemsOrdered = (items: DraftItem[]) =>
+    items
+      .map((it) => {
+        const n = it.name.trim()
+        if (!n) return ''
+        const q = Number.parseInt(it.qty, 10)
+        const qty = Number.isFinite(q) && q > 1 ? ` x${q}` : ''
+        return `${n}${qty}`
+      })
+      .filter(Boolean)
+      .join(', ')
+
   const [loading, setLoading] = useState(true)
   const [customers, setCustomers] = useState<CustomerRow[]>([])
   const [ledgerRows, setLedgerRows] = useState<CustomerIntelLedgerRow[]>([])
@@ -115,6 +164,31 @@ export function CustomerIntelligenceView() {
   const [editForm, setEditForm] = useState({
     date: '',
     orderNumber: '',
+    itemsOrdered: '',
+    customerName: '',
+    phoneNumber: '',
+    location: '',
+    riderAssigned: '',
+    amountToCollectGhs: '',
+    cashCollectedGhs: '',
+    momoCollectedGhs: '',
+    paystackCollectedGhs: '',
+    totalCollectedGhs: '',
+    paymentMethod: '',
+    deliveryStatus: '',
+    remarks: '',
+    additionalRemarks: '',
+    items: [{ sku: '', name: '', qty: '1', unitPrice: '' } satisfies DraftItem],
+  })
+  const [createOpen, setCreateOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [newOrderOpen, setNewOrderOpen] = useState(false)
+  const [newOrderSubmitting, setNewOrderSubmitting] = useState(false)
+  const [sortBy, setSortBy] = useState<CustomerSortKey>('date')
+  const [createForm, setCreateForm] = useState({
+    date: '',
+    orderNumber: '',
+    itemsOrdered: '',
     customerName: '',
     phoneNumber: '',
     location: '',
@@ -129,31 +203,135 @@ export function CustomerIntelligenceView() {
     remarks: '',
     additionalRemarks: '',
   })
-  const [createOpen, setCreateOpen] = useState(false)
-  const [creating, setCreating] = useState(false)
-  const [sortBy, setSortBy] = useState<CustomerSortKey>('date')
-  const [createForm, setCreateForm] = useState({
-    customer: '',
-    phone: '',
+
+  const [newOrderForm, setNewOrderForm] = useState({
+    date: '',
+    orderNumber: '',
+    itemsOrdered: '',
+    customerName: '',
+    phoneNumber: '',
     location: '',
-    segment: 'Core' as CustomerSegment,
-    totalOrders: '',
-    totalBilled: '',
-    totalCollected: '',
-    returnedType: 'count' as 'count' | 'ghs',
-    returnedValue: '',
-    firstOrderDate: '',
-    lastOrderDate: '',
+    riderAssigned: '',
+    amountToCollectGhs: '',
+    cashCollectedGhs: '',
+    momoCollectedGhs: '',
+    paystackCollectedGhs: '',
+    totalCollectedGhs: '',
+    paymentMethod: '',
+    deliveryStatus: '',
+    remarks: '',
+    additionalRemarks: '',
+    items: [{ sku: '', name: '', qty: '1', unitPrice: '' } satisfies DraftItem],
   })
+
+  function customerSearchToFormFields(hit: DtcOrderCustomerSearchHit) {
+    return {
+      customerName: hit.customerName,
+      phoneNumber: hit.phoneNumber,
+      location: hit.location,
+    }
+  }
+
+  async function submitNewOrder(e: React.FormEvent) {
+    e.preventDefault()
+    const name = newOrderForm.customerName.trim()
+    if (!name) {
+      toast.error('Enter a customer name')
+      return
+    }
+    const computedItemsOrdered = newOrderForm.items
+      .map((it) => {
+        const n = it.name.trim()
+        if (!n) return ''
+        const q = Number.parseInt(it.qty, 10)
+        const qty = Number.isFinite(q) && q > 1 ? ` x${q}` : ''
+        return `${n}${qty}`
+      })
+      .filter(Boolean)
+      .join(', ')
+    const computedSubtotal = newOrderForm.items.reduce((sum, it) => {
+      const q = Number.parseInt(it.qty, 10)
+      const u = Number.parseFloat(it.unitPrice)
+      if (!Number.isFinite(q) || q <= 0) return sum
+      if (!Number.isFinite(u) || u < 0) return sum
+      return sum + q * u
+    }, 0)
+
+    setNewOrderSubmitting(true)
+    try {
+      const res = await fetch('/api/dtc/customer-intelligence', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: newOrderForm.date.trim() || undefined,
+          orderNumber: newOrderForm.orderNumber.trim() || undefined,
+          itemsOrdered: computedItemsOrdered || undefined,
+          customerName: name,
+          phoneNumber: newOrderForm.phoneNumber.trim() || undefined,
+          location: newOrderForm.location.trim() || undefined,
+          riderAssigned: newOrderForm.riderAssigned.trim() || undefined,
+          amountToCollectGhs:
+            newOrderForm.amountToCollectGhs.trim() === ''
+              ? computedSubtotal
+              : Number(newOrderForm.amountToCollectGhs),
+          cashCollectedGhs: newOrderForm.cashCollectedGhs.trim() === '' ? 0 : Number(newOrderForm.cashCollectedGhs),
+          momoCollectedGhs: newOrderForm.momoCollectedGhs.trim() === '' ? 0 : Number(newOrderForm.momoCollectedGhs),
+          paystackCollectedGhs: newOrderForm.paystackCollectedGhs.trim() === '' ? 0 : Number(newOrderForm.paystackCollectedGhs),
+          totalCollectedGhs: newOrderForm.totalCollectedGhs.trim() === '' ? 0 : Number(newOrderForm.totalCollectedGhs),
+          paymentMethod: newOrderForm.paymentMethod.trim() || undefined,
+          deliveryStatus: newOrderForm.deliveryStatus.trim() || undefined,
+          remarks: newOrderForm.remarks.trim() || undefined,
+          additionalRemarks: newOrderForm.additionalRemarks.trim() || undefined,
+        }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired')
+        return
+      }
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'Could not add order')
+      toast.success('Order added')
+      setNewOrderOpen(false)
+      setNewOrderForm({
+        date: '',
+        orderNumber: '',
+        itemsOrdered: '',
+        customerName: '',
+        phoneNumber: '',
+        location: '',
+        riderAssigned: '',
+        amountToCollectGhs: '',
+        cashCollectedGhs: '',
+        momoCollectedGhs: '',
+        paystackCollectedGhs: '',
+        totalCollectedGhs: '',
+        paymentMethod: '',
+        deliveryStatus: '',
+        remarks: '',
+        additionalRemarks: '',
+        items: [{ sku: '', name: '', qty: '1', unitPrice: '' }],
+      })
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to add order')
+    } finally {
+      setNewOrderSubmitting(false)
+    }
+  }
 
   async function load() {
     setLoading(true)
     try {
-      const [ledgerRes, customersRes] = await Promise.all([
+      const [ledgerRes, customersRes, ordersRes] = await Promise.all([
         fetch('/api/dtc/customer-intelligence', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/dtc/customers', { credentials: 'include', cache: 'no-store' }),
+        // Include legacy Orders Engine orders (saved in dtc_orders) so searches match what you see elsewhere.
+        mode === 'orders-engine'
+          ? fetch('/api/dtc/orders', { credentials: 'include', cache: 'no-store' })
+          : Promise.resolve(null as any),
       ])
-      if (ledgerRes.status === 401 || customersRes.status === 401) {
+      if (ledgerRes.status === 401 || customersRes.status === 401 || ordersRes?.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
       }
@@ -164,7 +342,61 @@ export function CustomerIntelligenceView() {
         customers: CustomerRow[]
         segments: SegmentCounts
       }
-      setLedgerRows(Array.isArray(ledgerJson.rows) ? ledgerJson.rows : [])
+      const baseRows = Array.isArray(ledgerJson.rows) ? ledgerJson.rows : []
+
+      // Merge in /api/dtc/orders (created earlier when this page was the Orders Engine).
+      // These are shown as additional rows (deduped by orderNumber).
+      let merged = baseRows
+      if (mode === 'orders-engine' && ordersRes && ordersRes.ok) {
+        try {
+          const ordersJson = (await ordersRes.json()) as { orders?: OrdersEngineOrderRow[] }
+          const orders = Array.isArray(ordersJson.orders) ? ordersJson.orders : []
+          const toItemsOrdered = (items: OrdersEngineOrderRow['items']) =>
+            (items ?? [])
+              .map((it) => {
+                const n = String(it?.name ?? '').trim()
+                const q = Number(it?.qty ?? 0)
+                if (!n) return ''
+                return q > 1 ? `${n} x${q}` : n
+              })
+              .filter(Boolean)
+              .join(', ')
+
+          const fromOrders: CustomerIntelLedgerRow[] = orders.map((o) => ({
+            id: `order:${o.id}`,
+            orderedAt: o.orderedAt ?? null,
+            orderNumber: o.orderNumber ?? '',
+            itemsOrdered: toItemsOrdered(o.items),
+            customerName: o.customer ?? '',
+            phoneNumber: String(o.customerPhone ?? ''),
+            location: String(o.customerLocation ?? ''),
+            riderAssigned: '',
+            amountToCollectGhs: Number(o.totalAmount ?? 0) || 0,
+            cashCollectedGhs: 0,
+            momoCollectedGhs: 0,
+            paystackCollectedGhs: 0,
+            totalCollectedGhs: Number(o.totalAmount ?? 0) || 0,
+            paymentMethod: String(o.paymentMethod ?? ''),
+            deliveryStatus: String(o.status ?? ''),
+            remarks: '',
+            additionalRemarks: '',
+          }))
+
+          const seen = new Set(baseRows.map((r) => (r.orderNumber ?? '').trim()).filter(Boolean))
+          const add = fromOrders.filter((r) => {
+            const k = (r.orderNumber ?? '').trim()
+            if (!k) return true
+            if (seen.has(k)) return false
+            seen.add(k)
+            return true
+          })
+          merged = [...baseRows, ...add]
+        } catch {
+          merged = baseRows
+        }
+      }
+
+      setLedgerRows(merged)
       setCustomers(customersJson.customers)
       setSegments(customersJson.segments)
     } catch {
@@ -234,6 +466,37 @@ export function CustomerIntelligenceView() {
     const avgTotalBilled = totalCustomers === 0 ? 0 : totalBilled / totalCustomers
     return { totalCustomers, totalOrders, totalBilled, avgTotalBilled }
   }, [customers, ledgerRows])
+
+  const ordersEngineCards = useMemo(() => {
+    const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
+    const uniqueCustomerKeys = new Set(
+      ledgerRows.map((r) => {
+        const p = normalizePhone(r.phoneNumber ?? '')
+        return p ? `p:${p}` : `n:${String(r.customerName ?? '').trim().toLowerCase()}`
+      }),
+    )
+    const totalOrders = ledgerRows.length
+    const totalBilled = ledgerRows.reduce((s, r) => s + (Number(r.amountToCollectGhs ?? 0) || 0), 0)
+    const totalCollected = ledgerRows.reduce((s, r) => s + (Number(r.totalCollectedGhs ?? 0) || 0), 0)
+    const isReturnedish = (s: string) => {
+      const t = s.trim().toLowerCase()
+      return t.includes('returned') || t.includes('return')
+    }
+    const returnedCount = ledgerRows.reduce((s, r) => {
+      const hit =
+        isReturnedish(String(r.deliveryStatus ?? '')) ||
+        isReturnedish(String(r.remarks ?? '')) ||
+        isReturnedish(String(r.additionalRemarks ?? ''))
+      return s + (hit ? 1 : 0)
+    }, 0)
+    return {
+      uniqueCustomers: uniqueCustomerKeys.size,
+      totalOrders,
+      totalBilled,
+      totalCollected,
+      returnedCount,
+    }
+  }, [ledgerRows])
 
   function handleExport() {
     if (ledgerRows.length === 0) {
@@ -402,59 +665,66 @@ export function CustomerIntelligenceView() {
 
   async function handleCreateCustomer(e: React.FormEvent) {
     e.preventDefault()
-    const name = createForm.customer.trim()
+    const name = createForm.customerName.trim()
     if (!name) {
       toast.error('Enter a customer name')
       return
     }
+
     setCreating(true)
     try {
-      const res = await fetch('/api/dtc/customers', {
+      const res = await fetch('/api/dtc/customer-intelligence', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          customer: name,
-          phone: createForm.phone.trim() || undefined,
+          date: createForm.date.trim() || undefined,
+          orderNumber: createForm.orderNumber.trim() || undefined,
+          itemsOrdered: createForm.itemsOrdered.trim() || undefined,
+          customerName: name,
+          phoneNumber: createForm.phoneNumber.trim() || undefined,
           location: createForm.location.trim() || undefined,
-          segment: createForm.segment,
-          totalOrders: createForm.totalOrders.trim() === '' ? undefined : Number(createForm.totalOrders),
-          totalBilledGhs: createForm.totalBilled.trim() === '' ? undefined : Number(createForm.totalBilled),
-          totalCollectedGhs:
-            createForm.totalCollected.trim() === '' ? undefined : Number(createForm.totalCollected),
-          returnedType: createForm.returnedType,
-          returned:
-            createForm.returnedValue.trim() === '' ? undefined : Number(createForm.returnedValue),
-          firstOrderDate: createForm.firstOrderDate.trim() || undefined,
-          lastOrderDate: createForm.lastOrderDate.trim() || undefined,
+          riderAssigned: createForm.riderAssigned.trim() || undefined,
+          amountToCollectGhs: createForm.amountToCollectGhs.trim() === '' ? 0 : Number(createForm.amountToCollectGhs),
+          cashCollectedGhs: createForm.cashCollectedGhs.trim() === '' ? 0 : Number(createForm.cashCollectedGhs),
+          momoCollectedGhs: createForm.momoCollectedGhs.trim() === '' ? 0 : Number(createForm.momoCollectedGhs),
+          paystackCollectedGhs: createForm.paystackCollectedGhs.trim() === '' ? 0 : Number(createForm.paystackCollectedGhs),
+          totalCollectedGhs: createForm.totalCollectedGhs.trim() === '' ? 0 : Number(createForm.totalCollectedGhs),
+          paymentMethod: createForm.paymentMethod.trim() || undefined,
+          deliveryStatus: createForm.deliveryStatus.trim() || undefined,
+          remarks: createForm.remarks.trim() || undefined,
+          additionalRemarks: createForm.additionalRemarks.trim() || undefined,
         }),
       })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
       }
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string }
-        throw new Error(err.error ?? 'Could not create customer')
-      }
-      toast.success('Customer added')
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'Could not add row')
+      toast.success('Row added')
       setCreateOpen(false)
       setCreateForm({
-        customer: '',
-        phone: '',
+        date: '',
+        orderNumber: '',
+        itemsOrdered: '',
+        customerName: '',
+        phoneNumber: '',
         location: '',
-        segment: 'Core',
-        totalOrders: '',
-        totalBilled: '',
-        totalCollected: '',
-        returnedType: 'count',
-        returnedValue: '',
-        firstOrderDate: '',
-        lastOrderDate: '',
+        riderAssigned: '',
+        amountToCollectGhs: '',
+        cashCollectedGhs: '',
+        momoCollectedGhs: '',
+        paystackCollectedGhs: '',
+        totalCollectedGhs: '',
+        paymentMethod: '',
+        deliveryStatus: '',
+        remarks: '',
+        additionalRemarks: '',
       })
       await load()
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add customer')
+      toast.error(err instanceof Error ? err.message : 'Failed to add row')
     } finally {
       setCreating(false)
     }
@@ -465,6 +735,7 @@ export function CustomerIntelligenceView() {
     setEditForm({
       date: r.orderedAt ? r.orderedAt.slice(0, 10) : '',
       orderNumber: r.orderNumber ?? '',
+      itemsOrdered: r.itemsOrdered ?? '',
       customerName: r.customerName ?? '',
       phoneNumber: r.phoneNumber ?? '',
       location: r.location ?? '',
@@ -478,6 +749,7 @@ export function CustomerIntelligenceView() {
       deliveryStatus: r.deliveryStatus ?? '',
       remarks: r.remarks ?? '',
       additionalRemarks: r.additionalRemarks ?? '',
+      items: parseItemsOrderedToDraftItems(r.itemsOrdered ?? ''),
     })
     setEditOpen(true)
   }
@@ -492,6 +764,7 @@ export function CustomerIntelligenceView() {
     }
     setEditingRow(true)
     try {
+      const computedItemsOrdered = draftItemsToItemsOrdered(editForm.items)
       const res = await fetch(`/api/dtc/customer-intelligence/${editRow.id}`, {
         method: 'PATCH',
         credentials: 'include',
@@ -499,6 +772,7 @@ export function CustomerIntelligenceView() {
         body: JSON.stringify({
           date: editForm.date.trim() || undefined,
           orderNumber: editForm.orderNumber.trim() || undefined,
+          itemsOrdered: (editForm.itemsOrdered.trim() || computedItemsOrdered || undefined),
           customerName: name,
           phoneNumber: editForm.phoneNumber.trim() || undefined,
           location: editForm.location.trim() || undefined,
@@ -541,19 +815,249 @@ export function CustomerIntelligenceView() {
   return (
     <div className="flex min-h-0 flex-col">
       <DtcPageHeader
-        title="Customer Intelligence"
-        description="Customer list with totals from your sheet and from sell-out orders. Columns include name, phone, orders, billed, collected, location, returns, and first/last order dates."
+        title={mode === 'orders-engine' ? 'Orders Engine' : 'Customer Intelligence'}
+        description={
+          mode === 'orders-engine'
+            ? 'Add and manage sell-out orders using the Customer Intelligence headers (one row = one order).'
+            : 'Customer list with totals from your sheet and from sell-out orders. Columns include name, phone, orders, billed, collected, location, returns, and first/last order dates.'
+        }
         actions={
           <>
-            <Button
-              size="sm"
-              className="gap-1.5"
-              type="button"
-              onClick={() => setCreateOpen(true)}
-            >
-              <Plus className="h-4 w-4" />
-              Add customer
-            </Button>
+            {mode === 'orders-engine' ? (
+              <Dialog open={newOrderOpen} onOpenChange={setNewOrderOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" className="gap-1.5" type="button">
+                    <Plus className="h-4 w-4" />
+                    Add order
+                  </Button>
+                </DialogTrigger>
+              <DialogContent className="!flex min-h-0 max-h-[90vh] flex-col overflow-hidden p-0 sm:max-w-3xl">
+                <form onSubmit={submitNewOrder} className="flex min-h-0 flex-1 flex-col">
+                  <DialogHeader className="shrink-0 space-y-2 border-b border-border px-6 pt-6 pb-4 pr-12 text-left">
+                    <DialogTitle>Add order</DialogTitle>
+                    <DialogDescription>Add an order row using the Customer Intelligence headers.</DialogDescription>
+                  </DialogHeader>
+                  <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+                    <div className="grid gap-4">
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-date">Date</Label>
+                          <Input id="oe-add-date" type="date" value={newOrderForm.date} onChange={(e) => setNewOrderForm((f) => ({ ...f, date: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-orderno">Order #</Label>
+                          <Input id="oe-add-orderno" value={newOrderForm.orderNumber} onChange={(e) => setNewOrderForm((f) => ({ ...f, orderNumber: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="oe-add-customer">Customer Name</Label>
+                          <DtcOrderCustomerField
+                            id="oe-add-customer"
+                            value={newOrderForm.customerName}
+                            onChange={(customerName) => setNewOrderForm((f) => ({ ...f, customerName }))}
+                            onPickCustomer={(hit) => setNewOrderForm((f) => ({ ...f, ...customerSearchToFormFields(hit) }))}
+                            required
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-phone">Phone Number</Label>
+                          <Input id="oe-add-phone" value={newOrderForm.phoneNumber} onChange={(e) => setNewOrderForm((f) => ({ ...f, phoneNumber: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-location">Location</Label>
+                          <Input id="oe-add-location" value={newOrderForm.location} onChange={(e) => setNewOrderForm((f) => ({ ...f, location: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-rider">Rider Assigned</Label>
+                          <Input id="oe-add-rider" value={newOrderForm.riderAssigned} onChange={(e) => setNewOrderForm((f) => ({ ...f, riderAssigned: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-amt">Amount to Collect (GHC)</Label>
+                          <Input id="oe-add-amt" type="number" min={0} step="0.01" value={newOrderForm.amountToCollectGhs} onChange={(e) => setNewOrderForm((f) => ({ ...f, amountToCollectGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-cash">Cash Collected (GHC)</Label>
+                          <Input id="oe-add-cash" type="number" min={0} step="0.01" value={newOrderForm.cashCollectedGhs} onChange={(e) => setNewOrderForm((f) => ({ ...f, cashCollectedGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-momo">MoMo Collected (GHC)</Label>
+                          <Input id="oe-add-momo" type="number" min={0} step="0.01" value={newOrderForm.momoCollectedGhs} onChange={(e) => setNewOrderForm((f) => ({ ...f, momoCollectedGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-paystack">Paystack Collected (GHC)</Label>
+                          <Input id="oe-add-paystack" type="number" min={0} step="0.01" value={newOrderForm.paystackCollectedGhs} onChange={(e) => setNewOrderForm((f) => ({ ...f, paystackCollectedGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="oe-add-total">Total Collected (GHC)</Label>
+                          <Input id="oe-add-total" type="number" min={0} step="0.01" value={newOrderForm.totalCollectedGhs} onChange={(e) => setNewOrderForm((f) => ({ ...f, totalCollectedGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-paymethod">Payment Method</Label>
+                          <Input id="oe-add-paymethod" value={newOrderForm.paymentMethod} onChange={(e) => setNewOrderForm((f) => ({ ...f, paymentMethod: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-add-status">Delivery Status</Label>
+                          <Input id="oe-add-status" value={newOrderForm.deliveryStatus} onChange={(e) => setNewOrderForm((f) => ({ ...f, deliveryStatus: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="oe-add-remarks">Remarks</Label>
+                          <Input id="oe-add-remarks" value={newOrderForm.remarks} onChange={(e) => setNewOrderForm((f) => ({ ...f, remarks: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="oe-add-additional">Additional Remarks</Label>
+                          <Input id="oe-add-additional" value={newOrderForm.additionalRemarks} onChange={(e) => setNewOrderForm((f) => ({ ...f, additionalRemarks: e.target.value }))} />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <Label>Order items</Label>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setNewOrderForm((f) => ({
+                                ...f,
+                                items: [...f.items, { sku: '', name: '', qty: '1', unitPrice: '' }],
+                              }))
+                            }
+                          >
+                            Add item
+                          </Button>
+                        </div>
+                        <div className="space-y-3">
+                          {newOrderForm.items.map((it, idx) => (
+                            <div key={idx} className="rounded-lg border border-border p-3">
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="space-y-2">
+                                  <Label htmlFor={`oe-item-name-${idx}`}>Item name</Label>
+                                  <Input
+                                    id={`oe-item-name-${idx}`}
+                                    value={it.name}
+                                    onChange={(e) =>
+                                      setNewOrderForm((f) => {
+                                        const items = [...f.items]
+                                        items[idx] = { ...items[idx], name: e.target.value }
+                                        return { ...f, items }
+                                      })
+                                    }
+                                    placeholder="Gelos Charcoal Toothpaste"
+                                    required={idx === 0}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor={`oe-item-sku-${idx}`}>SKU (optional)</Label>
+                                  <Input
+                                    id={`oe-item-sku-${idx}`}
+                                    value={it.sku}
+                                    onChange={(e) =>
+                                      setNewOrderForm((f) => {
+                                        const items = [...f.items]
+                                        items[idx] = { ...items[idx], sku: e.target.value }
+                                        return { ...f, items }
+                                      })
+                                    }
+                                    placeholder="GLO-CHAR-100"
+                                  />
+                                </div>
+                              </div>
+                              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                                <div className="space-y-2">
+                                  <Label htmlFor={`oe-item-qty-${idx}`}>Qty</Label>
+                                  <Input
+                                    id={`oe-item-qty-${idx}`}
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={1}
+                                    step={1}
+                                    value={it.qty}
+                                    onChange={(e) =>
+                                      setNewOrderForm((f) => {
+                                        const items = [...f.items]
+                                        items[idx] = { ...items[idx], qty: e.target.value }
+                                        return { ...f, items }
+                                      })
+                                    }
+                                    required={idx === 0}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor={`oe-item-unit-${idx}`}>Unit price (GHS)</Label>
+                                  <Input
+                                    id={`oe-item-unit-${idx}`}
+                                    type="number"
+                                    inputMode="decimal"
+                                    min={0}
+                                    step="0.01"
+                                    value={it.unitPrice}
+                                    onChange={(e) =>
+                                      setNewOrderForm((f) => {
+                                        const items = [...f.items]
+                                        items[idx] = { ...items[idx], unitPrice: e.target.value }
+                                        return { ...f, items }
+                                      })
+                                    }
+                                  />
+                                </div>
+                                <div className="flex items-end justify-between gap-2">
+                                  <div className="text-sm text-muted-foreground">
+                                    <span className="block">Line total</span>
+                                    <span className="font-medium text-foreground">
+                                      {(() => {
+                                        const q = Number.parseInt(it.qty, 10)
+                                        const u = Number.parseFloat(it.unitPrice)
+                                        if (!Number.isFinite(q) || !Number.isFinite(u)) return '—'
+                                        return formatGhs(q * u)
+                                      })()}
+                                    </span>
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    onClick={() =>
+                                      setNewOrderForm((f) => ({
+                                        ...f,
+                                        items: f.items.filter((_, i2) => i2 !== idx),
+                                      }))
+                                    }
+                                    disabled={newOrderForm.items.length === 1}
+                                    aria-label="Remove item"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4">
+                    <Button type="button" variant="outline" onClick={() => setNewOrderOpen(false)}>Cancel</Button>
+                    <Button type="submit" disabled={newOrderSubmitting}>
+                      {newOrderSubmitting ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Saving…
+                        </>
+                      ) : (
+                        'Add order'
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+              </Dialog>
+            ) : null}
+
+            {mode === 'customer-intelligence' ? (
+              <Button size="sm" className="gap-1.5" type="button" onClick={() => setCreateOpen(true)}>
+                <Plus className="h-4 w-4" />
+                Add customer
+              </Button>
+            ) : null}
 
             <Button
               variant="outline"
@@ -582,44 +1086,87 @@ export function CustomerIntelligenceView() {
       />
 
       <div className="flex-1 space-y-6 p-4 sm:p-6">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Card className="p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Customers tracked
-            </p>
-            <p className="mt-2 text-2xl font-bold">
-              {loading ? '—' : totals.totalCustomers.toLocaleString()}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">Unique customer names</p>
-          </Card>
-          <Card className="p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Avg total billed
-            </p>
-            <p className="mt-2 text-2xl font-bold">
-              {loading ? '—' : formatGhs(totals.avgTotalBilled)}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">Per customer (sheet or orders)</p>
-          </Card>
-          <Card className="p-4 border-l-4 border-l-indigo-600">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              High billed
-            </p>
-            <p className="mt-2 text-2xl font-bold">
-              {loading ? '—' : segments?.highLtv ?? 0}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">Billed ≥ GHS 2,000 or 10+ orders</p>
-          </Card>
-          <Card className="p-4 border-l-4 border-l-red-600">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              At risk
-            </p>
-            <p className="mt-2 text-2xl font-bold">
-              {loading ? '—' : segments?.atRisk ?? 0}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">No order in 60+ days</p>
-          </Card>
-        </div>
+        {mode === 'orders-engine' ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Card className="border-l-4 border-l-teal-600 p-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Total orders
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums">
+                {loading ? '—' : ordersEngineCards.totalOrders.toLocaleString()}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {loading ? '—' : `${ordersEngineCards.uniqueCustomers.toLocaleString()} unique customers (by phone)`}
+              </p>
+            </Card>
+            <Card className="border-l-4 border-l-cyan-600 p-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Total billed
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums">
+                {loading ? '—' : formatGhs(ordersEngineCards.totalBilled)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Sum of Amount to Collect</p>
+            </Card>
+            <Card className="border-l-4 border-l-sky-600 p-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Total collected
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums">
+                {loading ? '—' : formatGhs(ordersEngineCards.totalCollected)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Sum of Total Collected</p>
+            </Card>
+            <Card className="border-l-4 border-l-slate-600 p-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Returned
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums">
+                {loading ? '—' : (ordersEngineCards.returnedCount ? ordersEngineCards.returnedCount.toLocaleString() : '—')}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Count of returned rows</p>
+            </Card>
+          </div>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Card className="p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Customers tracked
+              </p>
+              <p className="mt-2 text-2xl font-bold">
+                {loading ? '—' : totals.totalCustomers.toLocaleString()}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Unique customer names</p>
+            </Card>
+            <Card className="p-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Avg total billed
+              </p>
+              <p className="mt-2 text-2xl font-bold">
+                {loading ? '—' : formatGhs(totals.avgTotalBilled)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Per customer (sheet or orders)</p>
+            </Card>
+            <Card className="p-4 border-l-4 border-l-indigo-600">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                High billed
+              </p>
+              <p className="mt-2 text-2xl font-bold">
+                {loading ? '—' : segments?.highLtv ?? 0}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Billed ≥ GHS 2,000 or 10+ orders</p>
+            </Card>
+            <Card className="p-4 border-l-4 border-l-red-600">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                At risk
+              </p>
+              <p className="mt-2 text-2xl font-bold">
+                {loading ? '—' : segments?.atRisk ?? 0}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">No order in 60+ days</p>
+            </Card>
+          </div>
+        )}
 
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="max-w-md flex-1 space-y-2">
@@ -662,7 +1209,7 @@ export function CustomerIntelligenceView() {
           <div className="border-b border-border px-4 py-3 sm:px-6">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold uppercase tracking-wide">
-                Customer list
+                {mode === 'orders-engine' ? 'Orders list' : 'Customer list'}
               </h2>
               <Button
                 type="button"
@@ -713,6 +1260,7 @@ export function CustomerIntelligenceView() {
                   <TableHead className="min-w-[7rem] whitespace-nowrap">Phone Number</TableHead>
                   <TableHead className="min-w-[8rem] whitespace-nowrap">Location</TableHead>
                   <TableHead className="min-w-[8rem] whitespace-nowrap">Rider Assigned</TableHead>
+                  <TableHead className="min-w-[12rem] whitespace-nowrap">Items ordered</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Amount to Collect (GHC)</TableHead>
                   <TableHead className="text-right whitespace-nowrap">Cash Collected (GHC)</TableHead>
                   <TableHead className="text-right whitespace-nowrap">MoMo Collected (GHC)</TableHead>
@@ -747,6 +1295,9 @@ export function CustomerIntelligenceView() {
                       </TableCell>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
                         {c.riderAssigned || '—'}
+                      </TableCell>
+                      <TableCell className="max-w-[18rem] truncate text-muted-foreground" title={c.itemsOrdered}>
+                        {c.itemsOrdered || '—'}
                       </TableCell>
                       <TableCell className="text-right tabular-nums whitespace-nowrap">
                         {formatGhs(c.amountToCollectGhs)}
@@ -831,6 +1382,142 @@ export function CustomerIntelligenceView() {
                     value={editForm.orderNumber}
                     onChange={(e) => setEditForm((f) => ({ ...f, orderNumber: e.target.value }))}
                   />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="ci-edit-items">Items ordered</Label>
+                  <Input
+                    id="ci-edit-items"
+                    value={editForm.itemsOrdered}
+                    onChange={(e) => setEditForm((f) => ({ ...f, itemsOrdered: e.target.value }))}
+                    placeholder="e.g. Toothpaste, Mouthwash"
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label>Order items</Label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setEditForm((f) => ({
+                          ...f,
+                          items: [...f.items, { sku: '', name: '', qty: '1', unitPrice: '' }],
+                        }))
+                      }
+                    >
+                      Add item
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    If “Items ordered” is empty, we auto-fill it from these items.
+                  </p>
+                  <div className="space-y-3">
+                    {editForm.items.map((it, idx) => (
+                      <div key={idx} className="rounded-lg border border-border p-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label htmlFor={`ci-edit-item-name-${idx}`}>Item name</Label>
+                            <Input
+                              id={`ci-edit-item-name-${idx}`}
+                              value={it.name}
+                              onChange={(e) =>
+                                setEditForm((f) => {
+                                  const items = [...f.items]
+                                  items[idx] = { ...items[idx], name: e.target.value }
+                                  return { ...f, items }
+                                })
+                              }
+                              placeholder="Gelos Charcoal Toothpaste"
+                              required={idx === 0}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor={`ci-edit-item-sku-${idx}`}>SKU (optional)</Label>
+                            <Input
+                              id={`ci-edit-item-sku-${idx}`}
+                              value={it.sku}
+                              onChange={(e) =>
+                                setEditForm((f) => {
+                                  const items = [...f.items]
+                                  items[idx] = { ...items[idx], sku: e.target.value }
+                                  return { ...f, items }
+                                })
+                              }
+                              placeholder="GLO-CHAR-100"
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                          <div className="space-y-2">
+                            <Label htmlFor={`ci-edit-item-qty-${idx}`}>Qty</Label>
+                            <Input
+                              id={`ci-edit-item-qty-${idx}`}
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              step={1}
+                              value={it.qty}
+                              onChange={(e) =>
+                                setEditForm((f) => {
+                                  const items = [...f.items]
+                                  items[idx] = { ...items[idx], qty: e.target.value }
+                                  return { ...f, items }
+                                })
+                              }
+                              required={idx === 0}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor={`ci-edit-item-unit-${idx}`}>Unit price (GHS)</Label>
+                            <Input
+                              id={`ci-edit-item-unit-${idx}`}
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              step="0.01"
+                              value={it.unitPrice}
+                              onChange={(e) =>
+                                setEditForm((f) => {
+                                  const items = [...f.items]
+                                  items[idx] = { ...items[idx], unitPrice: e.target.value }
+                                  return { ...f, items }
+                                })
+                              }
+                            />
+                          </div>
+                          <div className="flex items-end justify-between gap-2">
+                            <div className="text-sm text-muted-foreground">
+                              <span className="block">Line total</span>
+                              <span className="font-medium text-foreground">
+                                {(() => {
+                                  const q = Number.parseInt(it.qty, 10)
+                                  const u = Number.parseFloat(it.unitPrice)
+                                  if (!Number.isFinite(q) || !Number.isFinite(u)) return '—'
+                                  return formatGhs(q * u)
+                                })()}
+                              </span>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={() =>
+                                setEditForm((f) => ({
+                                  ...f,
+                                  items: f.items.filter((_, i2) => i2 !== idx),
+                                }))
+                              }
+                              disabled={editForm.items.length === 1}
+                              aria-label="Remove item"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
                 <div className="space-y-2 sm:col-span-2">
                   <Label htmlFor="ci-edit-name">Customer Name</Label>
@@ -990,158 +1677,157 @@ export function CustomerIntelligenceView() {
             <DialogHeader>
               <DialogTitle>Add customer</DialogTitle>
               <DialogDescription>
-                Add a customer row to the intelligence list (same columns as the table).
+                Add a Customer Intelligence row (same columns and order as the table).
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="new-customer">Customer name</Label>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-create-date">Date</Label>
                   <Input
-                    id="new-customer"
-                    value={createForm.customer}
-                    onChange={(e) => setCreateForm((f) => ({ ...f, customer: e.target.value }))}
-                    placeholder="Elite Pharmacy"
-                    autoComplete="organization"
+                    id="ci-create-date"
+                    type="date"
+                    value={createForm.date}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, date: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-create-order">Order #</Label>
+                  <Input
+                    id="ci-create-order"
+                    value={createForm.orderNumber}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, orderNumber: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="ci-create-items">Items ordered</Label>
+                  <Input
+                    id="ci-create-items"
+                    value={createForm.itemsOrdered}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, itemsOrdered: e.target.value }))}
+                    placeholder="e.g. Toothpaste, Mouthwash"
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="ci-create-name">Customer Name</Label>
+                  <Input
+                    id="ci-create-name"
+                    value={createForm.customerName}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, customerName: e.target.value }))}
                     required
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="customer-phone">Phone</Label>
+                  <Label htmlFor="ci-create-phone">Phone Number</Label>
                   <Input
-                    id="customer-phone"
-                    value={createForm.phone}
-                    onChange={(e) => setCreateForm((f) => ({ ...f, phone: e.target.value }))}
-                    placeholder="+233 20 000 0000"
+                    id="ci-create-phone"
+                    value={createForm.phoneNumber}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, phoneNumber: e.target.value }))}
                     inputMode="tel"
-                    autoComplete="tel"
                   />
                 </div>
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="customer-location">Location</Label>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-create-location">Location</Label>
                   <Input
-                    id="customer-location"
+                    id="ci-create-location"
                     value={createForm.location}
                     onChange={(e) => setCreateForm((f) => ({ ...f, location: e.target.value }))}
-                    placeholder="Accra, Ghana"
-                    autoComplete="address-level2"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="ci-total-orders">Total orders</Label>
+                  <Label htmlFor="ci-create-rider">Rider Assigned</Label>
                   <Input
-                    id="ci-total-orders"
-                    type="number"
-                    inputMode="numeric"
-                    min={0}
-                    step={1}
-                    value={createForm.totalOrders}
-                    onChange={(e) => setCreateForm((f) => ({ ...f, totalOrders: e.target.value }))}
-                    placeholder="0"
+                    id="ci-create-rider"
+                    value={createForm.riderAssigned}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, riderAssigned: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="ci-total-billed">Total billed (GHS)</Label>
+                  <Label htmlFor="ci-create-amt">Amount to Collect (GHC)</Label>
                   <Input
-                    id="ci-total-billed"
+                    id="ci-create-amt"
                     type="number"
-                    inputMode="decimal"
                     min={0}
                     step="0.01"
-                    value={createForm.totalBilled}
-                    onChange={(e) => setCreateForm((f) => ({ ...f, totalBilled: e.target.value }))}
-                    placeholder="0.00"
+                    value={createForm.amountToCollectGhs}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, amountToCollectGhs: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="ci-total-collected">Total collected (GHS)</Label>
+                  <Label htmlFor="ci-create-cash">Cash Collected (GHC)</Label>
                   <Input
-                    id="ci-total-collected"
+                    id="ci-create-cash"
                     type="number"
-                    inputMode="decimal"
                     min={0}
                     step="0.01"
-                    value={createForm.totalCollected}
-                    onChange={(e) =>
-                      setCreateForm((f) => ({ ...f, totalCollected: e.target.value }))
-                    }
-                    placeholder="0.00"
+                    value={createForm.cashCollectedGhs}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, cashCollectedGhs: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Returned</Label>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <Select
-                      value={createForm.returnedType}
-                      onValueChange={(v) =>
-                        setCreateForm((f) => ({ ...f, returnedType: v as 'count' | 'ghs' }))
-                      }
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="count">Count</SelectItem>
-                        <SelectItem value="ghs">GHS</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      id="ci-returned"
-                      type="number"
-                      inputMode="decimal"
-                      min={0}
-                      step={createForm.returnedType === 'count' ? 1 : '0.01'}
-                      value={createForm.returnedValue}
-                      onChange={(e) =>
-                        setCreateForm((f) => ({ ...f, returnedValue: e.target.value }))
-                      }
-                      placeholder="0"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="ci-first-order">First order date</Label>
+                  <Label htmlFor="ci-create-momo">MoMo Collected (GHC)</Label>
                   <Input
-                    id="ci-first-order"
-                    type="date"
-                    value={createForm.firstOrderDate}
-                    onChange={(e) =>
-                      setCreateForm((f) => ({ ...f, firstOrderDate: e.target.value }))
-                    }
+                    id="ci-create-momo"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={createForm.momoCollectedGhs}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, momoCollectedGhs: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="ci-last-order">Last order date</Label>
+                  <Label htmlFor="ci-create-paystack">Paystack Collected (GHC)</Label>
                   <Input
-                    id="ci-last-order"
-                    type="date"
-                    value={createForm.lastOrderDate}
-                    onChange={(e) =>
-                      setCreateForm((f) => ({ ...f, lastOrderDate: e.target.value }))
-                    }
+                    id="ci-create-paystack"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={createForm.paystackCollectedGhs}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, paystackCollectedGhs: e.target.value }))}
                   />
                 </div>
                 <div className="space-y-2 sm:col-span-2">
-                  <Label>Segment</Label>
-                  <Select
-                    value={createForm.segment}
-                    onValueChange={(v) =>
-                      setCreateForm((f) => ({ ...f, segment: v as CustomerSegment }))
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Core">Core</SelectItem>
-                      <SelectItem value="New (30d)">New (30d)</SelectItem>
-                      <SelectItem value="High LTV">High LTV</SelectItem>
-                      <SelectItem value="At risk">At risk</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    This is a manual label. The table also computes a live segment from order history.
-                  </p>
+                  <Label htmlFor="ci-create-total">Total Collected (GHC)</Label>
+                  <Input
+                    id="ci-create-total"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={createForm.totalCollectedGhs}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, totalCollectedGhs: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-create-paymethod">Payment Method</Label>
+                  <Input
+                    id="ci-create-paymethod"
+                    value={createForm.paymentMethod}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, paymentMethod: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-create-status">Delivery Status</Label>
+                  <Input
+                    id="ci-create-status"
+                    value={createForm.deliveryStatus}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, deliveryStatus: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="ci-create-remarks">Remarks</Label>
+                  <Input
+                    id="ci-create-remarks"
+                    value={createForm.remarks}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, remarks: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="ci-create-additional">Additional Remarks</Label>
+                  <Input
+                    id="ci-create-additional"
+                    value={createForm.additionalRemarks}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, additionalRemarks: e.target.value }))}
+                  />
                 </div>
               </div>
             </div>
@@ -1156,7 +1842,7 @@ export function CustomerIntelligenceView() {
                     Saving…
                   </>
                 ) : (
-                  'Add customer'
+                  'Add row'
                 )}
               </Button>
             </DialogFooter>

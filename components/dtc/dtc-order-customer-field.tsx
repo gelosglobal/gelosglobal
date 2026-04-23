@@ -78,6 +78,13 @@ export function DtcOrderCustomerField({
   }, [debounced, runSearch])
 
   useEffect(() => {
+    if (!open) return
+    if (debounced.length < 1) return
+    // Re-fetch on open so newly added customers show up even if query text didn't change.
+    void runSearch(debounced)
+  }, [open, debounced, runSearch])
+
+  useEffect(() => {
     function onDoc(e: MouseEvent) {
       if (!rootRef.current) return
       if (!rootRef.current.contains(e.target as Node)) {
@@ -160,7 +167,7 @@ export function DtcOrderCustomerField({
         )}
         {open && !loading && debounced.length > 0 && results.length === 0 && (
           <p className="mt-1 text-xs text-muted-foreground">
-            No match in Customer Intelligence. You can still use the name you typed.
+            No match found. You can still use the name you typed.
           </p>
         )}
       </div>

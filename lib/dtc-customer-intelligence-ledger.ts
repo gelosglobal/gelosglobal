@@ -7,6 +7,7 @@ export type DtcCustomerIntelLedgerDoc = {
   _id: ObjectId
   orderedAt?: Date
   orderNumber?: string
+  itemsOrdered?: string
   customerName: string
   phoneNumber?: string
   location?: string
@@ -29,6 +30,7 @@ export type DtcCustomerIntelLedgerJson = {
   id: string
   orderedAt: string | null
   orderNumber: string
+  itemsOrdered: string
   customerName: string
   phoneNumber: string
   location: string
@@ -60,6 +62,7 @@ export function serializeDtcCustomerIntelLedgerRow(
     id: doc._id.toHexString(),
     orderedAt: orderedAt ? orderedAt.toISOString() : null,
     orderNumber: doc.orderNumber ?? '',
+    itemsOrdered: doc.itemsOrdered ?? '',
     customerName: doc.customerName,
     phoneNumber: doc.phoneNumber ?? '',
     location: doc.location ?? '',

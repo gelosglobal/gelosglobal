@@ -1,4 +1,5 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
+import { DTC_ORDERS_COLLECTION } from '@/lib/dtc-orders'
 import { getMongo } from '@/lib/mongodb'
 import { headers } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
@@ -7,6 +8,7 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const DTC_CUSTOMERS_COLLECTION = 'dtc_customers'
+const DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION = 'dtc_customer_intelligence_ledger'
 
 const noStore = { 'Cache-Control': 'private, no-store, max-age=0' } as const
 
@@ -61,40 +63,112 @@ export async function GET(request: NextRequest) {
     orClauses.push({ phone: new RegExp(escapeRegex(digits), 'i') })
   }
 
-  const { db } = getMongo()
-  const raw = (await db
-    .collection(DTC_CUSTOMERS_COLLECTION)
-    .find(
-      {
-        $and: [{ customer: { $type: 'string', $ne: '' } }, { $or: orClauses }],
-      },
-      {
-        projection: {
-          _id: 1,
-          customer: 1,
-          phone: 1,
-          email: 1,
-          location: 1,
-        },
-        limit: MAX_RESULTS,
-        sort: { customer: 1, _id: 1 },
-      },
-    )
-    .toArray()) as unknown as {
-    _id: { toString: () => string }
-    customer: string
-    phone?: string
-    email?: string
-    location?: string
-  }[]
+  const ledgerOrClauses: Record<string, unknown>[] = [
+    { customerName: pattern },
+    { phoneNumber: pattern },
+    { location: pattern },
+    { paymentMethod: pattern },
+  ]
+  if (digits.length >= 2) {
+    // Ledger phone numbers are often stored normalized (digits-only); support "+233..." searches too.
+    ledgerOrClauses.push({ phoneNumber: new RegExp(escapeRegex(digits), 'i') })
+  }
 
-  const results: DtcCustomerSearchResult[] = raw.map((r) => ({
-    id: r._id.toString(),
-    customerName: r.customer,
-    phoneNumber: String(r.phone ?? ''),
-    location: String(r.location ?? ''),
-    email: String(r.email ?? ''),
-  }))
+  const ordersOrClauses: Record<string, unknown>[] = [
+    { customer: pattern },
+    { customerPhone: pattern },
+    { customerEmail: pattern },
+    { customerLocation: pattern },
+  ]
+  if (digits.length >= 2) {
+    ordersOrClauses.push({ customerPhone: new RegExp(escapeRegex(digits), 'i') })
+  }
+
+  const { db } = getMongo()
+  const [rawCustomers, rawLedger, rawOrders] = await Promise.all([
+    db
+      .collection(DTC_CUSTOMERS_COLLECTION)
+      .find(
+        {
+          $and: [{ customer: { $type: 'string', $ne: '' } }, { $or: orClauses }],
+        },
+        {
+          projection: {
+            _id: 1,
+            customer: 1,
+            phone: 1,
+            email: 1,
+            location: 1,
+          },
+          limit: MAX_RESULTS,
+          sort: { customer: 1, _id: 1 },
+        },
+      )
+      .toArray(),
+    db
+      .collection(DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION)
+      .find(
+        {
+          $and: [{ customerName: { $type: 'string', $ne: '' } }, { $or: ledgerOrClauses }],
+        },
+        {
+          projection: {
+            _id: 1,
+            customerName: 1,
+            phoneNumber: 1,
+            location: 1,
+          },
+          limit: MAX_RESULTS,
+          sort: { customerName: 1, _id: 1 },
+        },
+      )
+      .toArray(),
+    db
+      .collection(DTC_ORDERS_COLLECTION)
+      .find(
+        {
+          $and: [{ customer: { $type: 'string', $ne: '' } }, { $or: ordersOrClauses }],
+        },
+        {
+          projection: {
+            _id: 1,
+            customer: 1,
+            customerPhone: 1,
+            customerEmail: 1,
+            customerLocation: 1,
+          },
+          limit: MAX_RESULTS,
+          sort: { customer: 1, _id: 1 },
+        },
+      )
+      .toArray(),
+  ])
+
+  // IMPORTANT: Do NOT dedupe. Users expect to see every matching customer/order row
+  // (e.g. same name appearing multiple times with different phones).
+  const results: DtcCustomerSearchResult[] = [
+    ...(rawCustomers as any[]).map((r) => ({
+      id: `c:${String(r._id?.toString?.() ?? '')}`,
+      customerName: String(r.customer ?? ''),
+      phoneNumber: String(r.phone ?? ''),
+      location: String(r.location ?? ''),
+      email: String(r.email ?? ''),
+    })),
+    ...(rawLedger as any[]).map((r) => ({
+      id: `l:${String(r._id?.toString?.() ?? '')}`,
+      customerName: String(r.customerName ?? ''),
+      phoneNumber: String(r.phoneNumber ?? ''),
+      location: String(r.location ?? ''),
+      email: '',
+    })),
+    ...(rawOrders as any[]).map((r) => ({
+      id: `o:${String(r._id?.toString?.() ?? '')}`,
+      customerName: String(r.customer ?? ''),
+      phoneNumber: String(r.customerPhone ?? ''),
+      location: String(r.customerLocation ?? ''),
+      email: String(r.customerEmail ?? ''),
+    })),
+  ].slice(0, MAX_RESULTS)
 
   return NextResponse.json({ results }, { headers: noStore })
 }

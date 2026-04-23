@@ -80,6 +80,7 @@ export async function POST(request: Request) {
       updatedAt: now,
       orderedAt: r.orderedAt,
       orderNumber: r.orderNumber,
+      itemsOrdered: r.itemsOrdered,
       customerName: r.customerName,
       phoneNumber: phoneKey(r.phoneNumber),
       location: r.location,

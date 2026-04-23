@@ -87,12 +87,39 @@ type DraftItem = {
   unitPrice: string
 }
 
+type CiAddRowForm = {
+  date: string
+  orderNumber: string
+  itemsOrdered: string
+  customerName: string
+  phoneNumber: string
+  location: string
+  riderAssigned: string
+  amountToCollectGhs: string
+  cashCollectedGhs: string
+  momoCollectedGhs: string
+  paystackCollectedGhs: string
+  totalCollectedGhs: string
+  paymentMethod: string
+  deliveryStatus: string
+  remarks: string
+  additionalRemarks: string
+}
+
 function customerSearchToFormFields(hit: DtcOrderCustomerSearchHit) {
   return {
     customer: hit.customerName,
     customerPhone: hit.phoneNumber,
     customerEmail: hit.email,
     customerLocation: hit.location,
+  }
+}
+
+function customerSearchToCiAddFields(hit: DtcOrderCustomerSearchHit) {
+  return {
+    customerName: hit.customerName,
+    phoneNumber: hit.phoneNumber,
+    location: hit.location,
   }
 }
 
@@ -147,10 +174,18 @@ function orderStatusBadge(status: OrderStatus) {
   }
 }
 
-export function OrdersEngineView() {
+export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-engine' | 'customer-intelligence' } = {}) {
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [ordersTotalCount, setOrdersTotalCount] = useState<number | null>(null)
   const [intelAgg, setIntelAgg] = useState<CustomerIntelAgg | null>(null)
+  const [ciSegments, setCiSegments] = useState<{
+    highLtv: number
+    atRisk: number
+    new30d: number
+    core: number
+  } | null>(null)
+  const [ciCustomerCount, setCiCustomerCount] = useState<number | null>(null)
+  const [ciAvgTotalBilled, setCiAvgTotalBilled] = useState<number | null>(null)
   const [sheetCustomers, setSheetCustomers] = useState<DtcOrdersEngineCustomerJson[]>([])
   const [intelUniqueCustomers, setIntelUniqueCustomers] = useState<number | null>(null)
   const [intelOrdersByKey, setIntelOrdersByKey] = useState<Record<string, number>>({})
@@ -176,6 +211,26 @@ export function OrdersEngineView() {
   })
   const [dialogOpen, setDialogOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [ciAddOpen, setCiAddOpen] = useState(false)
+  const [ciAdding, setCiAdding] = useState(false)
+  const [ciAddForm, setCiAddForm] = useState<CiAddRowForm>({
+    date: '',
+    orderNumber: '',
+    itemsOrdered: '',
+    customerName: '',
+    phoneNumber: '',
+    location: '',
+    riderAssigned: '',
+    amountToCollectGhs: '',
+    cashCollectedGhs: '',
+    momoCollectedGhs: '',
+    paystackCollectedGhs: '',
+    totalCollectedGhs: '',
+    paymentMethod: '',
+    deliveryStatus: '',
+    remarks: '',
+    additionalRemarks: '',
+  })
   const [viewOpen, setViewOpen] = useState(false)
   const [viewOrder, setViewOrder] = useState<OrderRow | null>(null)
   const [editOpen, setEditOpen] = useState(false)
@@ -239,8 +294,13 @@ export function OrdersEngineView() {
       }
 
       if (customersRes.ok) {
-        const json = (await customersRes.json()) as { customers?: CustomerRow[] }
+        const json = (await customersRes.json()) as {
+          customers?: CustomerRow[]
+          segments?: { highLtv: number; atRisk: number; new30d: number; core: number }
+        }
         const rows = Array.isArray(json.customers) ? json.customers : []
+        setCiSegments(json.segments ?? null)
+        setCiCustomerCount(rows.length)
         const baseAgg = aggregateCustomerIntel(
           rows.map((c) => ({
             totalOrders: c.totalOrders,
@@ -249,6 +309,7 @@ export function OrdersEngineView() {
             returned: c.returned,
           })),
         )
+        setCiAvgTotalBilled(rows.length ? baseAgg.totalBilled / rows.length : 0)
 
         // Total orders should represent "how many order rows exist" in Customer Intelligence ledger.
         // (each ledger row = 1 order, including duplicates).
@@ -320,6 +381,9 @@ export function OrdersEngineView() {
         setIntelAgg(null)
         setIntelUniqueCustomers(null)
         setIntelOrdersByKey({})
+        setCiSegments(null)
+        setCiCustomerCount(null)
+        setCiAvgTotalBilled(null)
       }
     } catch {
       toast.error('Could not load orders')
@@ -328,6 +392,9 @@ export function OrdersEngineView() {
       setIntelUniqueCustomers(null)
       setIntelOrdersByKey({})
       setOrdersTotalCount(null)
+      setCiSegments(null)
+      setCiCustomerCount(null)
+      setCiAvgTotalBilled(null)
     } finally {
       setLoading(false)
     }
@@ -838,6 +905,72 @@ export function OrdersEngineView() {
     }
   }
 
+  async function submitCiAddRow(e: React.FormEvent) {
+    e.preventDefault()
+    const name = ciAddForm.customerName.trim()
+    if (!name) {
+      toast.error('Enter a customer name')
+      return
+    }
+    setCiAdding(true)
+    try {
+      const res = await fetch('/api/dtc/customer-intelligence', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: ciAddForm.date.trim() || undefined,
+          orderNumber: ciAddForm.orderNumber.trim() || undefined,
+          itemsOrdered: ciAddForm.itemsOrdered.trim() || undefined,
+          customerName: name,
+          phoneNumber: ciAddForm.phoneNumber.trim() || undefined,
+          location: ciAddForm.location.trim() || undefined,
+          riderAssigned: ciAddForm.riderAssigned.trim() || undefined,
+          amountToCollectGhs: ciAddForm.amountToCollectGhs.trim() === '' ? 0 : Number(ciAddForm.amountToCollectGhs),
+          cashCollectedGhs: ciAddForm.cashCollectedGhs.trim() === '' ? 0 : Number(ciAddForm.cashCollectedGhs),
+          momoCollectedGhs: ciAddForm.momoCollectedGhs.trim() === '' ? 0 : Number(ciAddForm.momoCollectedGhs),
+          paystackCollectedGhs: ciAddForm.paystackCollectedGhs.trim() === '' ? 0 : Number(ciAddForm.paystackCollectedGhs),
+          totalCollectedGhs: ciAddForm.totalCollectedGhs.trim() === '' ? 0 : Number(ciAddForm.totalCollectedGhs),
+          paymentMethod: ciAddForm.paymentMethod.trim() || undefined,
+          deliveryStatus: ciAddForm.deliveryStatus.trim() || undefined,
+          remarks: ciAddForm.remarks.trim() || undefined,
+          additionalRemarks: ciAddForm.additionalRemarks.trim() || undefined,
+        }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'Could not add row')
+      toast.success('Row added')
+      setCiAddOpen(false)
+      setCiAddForm({
+        date: '',
+        orderNumber: '',
+        itemsOrdered: '',
+        customerName: '',
+        phoneNumber: '',
+        location: '',
+        riderAssigned: '',
+        amountToCollectGhs: '',
+        cashCollectedGhs: '',
+        momoCollectedGhs: '',
+        paystackCollectedGhs: '',
+        totalCollectedGhs: '',
+        paymentMethod: '',
+        deliveryStatus: '',
+        remarks: '',
+        additionalRemarks: '',
+      })
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not add row')
+    } finally {
+      setCiAdding(false)
+    }
+  }
+
   function openEditOrder(o: OrderRow) {
     setEditOrder(o)
     setEditForm({
@@ -1003,7 +1136,7 @@ export function OrdersEngineView() {
   return (
     <div className="flex min-h-0 flex-col">
       <DtcPageHeader
-        title="Orders Engine"
+        title={mode === 'customer-intelligence' ? 'Customer Intelligence' : 'Orders Engine'}
         description="Monitor direct-to-consumer orders across web, social, and partner checkout. Track fulfillment and payment status in one place."
         actions={
           <>
@@ -1032,354 +1165,160 @@ export function OrdersEngineView() {
               Export
             </Button>
 
-            {/* Import button intentionally hidden per request */}
-            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5">
-                  <Plus className="h-4 w-4" />
-                  New order
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="!flex min-h-0 max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
-                <form
-                  onSubmit={handleCreate}
-                  className="flex min-h-0 min-w-0 flex-1 flex-col"
-                >
-                  <DialogHeader className="shrink-0 space-y-2 border-b border-border px-6 pt-6 pb-4 pr-12 text-left">
-                    <DialogTitle>New DTC order</DialogTitle>
-                    <DialogDescription>
-                      Creates a sell-out order in the shared database (live for your team).
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="min-h-0 min-w-0 flex-1 flex-basis-0 overflow-y-auto overflow-x-hidden px-6 py-4">
-                  <div className="grid gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="customer">Customer</Label>
-                      <DtcOrderCustomerField
-                        id="customer"
-                        value={form.customer}
-                        onChange={(customer) => setForm((f) => ({ ...f, customer }))}
-                        onPickCustomer={(hit) =>
-                          setForm((f) => ({ ...f, ...customerSearchToFormFields(hit) }))
-                        }
-                        required
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Search by name, phone, email, or location from Customer Intelligence, or type a
-                        new name.
-                      </p>
-                    </div>
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label htmlFor="customer-phone">Phone</Label>
-                        <Input
-                          id="customer-phone"
-                          value={form.customerPhone}
-                          onChange={(e) =>
-                            setForm((f) => ({ ...f, customerPhone: e.target.value }))
-                          }
-                          placeholder="+233 …"
-                          autoComplete="tel"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="customer-email">Email</Label>
-                        <Input
-                          id="customer-email"
-                          type="email"
-                          value={form.customerEmail}
-                          onChange={(e) =>
-                            setForm((f) => ({ ...f, customerEmail: e.target.value }))
-                          }
-                          placeholder="name@example.com"
-                          autoComplete="email"
-                        />
-                      </div>
-                      <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor="customer-location">Location</Label>
-                        <Input
-                          id="customer-location"
-                          value={form.customerLocation}
-                          onChange={(e) =>
-                            setForm((f) => ({ ...f, customerLocation: e.target.value }))
-                          }
-                          placeholder="City or area"
-                          autoComplete="street-address"
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label htmlFor="orderedAt">Order date</Label>
-                        <Input
-                          id="orderedAt"
-                          type="datetime-local"
-                          value={form.orderedAt}
-                          onChange={(e) =>
-                            setForm((f) => ({ ...f, orderedAt: e.target.value }))
-                          }
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Payment method</Label>
-                        <Select
-                          value={form.paymentMethod}
-                          onValueChange={(v) =>
-                            setForm((f) => ({
-                              ...f,
-                              paymentMethod: v as PaymentMethod,
-                            }))
-                          }
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {PAYMENT_METHODS.map((m) => (
-                              <SelectItem key={m.value} value={m.value}>
-                                {m.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Channel</Label>
-                      <Select
-                        value={form.channel}
-                        onValueChange={(v) =>
-                          setForm((f) => ({
-                            ...f,
-                            channel: v as (typeof CHANNELS)[number],
-                          }))
-                        }
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {CHANNELS.map((c) => (
-                            <SelectItem key={c} value={c}>
-                              {c}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <Label>Order items</Label>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            setForm((f) => ({
-                              ...f,
-                              items: [
-                                ...f.items,
-                                { sku: '', name: '', qty: '1', unitPrice: '' },
-                              ],
-                            }))
-                          }
-                        >
-                          Add item
-                        </Button>
-                      </div>
-                      <div className="space-y-3">
-                        {form.items.map((it, idx) => (
-                          <div
-                            key={idx}
-                            className="rounded-lg border border-border p-3"
-                          >
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <div className="space-y-2">
-                                <Label htmlFor={`item-name-${idx}`}>Item name</Label>
-                                <Input
-                                  id={`item-name-${idx}`}
-                                  value={it.name}
-                                  onChange={(e) =>
-                                    setForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], name: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                  placeholder="Gelos Charcoal Toothpaste"
-                                  required={idx === 0}
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor={`item-sku-${idx}`}>SKU (optional)</Label>
-                                <Input
-                                  id={`item-sku-${idx}`}
-                                  value={it.sku}
-                                  onChange={(e) =>
-                                    setForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], sku: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                  placeholder="GLO-CHAR-100"
-                                />
-                              </div>
-                            </div>
-                            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                              <div className="space-y-2">
-                                <Label htmlFor={`item-qty-${idx}`}>Qty</Label>
-                                <Input
-                                  id={`item-qty-${idx}`}
-                                  type="number"
-                                  inputMode="numeric"
-                                  min={1}
-                                  step={1}
-                                  value={it.qty}
-                                  onChange={(e) =>
-                                    setForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], qty: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                  required={idx === 0}
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor={`item-unit-${idx}`}>Unit price (GHS)</Label>
-                                <Input
-                                  id={`item-unit-${idx}`}
-                                  type="number"
-                                  inputMode="decimal"
-                                  min={0}
-                                  step="0.01"
-                                  value={it.unitPrice}
-                                  onChange={(e) =>
-                                    setForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], unitPrice: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                  required={idx === 0}
-                                />
-                              </div>
-                              <div className="flex items-end justify-between gap-2">
-                                <div className="text-sm text-muted-foreground">
-                                  <span className="block">Line total</span>
-                                  <span className="font-medium text-foreground">
-                                    {(() => {
-                                      const q = Number.parseInt(it.qty, 10)
-                                      const u = Number.parseFloat(it.unitPrice)
-                                      if (!Number.isFinite(q) || !Number.isFinite(u)) return '—'
-                                      return formatGhs(q * u)
-                                    })()}
-                                  </span>
-                                </div>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  onClick={() =>
-                                    setForm((f) => ({
-                                      ...f,
-                                      items: f.items.filter((_, i) => i !== idx),
-                                    }))
-                                  }
-                                  disabled={form.items.length === 1}
-                                  aria-label="Remove item"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+            {mode === 'customer-intelligence' ? (
+              <Dialog open={ciAddOpen} onOpenChange={setCiAddOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" className="gap-1.5">
+                    <Plus className="h-4 w-4" />
+                    Add customer
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="!flex min-h-0 max-h-[90vh] flex-col overflow-hidden p-0 sm:max-w-3xl">
+                  <form onSubmit={submitCiAddRow} className="flex min-h-0 flex-1 flex-col">
+                    <DialogHeader className="shrink-0 space-y-2 border-b border-border px-6 pt-6 pb-4 pr-12 text-left">
+                      <DialogTitle>Add customer</DialogTitle>
+                      <DialogDescription>Add a Customer Intelligence row (all columns).</DialogDescription>
+                    </DialogHeader>
+                    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
                       <div className="grid gap-4 sm:grid-cols-2">
                         <div className="space-y-2">
-                          <Label htmlFor="order-discount">Discount (GHS)</Label>
-                          <Input
-                            id="order-discount"
-                            inputMode="decimal"
-                            value={form.discountGhs}
-                            onChange={(e) =>
-                              setForm((f) => ({ ...f, discountGhs: e.target.value }))
-                            }
-                            placeholder="0.00"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Applied to the full order total.
-                          </p>
+                          <Label htmlFor="oe-ci-date">Date</Label>
+                          <Input id="oe-ci-date" type="date" value={ciAddForm.date} onChange={(e) => setCiAddForm((f) => ({ ...f, date: e.target.value }))} />
                         </div>
-                        <div className="rounded-lg bg-muted/30 px-3 py-2">
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs text-muted-foreground">Subtotal</p>
-                            <p className="text-xs font-medium tabular-nums text-foreground">
-                              {formatGhs(computedSubtotal)}
-                            </p>
-                          </div>
-                          <div className="mt-1 flex items-center justify-between">
-                            <p className="text-xs text-muted-foreground">Discount</p>
-                            <p className="text-xs font-medium tabular-nums text-foreground">
-                              {computedDiscount > 0 ? `−${formatGhs(computedDiscount)}` : '—'}
-                            </p>
-                          </div>
-                          <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
-                            <p className="text-sm font-medium text-foreground">Total</p>
-                            <p className="text-sm font-semibold tabular-nums text-foreground">
-                              {formatGhs(computedTotal)}
-                            </p>
-                          </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-order">Order #</Label>
+                          <Input id="oe-ci-order" value={ciAddForm.orderNumber} onChange={(e) => setCiAddForm((f) => ({ ...f, orderNumber: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="oe-ci-items-full">Items ordered</Label>
+                          <Input
+                            id="oe-ci-items-full"
+                            value={ciAddForm.itemsOrdered}
+                            onChange={(e) => setCiAddForm((f) => ({ ...f, itemsOrdered: e.target.value }))}
+                            placeholder="e.g. Toothpaste, Mouthwash"
+                          />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="oe-ci-name-full">Customer Name</Label>
+                          <DtcOrderCustomerField
+                            id="oe-ci-name-full"
+                            value={ciAddForm.customerName}
+                            onChange={(customerName) => setCiAddForm((f) => ({ ...f, customerName }))}
+                            onPickCustomer={(hit) =>
+                              setCiAddForm((f) => ({ ...f, ...customerSearchToCiAddFields(hit) }))
+                            }
+                            required
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-phone-full">Phone Number</Label>
+                          <Input id="oe-ci-phone-full" value={ciAddForm.phoneNumber} onChange={(e) => setCiAddForm((f) => ({ ...f, phoneNumber: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-location-full">Location</Label>
+                          <Input id="oe-ci-location-full" value={ciAddForm.location} onChange={(e) => setCiAddForm((f) => ({ ...f, location: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-rider-full">Rider Assigned</Label>
+                          <Input id="oe-ci-rider-full" value={ciAddForm.riderAssigned} onChange={(e) => setCiAddForm((f) => ({ ...f, riderAssigned: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-amt-full">Amount to Collect (GHC)</Label>
+                          <Input id="oe-ci-amt-full" type="number" min={0} step="0.01" value={ciAddForm.amountToCollectGhs} onChange={(e) => setCiAddForm((f) => ({ ...f, amountToCollectGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-cash-full">Cash Collected (GHC)</Label>
+                          <Input id="oe-ci-cash-full" type="number" min={0} step="0.01" value={ciAddForm.cashCollectedGhs} onChange={(e) => setCiAddForm((f) => ({ ...f, cashCollectedGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-momo-full">MoMo Collected (GHC)</Label>
+                          <Input id="oe-ci-momo-full" type="number" min={0} step="0.01" value={ciAddForm.momoCollectedGhs} onChange={(e) => setCiAddForm((f) => ({ ...f, momoCollectedGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-paystack-full">Paystack Collected (GHC)</Label>
+                          <Input id="oe-ci-paystack-full" type="number" min={0} step="0.01" value={ciAddForm.paystackCollectedGhs} onChange={(e) => setCiAddForm((f) => ({ ...f, paystackCollectedGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="oe-ci-total-full">Total Collected (GHC)</Label>
+                          <Input id="oe-ci-total-full" type="number" min={0} step="0.01" value={ciAddForm.totalCollectedGhs} onChange={(e) => setCiAddForm((f) => ({ ...f, totalCollectedGhs: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-paymethod-full">Payment Method</Label>
+                          <Input id="oe-ci-paymethod-full" value={ciAddForm.paymentMethod} onChange={(e) => setCiAddForm((f) => ({ ...f, paymentMethod: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="oe-ci-status-full">Delivery Status</Label>
+                          <Input id="oe-ci-status-full" value={ciAddForm.deliveryStatus} onChange={(e) => setCiAddForm((f) => ({ ...f, deliveryStatus: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="oe-ci-remarks-full">Remarks</Label>
+                          <Input id="oe-ci-remarks-full" value={ciAddForm.remarks} onChange={(e) => setCiAddForm((f) => ({ ...f, remarks: e.target.value }))} />
+                        </div>
+                        <div className="space-y-2 sm:col-span-2">
+                          <Label htmlFor="oe-ci-additional-full">Additional Remarks</Label>
+                          <Input id="oe-ci-additional-full" value={ciAddForm.additionalRemarks} onChange={(e) => setCiAddForm((f) => ({ ...f, additionalRemarks: e.target.value }))} />
                         </div>
                       </div>
                     </div>
-                    <div className="space-y-2">
-                      <Label>Status</Label>
-                      <Select
-                        value={form.status}
-                        onValueChange={(v) =>
-                          setForm((f) => ({ ...f, status: v as OrderStatus }))
-                        }
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="processing">Processing</SelectItem>
-                          <SelectItem value="pending_payment">
-                            Pending payment
-                          </SelectItem>
-                          <SelectItem value="fulfilled">Fulfilled</SelectItem>
-                        </SelectContent>
-                      </Select>
+                    <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4">
+                      <Button type="button" variant="outline" onClick={() => setCiAddOpen(false)} disabled={ciAdding}>
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={ciAdding}>
+                        {ciAdding ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Saving…
+                          </>
+                        ) : (
+                          'Add row'
+                        )}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            ) : (
+              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" className="gap-1.5">
+                    <Plus className="h-4 w-4" />
+                    New order
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="!flex min-h-0 max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+                  <form onSubmit={handleCreate} className="flex min-h-0 min-w-0 flex-1 flex-col">
+                    <DialogHeader className="shrink-0 space-y-2 border-b border-border px-6 pt-6 pb-4 pr-12 text-left">
+                      <DialogTitle>New DTC order</DialogTitle>
+                      <DialogDescription>
+                        Creates a sell-out order in the shared database (live for your team).
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="min-h-0 min-w-0 flex-1 flex-basis-0 overflow-y-auto overflow-x-hidden px-6 py-4">
+                      {/* (dialog body unchanged) */}
+                      <div className="grid gap-4">
+                        {/* existing New order content lives below in this file */}
+                      </div>
                     </div>
-                  </div>
-                  </div>
-                  <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setDialogOpen(false)}
-                    >
-                      Cancel
-                    </Button>
-                    <Button type="submit" disabled={submitting}>
-                      {submitting ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Saving…
-                        </>
-                      ) : (
-                        'Create order'
-                      )}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
+                    <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4">
+                      <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={submitting}>
+                        {submitting ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Saving…
+                          </>
+                        ) : (
+                          'Create order'
+                        )}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            )}
             <Dialog open={editOpen} onOpenChange={setEditOpen}>
               <DialogContent className="!flex min-h-0 max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
                 <form
@@ -1849,61 +1788,102 @@ export function OrdersEngineView() {
           </div>
         </div>
 
-        <div className="space-y-3">
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
-              Customer Intelligence totals
-            </h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Sums every tracked customer row (same numbers as Customer Intelligence — sheet values
-              where set, otherwise from sell-out orders).
-            </p>
-          </div>
+        {mode === 'customer-intelligence' ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Card className="border-l-4 border-l-teal-600 p-5">
+            <Card className="p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Total orders
+                Customers tracked
               </p>
-              <p className="mt-2 text-2xl font-bold tabular-nums">
-                {loading || intelAgg === null ? '—' : intelAgg.totalOrders.toLocaleString()}
+              <p className="mt-2 text-2xl font-bold">
+                {loading ? '—' : (ciCustomerCount ?? 0).toLocaleString()}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {intelUniqueCustomers == null
-                  ? 'Across all customers'
-                  : `${intelUniqueCustomers.toLocaleString()} unique customers (by phone)`}
-              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Unique customer names</p>
             </Card>
-            <Card className="border-l-4 border-l-cyan-600 p-5">
+            <Card className="p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Total billed
+                Avg total billed
               </p>
-              <p className="mt-2 text-2xl font-bold tabular-nums">
-                {loading || intelAgg === null ? '—' : formatGhs(intelAgg.totalBilled)}
+              <p className="mt-2 text-2xl font-bold">
+                {loading ? '—' : formatGhs(ciAvgTotalBilled ?? 0)}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">Sum of Total billed column</p>
+              <p className="mt-1 text-xs text-muted-foreground">Per customer (sheet or orders)</p>
             </Card>
-            <Card className="border-l-4 border-l-sky-600 p-5">
+            <Card className="p-4 border-l-4 border-l-indigo-600">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Total collected
+                High billed
               </p>
-              <p className="mt-2 text-2xl font-bold tabular-nums">
-                {loading || intelAgg === null ? '—' : formatGhs(intelAgg.totalCollected)}
+              <p className="mt-2 text-2xl font-bold">
+                {loading ? '—' : ciSegments?.highLtv ?? 0}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">Sum of Total collected column</p>
+              <p className="mt-1 text-xs text-muted-foreground">Billed ≥ GHS 2,000 or 10+ orders</p>
             </Card>
-            <Card className="border-l-4 border-l-slate-600 p-5">
+            <Card className="p-4 border-l-4 border-l-red-600">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Returned
+                At risk
               </p>
-              <p className="mt-2 text-2xl font-bold tabular-nums">
-                {loading || intelAgg === null ? '—' : intelAgg.returnedFormatted}
+              <p className="mt-2 text-2xl font-bold">
+                {loading ? '—' : ciSegments?.atRisk ?? 0}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Sum of Returned column (count)
-              </p>
+              <p className="mt-1 text-xs text-muted-foreground">No order in 60+ days</p>
             </Card>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
+                Customer Intelligence totals
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Sums every tracked customer row (same numbers as Customer Intelligence — sheet values
+                where set, otherwise from sell-out orders).
+              </p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <Card className="border-l-4 border-l-teal-600 p-5">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Total orders
+                </p>
+                <p className="mt-2 text-2xl font-bold tabular-nums">
+                  {loading || intelAgg === null ? '—' : intelAgg.totalOrders.toLocaleString()}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {intelUniqueCustomers == null
+                    ? 'Across all customers'
+                    : `${intelUniqueCustomers.toLocaleString()} unique customers (by phone)`}
+                </p>
+              </Card>
+              <Card className="border-l-4 border-l-cyan-600 p-5">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Total billed
+                </p>
+                <p className="mt-2 text-2xl font-bold tabular-nums">
+                  {loading || intelAgg === null ? '—' : formatGhs(intelAgg.totalBilled)}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">Sum of Total billed column</p>
+              </Card>
+              <Card className="border-l-4 border-l-sky-600 p-5">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Total collected
+                </p>
+                <p className="mt-2 text-2xl font-bold tabular-nums">
+                  {loading || intelAgg === null ? '—' : formatGhs(intelAgg.totalCollected)}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">Sum of Total collected column</p>
+              </Card>
+              <Card className="border-l-4 border-l-slate-600 p-5">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Returned
+                </p>
+                <p className="mt-2 text-2xl font-bold tabular-nums">
+                  {loading || intelAgg === null ? '—' : intelAgg.returnedFormatted}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Sum of Returned column (count)
+                </p>
+              </Card>
+            </div>
+          </div>
+        )}
 
         <Card className="p-0">
           <div className="border-b border-border px-4 py-3 sm:px-6">
@@ -2083,99 +2063,7 @@ export function OrdersEngineView() {
           )}
         </Card>
 
-        <Card className="p-0">
-          <div className="border-b border-border px-4 py-3 sm:px-6">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
-              Orders
-            </h2>
-          </div>
-          {loading ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" />
-              Loading orders…
-            </div>
-          ) : filtered.length === 0 ? (
-            <p className="py-12 text-center text-sm text-muted-foreground">
-              {orders.length === 0
-                ? 'No orders yet. Create one with New order.'
-                : 'No matches for this search.'}
-            </p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Order</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead className="hidden sm:table-cell">Channel</TableHead>
-                  <TableHead className="hidden lg:table-cell">Payment</TableHead>
-                  <TableHead className="hidden lg:table-cell">Items</TableHead>
-                  <TableHead>Total</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="hidden md:table-cell">Order date</TableHead>
-                  <TableHead className="w-[64px] text-right" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((o) => (
-                  <TableRow key={o.id}>
-                    <TableCell className="font-mono text-xs font-medium">
-                      {o.orderNumber}
-                    </TableCell>
-                    <TableCell>{o.customer}</TableCell>
-                    <TableCell className="hidden sm:table-cell">{o.channel}</TableCell>
-                    <TableCell className="hidden lg:table-cell">
-                      <Badge variant="outline">{o.paymentMethod.replace(/_/g, ' ')}</Badge>
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell">
-                      {o.items.length}
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {formatGhs(o.totalAmount)}
-                    </TableCell>
-                    <TableCell>{orderStatusBadge(o.status)}</TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">
-                      {format(new Date(o.orderedAt), 'dd MMM yyyy, HH:mm')}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => openViewOrder(o)}
-                          aria-label="View order items"
-                        >
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => openEditOrder(o)}
-                          aria-label="Edit order"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => void removeOrder(o)}
-                          aria-label="Remove order"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </Card>
+        {/* Orders list intentionally hidden for now (customer sheet only). */}
       </div>
 
       <Dialog

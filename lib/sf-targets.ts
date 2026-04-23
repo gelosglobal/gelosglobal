@@ -148,9 +148,17 @@ export async function computeSfTargetsWithActuals(
       {
         $match: {
           status: 'completed',
-          visitedAt: { $gte: start, $lt: end },
         },
       },
+      // Older rows may not have `visitedAt`; fall back so targets match Shop Visits.
+      {
+        $addFields: {
+          effectiveVisitedAt: {
+            $ifNull: ['$visitedAt', { $ifNull: ['$updatedAt', '$createdAt'] }],
+          },
+        },
+      },
+      { $match: { effectiveVisitedAt: { $gte: start, $lt: end } } },
       {
         $group: {
           _id: { $ifNull: ['$repName', 'Unknown'] },
@@ -205,5 +213,56 @@ export async function computeSfTargetsWithActuals(
       sellInAttainmentPct,
     }
   })
+}
+
+export type SfTargetsMtdSummary = {
+  completedVisits: number
+  sellInGhs: number
+  shopsWon: number
+}
+
+export async function computeSfTargetsMtdSummary(
+  db: Db,
+  month: SfTargetMonthKey,
+): Promise<SfTargetsMtdSummary> {
+  const { start, end } = monthKeyToRange(month)
+  const [visAgg, wonAgg] = await Promise.all([
+    db
+      .collection<WithoutId<SfVisitDoc>>(SF_VISITS_COLLECTION)
+      .aggregate<{ visits: number; sellIn: number }>([
+        { $match: { status: 'completed' } },
+        {
+          $addFields: {
+            effectiveVisitedAt: {
+              $ifNull: ['$visitedAt', { $ifNull: ['$updatedAt', '$createdAt'] }],
+            },
+          },
+        },
+        { $match: { effectiveVisitedAt: { $gte: start, $lt: end } } },
+        {
+          $group: {
+            _id: null,
+            visits: { $sum: 1 },
+            sellIn: { $sum: { $ifNull: ['$sellInGhs', 0] } },
+          },
+        },
+        { $project: { _id: 0, visits: 1, sellIn: 1 } },
+      ])
+      .toArray(),
+    db
+      .collection(SF_SCOUTED_OUTLETS_COLLECTION)
+      .aggregate<{ won: number }>([
+        { $match: { status: 'won', scoutedAt: { $gte: start, $lt: end } } },
+        { $group: { _id: null, won: { $sum: 1 } } },
+        { $project: { _id: 0, won: 1 } },
+      ])
+      .toArray(),
+  ])
+
+  return {
+    completedVisits: visAgg[0]?.visits ?? 0,
+    sellInGhs: visAgg[0]?.sellIn ?? 0,
+    shopsWon: wonAgg[0]?.won ?? 0,
+  }
 }
 

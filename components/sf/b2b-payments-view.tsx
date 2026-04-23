@@ -741,12 +741,21 @@ export function B2bPaymentsView() {
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
-                        <Label htmlFor="b2b-due">Due date</Label>
+                        <Label htmlFor="b2b-due">Due</Label>
                         <Input
                           id="b2b-due"
                           type="date"
                           value={form.dueDate}
-                          onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
+                          onChange={(e) =>
+                            setForm((f) => {
+                              const dueDate = e.target.value
+                              return {
+                                ...f,
+                                dueDate,
+                                invoiceDate: dueDate,
+                              }
+                            })
+                          }
                         />
                       </div>
                       <div className="space-y-2">
@@ -1232,12 +1241,21 @@ export function B2bPaymentsView() {
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="edit-b2b-due">Due date</Label>
+                  <Label htmlFor="edit-b2b-due">Due</Label>
                   <Input
                     id="edit-b2b-due"
                     type="date"
                     value={editForm.dueDate}
-                    onChange={(e) => setEditForm((f) => ({ ...f, dueDate: e.target.value }))}
+                    onChange={(e) =>
+                      setEditForm((f) => {
+                        const dueDate = e.target.value
+                        return {
+                          ...f,
+                          dueDate,
+                          invoiceDate: dueDate,
+                        }
+                      })
+                    }
                     placeholder="Clear to remove"
                   />
                 </div>
