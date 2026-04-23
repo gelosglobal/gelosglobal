@@ -381,21 +381,123 @@ export function OrdersEngineView() {
     return rows
   }, [orders, filter, sortBy])
 
+  type EffectiveSheetRow = DtcOrdersEngineCustomerJson & {
+    lastOrderId?: string
+    lastOrderChannel?: string
+    lastOrderPayment?: string
+    lastOrderItems?: number
+    lastOrderTotal?: number
+    lastOrderStatus?: string
+    lastOrderAt?: string
+  }
+
+  const effectiveSheetCustomers = useMemo(() => {
+    const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
+    const keyFor = (name: string, phone: string) => {
+      const p = normalizePhone(phone)
+      return p ? `p:${p}` : `n:${normSortText(name)}`
+    }
+    const ymd = (d: Date) => {
+      if (!(d instanceof Date) || Number.isNaN(d.getTime())) return ''
+      return d.toISOString().slice(0, 10)
+    }
+
+    const map = new Map<string, EffectiveSheetRow>()
+    for (const c of sheetCustomers) {
+      map.set(keyFor(c.customerName ?? '', c.phoneNumber ?? ''), { ...c })
+    }
+
+    // "Merge" means: new orders should update/insert into the customer sheet list.
+    // We treat each order as +1 totalOrders, and add the order total to billed/collected.
+    for (const o of orders) {
+      const k = keyFor(o.customer ?? '', o.customerPhone ?? '')
+      const existing = map.get(k)
+      const orderDate = new Date(o.orderedAt)
+      const orderYmd = ymd(orderDate)
+      const delta = Number(o.totalAmount ?? 0)
+      const orderAtMs = !Number.isNaN(orderDate.getTime()) ? orderDate.getTime() : 0
+
+      if (existing) {
+        const first = existing.firstOrderDate
+        const last = existing.lastOrderDate
+        const nextFirst =
+          !first || (orderYmd && first > orderYmd) ? orderYmd : first
+        const nextLast =
+          !last || (orderYmd && last < orderYmd) ? orderYmd : last
+        const existingOrderMs = existing.lastOrderAt ? new Date(existing.lastOrderAt).getTime() : 0
+        const shouldReplaceLastOrder =
+          !existing.lastOrderAt || (Number.isFinite(orderAtMs) && orderAtMs >= (Number.isFinite(existingOrderMs) ? existingOrderMs : 0))
+
+        map.set(k, {
+          ...existing,
+          customerName: existing.customerName || o.customer || '',
+          phoneNumber: existing.phoneNumber || o.customerPhone || '',
+          location: existing.location || o.customerLocation || '',
+          totalOrders: Number(existing.totalOrders ?? 0) + 1,
+          totalBilledGhs: Number(existing.totalBilledGhs ?? 0) + (Number.isFinite(delta) ? delta : 0),
+          totalCollectedGhs: Number(existing.totalCollectedGhs ?? 0) + (Number.isFinite(delta) ? delta : 0),
+          firstOrderDate: nextFirst || '',
+          lastOrderDate: nextLast || '',
+          ...(shouldReplaceLastOrder
+            ? {
+                lastOrderId: o.orderNumber,
+                lastOrderChannel: o.channel,
+                lastOrderPayment: o.paymentMethod,
+                lastOrderItems: o.items?.length ?? 0,
+                lastOrderTotal: Number.isFinite(delta) ? delta : 0,
+                lastOrderStatus: o.status,
+                lastOrderAt: o.orderedAt,
+              }
+            : {}),
+        })
+      } else {
+        map.set(k, {
+          id: `order:${k}`,
+          customerName: o.customer ?? '',
+          phoneNumber: o.customerPhone ?? '',
+          totalOrders: 1,
+          totalBilledGhs: Number.isFinite(delta) ? delta : 0,
+          totalCollectedGhs: Number.isFinite(delta) ? delta : 0,
+          location: o.customerLocation ?? '',
+          returned: 0,
+          firstOrderDate: orderYmd || '',
+          lastOrderDate: orderYmd || '',
+          lastOrderId: o.orderNumber,
+          lastOrderChannel: o.channel,
+          lastOrderPayment: o.paymentMethod,
+          lastOrderItems: o.items?.length ?? 0,
+          lastOrderTotal: Number.isFinite(delta) ? delta : 0,
+          lastOrderStatus: o.status,
+          lastOrderAt: o.orderedAt,
+        })
+      }
+    }
+
+    return Array.from(map.values())
+  }, [orders, sheetCustomers])
+
   const filteredSheetCustomers = useMemo(() => {
     const q = filter.trim().toLowerCase()
-    const rows = (!q ? [...sheetCustomers] : sheetCustomers.filter((c) => {
-      const hay = [
-        c.customerName,
-        c.phoneNumber,
-        c.location,
-        String(c.totalOrders ?? ''),
-        String(c.totalBilledGhs ?? ''),
-        String(c.totalCollectedGhs ?? ''),
-      ]
-        .join(' ')
-        .toLowerCase()
-      return hay.includes(q)
-    }))
+    const rows = (!q
+      ? [...effectiveSheetCustomers]
+      : effectiveSheetCustomers.filter((c) => {
+          const hay = [
+            c.customerName,
+            c.phoneNumber,
+            c.location,
+            c.lastOrderId ?? '',
+            c.lastOrderChannel ?? '',
+            c.lastOrderPayment ?? '',
+            String(c.lastOrderStatus ?? ''),
+            String(c.lastOrderTotal ?? ''),
+            String(c.totalOrders ?? ''),
+            String(c.totalBilledGhs ?? ''),
+            String(c.totalCollectedGhs ?? ''),
+          ]
+            .join(' ')
+            .toLowerCase()
+          return hay.includes(q)
+        }))
 
     rows.sort((a, b) => {
       switch (sortBy) {
@@ -423,32 +525,32 @@ export function OrdersEngineView() {
     })
 
     return rows
-  }, [filter, sheetCustomers, sortBy])
+  }, [effectiveSheetCustomers, filter, sortBy]) as EffectiveSheetRow[]
 
   const sheetTotals = useMemo(() => {
     const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
     const uniqueCustomerKeys = new Set(
-      sheetCustomers.map((c) => {
+      effectiveSheetCustomers.map((c) => {
         const p = normalizePhone(c.phoneNumber ?? '')
         return p ? `p:${p}` : `n:${normSortText(c.customerName)}`
       }),
     )
     const totalCustomers = uniqueCustomerKeys.size
-    const rowCount = sheetCustomers.length
-    const totalOrders = sheetCustomers.reduce(
+    const rowCount = effectiveSheetCustomers.length
+    const totalOrders = effectiveSheetCustomers.reduce(
       (s, c) => s + (Number.isFinite(Number(c.totalOrders)) ? Number(c.totalOrders) : 0),
       0,
     )
-    const totalBilledGhs = sheetCustomers.reduce(
+    const totalBilledGhs = effectiveSheetCustomers.reduce(
       (s, c) => s + (Number.isFinite(Number(c.totalBilledGhs)) ? Number(c.totalBilledGhs) : 0),
       0,
     )
-    const totalCollectedGhs = sheetCustomers.reduce(
+    const totalCollectedGhs = effectiveSheetCustomers.reduce(
       (s, c) => s + (Number.isFinite(Number(c.totalCollectedGhs)) ? Number(c.totalCollectedGhs) : 0),
       0,
     )
     return { totalCustomers, rowCount, totalOrders, totalBilledGhs, totalCollectedGhs }
-  }, [sheetCustomers])
+  }, [effectiveSheetCustomers])
 
   const ordersForSheetRow = useCallback(
     (c: Pick<DtcOrdersEngineCustomerJson, 'phoneNumber' | 'customerName' | 'totalOrders'>) => {
@@ -1775,9 +1877,9 @@ export function OrdersEngineView() {
               Customer sheet (imported)
             </h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              This table stays empty until you import an Excel file with the headers above.
+              This table stays empty until you import an Excel file with the headers above. New orders you create are merged into this list by phone (name fallback).
             </p>
-            {!loading && sheetCustomers.length > 0 ? (
+            {!loading && effectiveSheetCustomers.length > 0 ? (
               <p className="mt-2 text-xs text-muted-foreground">
                 {sheetTotals.totalCustomers.toLocaleString()} unique customers (by phone){' '}
                 {sheetTotals.rowCount !== sheetTotals.totalCustomers
@@ -1793,7 +1895,7 @@ export function OrdersEngineView() {
               <Loader2 className="h-5 w-5 animate-spin" />
               Loading…
             </div>
-          ) : sheetCustomers.length === 0 ? (
+          ) : effectiveSheetCustomers.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted-foreground">
               Empty. Click <span className="font-medium">Import customer sheet</span> to upload your Excel.
             </p>
@@ -1807,6 +1909,14 @@ export function OrdersEngineView() {
                     </TableHead>
                     <TableHead className="min-w-[10rem] whitespace-nowrap">Customer Name</TableHead>
                     <TableHead className="min-w-[7rem] whitespace-nowrap">Phone Number</TableHead>
+                    <TableHead className="min-w-[8rem] whitespace-nowrap">Order id</TableHead>
+                    <TableHead className="min-w-[10rem] whitespace-nowrap">Customer</TableHead>
+                    <TableHead className="hidden sm:table-cell whitespace-nowrap">Channel</TableHead>
+                    <TableHead className="hidden lg:table-cell whitespace-nowrap">Payment</TableHead>
+                    <TableHead className="hidden lg:table-cell whitespace-nowrap text-right">Items</TableHead>
+                    <TableHead className="hidden md:table-cell whitespace-nowrap text-right">Total</TableHead>
+                    <TableHead className="hidden md:table-cell whitespace-nowrap">Status</TableHead>
+                    <TableHead className="hidden xl:table-cell whitespace-nowrap">Order date</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Total Orders</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Total Billed (GHC)</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Total Collected (GHC)</TableHead>
@@ -1826,6 +1936,37 @@ export function OrdersEngineView() {
                       <TableCell className="font-medium whitespace-nowrap">{c.customerName}</TableCell>
                       <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
                         {c.phoneNumber || '—'}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs whitespace-nowrap">
+                        {c.lastOrderId || '—'}
+                      </TableCell>
+                      <TableCell className="font-medium whitespace-nowrap">
+                        {c.customerName || '—'}
+                      </TableCell>
+                      <TableCell className="hidden sm:table-cell whitespace-nowrap">
+                        {c.lastOrderChannel || '—'}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell whitespace-nowrap">
+                        {(() => {
+                          const pm = c.lastOrderPayment
+                          return pm ? <Badge variant="outline">{pm.replace(/_/g, ' ')}</Badge> : '—'
+                        })()}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell text-right tabular-nums whitespace-nowrap">
+                        {Number(c.lastOrderItems ?? 0) || '—'}
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell text-right tabular-nums whitespace-nowrap">
+                        {typeof c.lastOrderTotal === 'number'
+                          ? formatGhs(c.lastOrderTotal)
+                          : '—'}
+                      </TableCell>
+                      <TableCell className="hidden md:table-cell whitespace-nowrap">
+                        {c.lastOrderStatus ? orderStatusBadge(c.lastOrderStatus as OrderStatus) : '—'}
+                      </TableCell>
+                      <TableCell className="hidden xl:table-cell text-muted-foreground whitespace-nowrap">
+                        {c.lastOrderAt
+                          ? format(new Date(c.lastOrderAt), 'dd MMM yyyy, HH:mm')
+                          : '—'}
                       </TableCell>
                       <TableCell className="text-right tabular-nums whitespace-nowrap">
                         {ordersForSheetRow(c).toLocaleString()}
