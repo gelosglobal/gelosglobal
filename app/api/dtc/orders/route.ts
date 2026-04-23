@@ -2,6 +2,7 @@ import { auth, ensureAuthMongo } from '@/lib/auth'
 import {
   computeOrderStats,
   createDtcOrder,
+  DTC_ORDERS_COLLECTION,
   listDtcOrders,
   serializeOrder,
 } from '@/lib/dtc-orders'
@@ -68,9 +69,11 @@ export async function GET() {
 
   const { db } = getMongo()
   const rows = await listDtcOrders(db)
+  const totalCount = await db.collection(DTC_ORDERS_COLLECTION).countDocuments({})
   const stats = computeOrderStats(rows)
   return NextResponse.json({
     orders: rows.map(serializeOrder),
+    totalCount,
     stats: {
       ordersToday: stats.ordersToday,
       avgOrderValue: stats.avgOrderValue,

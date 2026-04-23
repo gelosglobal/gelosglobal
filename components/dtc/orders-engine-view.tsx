@@ -149,6 +149,7 @@ function orderStatusBadge(status: OrderStatus) {
 
 export function OrdersEngineView() {
   const [orders, setOrders] = useState<OrderRow[]>([])
+  const [ordersTotalCount, setOrdersTotalCount] = useState<number | null>(null)
   const [intelAgg, setIntelAgg] = useState<CustomerIntelAgg | null>(null)
   const [sheetCustomers, setSheetCustomers] = useState<DtcOrdersEngineCustomerJson[]>([])
   const [intelUniqueCustomers, setIntelUniqueCustomers] = useState<number | null>(null)
@@ -157,6 +158,8 @@ export function OrdersEngineView() {
   const [importingCustomers, setImportingCustomers] = useState(false)
   const [filter, setFilter] = useState('')
   const [sortBy, setSortBy] = useState<OrdersSortKey>('newest')
+  const [sheetRangeStart, setSheetRangeStart] = useState('')
+  const [sheetRangeEnd, setSheetRangeEnd] = useState('')
   const [editSheetOpen, setEditSheetOpen] = useState(false)
   const [editingSheet, setEditingSheet] = useState(false)
   const [editSheetRow, setEditSheetRow] = useState<DtcOrdersEngineCustomerJson | null>(null)
@@ -221,8 +224,11 @@ export function OrdersEngineView() {
       if (!ordersRes.ok) {
         throw new Error('Failed to load orders')
       }
-      const orderData = (await ordersRes.json()) as { orders: OrderRow[] }
+      const orderData = (await ordersRes.json()) as { orders: OrderRow[]; totalCount?: number }
       setOrders(orderData.orders)
+      const ordersCount =
+        Number.isFinite(Number(orderData.totalCount)) ? Number(orderData.totalCount) : orderData.orders.length
+      setOrdersTotalCount(Number.isFinite(ordersCount) ? ordersCount : null)
 
       if (sheetRes.ok) {
         const json = (await sheetRes.json()) as { customers?: DtcOrdersEngineCustomerJson[] }
@@ -302,7 +308,8 @@ export function OrdersEngineView() {
 
         setIntelAgg({
           ...baseAgg,
-          totalOrders: ledgerOrders ?? baseAgg.totalOrders,
+          totalOrders:
+            (ledgerOrders ?? baseAgg.totalOrders) + (Number.isFinite(ordersCount) ? ordersCount : 0),
           returnedFormatted:
             ledgerReturnedCount && ledgerReturnedCount > 0
               ? ledgerReturnedCount.toLocaleString()
@@ -320,6 +327,7 @@ export function OrdersEngineView() {
       setIntelAgg(null)
       setIntelUniqueCustomers(null)
       setIntelOrdersByKey({})
+      setOrdersTotalCount(null)
     } finally {
       setLoading(false)
     }
@@ -478,6 +486,17 @@ export function OrdersEngineView() {
 
   const filteredSheetCustomers = useMemo(() => {
     const q = filter.trim().toLowerCase()
+
+    const ymdToMs = (s: string) => {
+      const v = String(s ?? '').trim()
+      if (!v) return null
+      const d = new Date(`${v}T12:00:00`)
+      const ms = d.getTime()
+      return Number.isNaN(ms) ? null : ms
+    }
+    const startMs = ymdToMs(sheetRangeStart)
+    const endMs = ymdToMs(sheetRangeEnd)
+
     const rows = (!q
       ? [...effectiveSheetCustomers]
       : effectiveSheetCustomers.filter((c) => {
@@ -499,7 +518,22 @@ export function OrdersEngineView() {
           return hay.includes(q)
         }))
 
-    rows.sort((a, b) => {
+    const rowsInRange = rows.filter((c) => {
+      if (startMs == null && endMs == null) return true
+      const firstMs = ymdToMs(c.firstOrderDate)
+      const lastMs = ymdToMs(c.lastOrderDate)
+      // Include row if its [first,last] overlaps the selected [start,end].
+      const a = firstMs ?? lastMs ?? null
+      const b = lastMs ?? firstMs ?? null
+      if (a == null && b == null) return false
+      const rowStart = a ?? 0
+      const rowEnd = b ?? rowStart
+      const selStart = startMs ?? Number.NEGATIVE_INFINITY
+      const selEnd = endMs ?? Number.POSITIVE_INFINITY
+      return rowEnd >= selStart && rowStart <= selEnd
+    })
+
+    rowsInRange.sort((a, b) => {
       switch (sortBy) {
         case 'customerAZ':
           return (
@@ -524,8 +558,8 @@ export function OrdersEngineView() {
       }
     })
 
-    return rows
-  }, [effectiveSheetCustomers, filter, sortBy]) as EffectiveSheetRow[]
+    return rowsInRange
+  }, [effectiveSheetCustomers, filter, sheetRangeStart, sheetRangeEnd, sortBy]) as EffectiveSheetRow[]
 
   const sheetTotals = useMemo(() => {
     const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
@@ -1889,6 +1923,46 @@ export function OrdersEngineView() {
                 {formatGhs(sheetTotals.totalBilledGhs)} · Collected {formatGhs(sheetTotals.totalCollectedGhs)}
               </p>
             ) : null}
+
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="space-y-2">
+                <Label htmlFor="oe-sheet-from" className="text-muted-foreground">
+                  Date range (from)
+                </Label>
+                <Input
+                  id="oe-sheet-from"
+                  type="date"
+                  value={sheetRangeStart}
+                  onChange={(e) => setSheetRangeStart(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="oe-sheet-to" className="text-muted-foreground">
+                  Date range (to)
+                </Label>
+                <Input
+                  id="oe-sheet-to"
+                  type="date"
+                  value={sheetRangeEnd}
+                  onChange={(e) => setSheetRangeEnd(e.target.value)}
+                />
+              </div>
+              {(sheetRangeStart || sheetRangeEnd) ? (
+                <div className="sm:ml-auto">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setSheetRangeStart('')
+                      setSheetRangeEnd('')
+                    }}
+                  >
+                    Clear dates
+                  </Button>
+                </div>
+              ) : null}
+            </div>
           </div>
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">

@@ -1,6 +1,7 @@
 import type { Db } from 'mongodb'
 import { subDays } from 'date-fns'
 import { DTC_ORDERS_COLLECTION } from '@/lib/dtc-orders'
+import { DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION } from '@/lib/dtc-customer-intelligence-ledger'
 import { computeInventoryStats, computeStockHealth, listDtcInventory } from '@/lib/dtc-inventory'
 import { computeFinanceLayerSnapshot } from '@/lib/dtc-finance'
 
@@ -61,6 +62,7 @@ export async function computeDtcDashboardSnapshot(
     allTimeCount,
     allTimeRevenueSum,
     customerIntelTotals,
+    customerIntelLedgerCount,
   ] = await Promise.all([
     listDtcInventory(db),
     computeFinanceLayerSnapshot(db, periodDays),
@@ -241,6 +243,7 @@ export async function computeDtcDashboardSnapshot(
         { $project: { _id: 0, totalOrders: 1, totalCollectedGhs: 1 } },
       ])
       .toArray(),
+    db.collection(DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION).countDocuments({}),
   ])
 
   const invStats = computeInventoryStats(inventory)
@@ -257,7 +260,8 @@ export async function computeDtcDashboardSnapshot(
     revenueGhs: Math.max(base.revenueGhs, sumTotalAmount),
   }
   const intel = customerIntelTotals?.[0]
-  const intelOrders = intel?.totalOrders ?? 0
+  // Customer Intelligence "Total orders" is defined as the number of ledger rows (each row = 1 order).
+  const intelOrders = customerIntelLedgerCount ?? 0
   const intelCollected = intel?.totalCollectedGhs ?? 0
   const avgOrderValueGhs = k.orders === 0 ? 0 : k.revenueGhs / k.orders
 
@@ -299,11 +303,16 @@ export async function computeDtcDashboardSnapshot(
     periodStart: since.toISOString(),
     periodEnd: now.toISOString(),
     kpis: {
-      // User requirement: use Customer Intelligence totals for revenue + orders.
-      orders: intelOrders,
+      // Dashboard should reflect imported Customer Intelligence plus newly created Orders Engine orders.
+      // Customer Intelligence is imported into `dtc_customers` (intelOrders/intelCollected), while new orders
+      // live in `dtc_orders` (k.orders/k.revenueGhs).
+      orders: intelOrders + (k.orders ?? 0),
       units: k.units,
-      revenueGhs: intelCollected,
-      avgOrderValueGhs: intelOrders === 0 ? 0 : intelCollected / intelOrders,
+      revenueGhs: intelCollected + (k.revenueGhs ?? 0),
+      avgOrderValueGhs:
+        intelOrders + (k.orders ?? 0) === 0
+          ? 0
+          : (intelCollected + (k.revenueGhs ?? 0)) / (intelOrders + (k.orders ?? 0)),
       awaitingFulfillment: k.awaitingFulfillment,
       skusTracked: invStats.skusTracked,
       belowSafety: invStats.belowSafety,

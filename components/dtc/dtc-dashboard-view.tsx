@@ -200,7 +200,7 @@ export function DtcDashboardView() {
                   <Wallet className="h-4 w-4 text-muted-foreground" />
                 </div>
                 <p className="mt-2 text-2xl font-bold tabular-nums">{formatGhs(data.kpis.revenueGhs)}</p>
-                <p className="text-xs text-muted-foreground">All-time sum from Orders Engine</p>
+                <p className="text-xs text-muted-foreground">Customer Intelligence + new Orders Engine orders</p>
               </Card>
               <Card className="p-4">
                 <div className="flex items-center justify-between gap-3">
