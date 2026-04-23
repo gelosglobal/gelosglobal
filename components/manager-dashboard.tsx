@@ -209,6 +209,10 @@ export function ManagerDashboard() {
   const [b2bPaymentsInvoicedGhs, setB2bPaymentsInvoicedGhs] = useState<number | null>(null)
   /** DTC revenue as sum of Customer Intelligence totalCollected. */
   const [dtcCollectedFromIntelGhs, setDtcCollectedFromIntelGhs] = useState<number | null>(null)
+  const totalRevenueDtcPlusB2bGhs =
+    b2bPaymentsInvoicedGhs === null || dtcCollectedFromIntelGhs === null
+      ? null
+      : Math.max(0, b2bPaymentsInvoicedGhs) + Math.max(0, dtcCollectedFromIntelGhs)
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [tasks, setTasks] = useState<RepTaskRow[]>([])
 
@@ -374,19 +378,21 @@ export function ManagerDashboard() {
     void load()
   }, [load])
 
-  const totalRev = finance?.totalRevenue ?? 0
+  const splitDtc = dtcCollectedFromIntelGhs ?? 0
+  const splitB2b = b2bPaymentsInvoicedGhs ?? 0
+  const totalRev = Math.max(0, splitDtc) + Math.max(0, splitB2b)
   const dtcPct =
-    totalRev > 0 && finance
-      ? Math.min(100, Math.round((finance.dtcRevenue / totalRev) * 1000) / 10)
+    totalRev > 0
+      ? Math.min(100, Math.round((Math.max(0, splitDtc) / totalRev) * 1000) / 10)
       : 0
   const b2bPct =
-    totalRev > 0 && finance
-      ? Math.min(100, Math.round((finance.b2bCollected / totalRev) * 1000) / 10)
+    totalRev > 0
+      ? Math.min(100, Math.round((Math.max(0, splitB2b) / totalRev) * 1000) / 10)
       : 0
 
   const revenueBarData = [
     { channel: 'DTC', percentage: dtcPct, fill: '#7c3aed' },
-    { channel: 'B2B collected', percentage: b2bPct, fill: '#2563eb' },
+    { channel: 'B2B invoiced', percentage: b2bPct, fill: '#2563eb' },
   ]
 
   const recentOrders = orders.slice(0, 6)
@@ -526,7 +532,7 @@ export function ManagerDashboard() {
             icon={Wallet}
             iconWrapClass="bg-blue-600/10"
             iconClass="text-blue-600"
-            label="Total revenue"
+            label="Total invoice"
             value={b2bPaymentsInvoicedGhs === null ? '—' : formatGhs(b2bPaymentsInvoicedGhs)}
             subtitle="B2B Payments · Net invoiced (after discounts)"
           />
@@ -540,6 +546,15 @@ export function ManagerDashboard() {
               dtcCollectedFromIntelGhs === null ? '—' : formatGhs(dtcCollectedFromIntelGhs)
             }
             subtitle="Customer Intelligence · Total collected"
+          />
+          <MasterKpiCard
+            borderAccent="border-l-amber-600"
+            icon={LayoutGrid}
+            iconWrapClass="bg-amber-600/10"
+            iconClass="text-amber-700"
+            label="Total revenue (DTC + B2B)"
+            value={totalRevenueDtcPlusB2bGhs === null ? '—' : formatGhs(totalRevenueDtcPlusB2bGhs)}
+            subtitle="DTC collected + B2B invoiced · Combined"
           />
           <MasterKpiCard
             borderAccent="border-l-green-600"
@@ -584,9 +599,9 @@ export function ManagerDashboard() {
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
               <PieChart className="h-4 w-4 text-muted-foreground" />
             </span>
-            Revenue split — DTC vs B2B collected
+            Revenue split — DTC vs B2B invoiced
           </h3>
-          <ResponsiveContainer width="100%" height={72}>
+          <ResponsiveContainer width="100%" height={96}>
             <BarChart
               data={revenueBarData}
               layout="vertical"
@@ -616,7 +631,7 @@ export function ManagerDashboard() {
             </div>
             <div className="flex items-center gap-2">
               <div className="h-3 w-3 rounded-sm bg-blue-600" />
-              <span>B2B collected {b2bPct}%</span>
+              <span>B2B invoiced {b2bPct}%</span>
             </div>
           </div>
         </Card>

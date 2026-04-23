@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
-import { Download, Loader2, Plus, Trash2, Users } from 'lucide-react'
+import { Download, Loader2, Pencil, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import * as XLSX from 'xlsx'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
@@ -87,7 +87,7 @@ type SegmentCounts = {
   core: number
 }
 
-type CustomerSortKey = 'billed' | 'name' | 'orders' | 'lastOrder'
+type CustomerSortKey = 'date' | 'amountToCollect' | 'totalCollected' | 'name'
 
 function fmtTableDate(s: string): string {
   if (!s?.trim()) return '—'
@@ -109,9 +109,29 @@ export function CustomerIntelligenceView() {
   const [clearOpen, setClearOpen] = useState(false)
   const [clearPhrase, setClearPhrase] = useState('')
   const [clearing, setClearing] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [editingRow, setEditingRow] = useState(false)
+  const [editRow, setEditRow] = useState<CustomerIntelLedgerRow | null>(null)
+  const [editForm, setEditForm] = useState({
+    date: '',
+    orderNumber: '',
+    customerName: '',
+    phoneNumber: '',
+    location: '',
+    riderAssigned: '',
+    amountToCollectGhs: '',
+    cashCollectedGhs: '',
+    momoCollectedGhs: '',
+    paystackCollectedGhs: '',
+    totalCollectedGhs: '',
+    paymentMethod: '',
+    deliveryStatus: '',
+    remarks: '',
+    additionalRemarks: '',
+  })
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [sortBy, setSortBy] = useState<CustomerSortKey>('billed')
+  const [sortBy, setSortBy] = useState<CustomerSortKey>('date')
   const [createForm, setCreateForm] = useState({
     customer: '',
     phone: '',
@@ -178,8 +198,26 @@ export function CustomerIntelligenceView() {
             .toLowerCase()
           return hay.includes(q)
         })
+
+    base.sort((a, b) => {
+      switch (sortBy) {
+        case 'name':
+          return a.customerName.localeCompare(b.customerName)
+        case 'amountToCollect':
+          return (b.amountToCollectGhs ?? 0) - (a.amountToCollectGhs ?? 0)
+        case 'totalCollected':
+          return (b.totalCollectedGhs ?? 0) - (a.totalCollectedGhs ?? 0)
+        case 'date':
+        default: {
+          const ta = a.orderedAt ? new Date(a.orderedAt).getTime() : 0
+          const tb = b.orderedAt ? new Date(b.orderedAt).getTime() : 0
+          return tb - ta
+        }
+      }
+    })
+
     return base
-  }, [ledgerRows, query])
+  }, [ledgerRows, query, sortBy])
 
   const totals = useMemo(() => {
     const totalCustomers = customers.length
@@ -413,6 +451,84 @@ export function CustomerIntelligenceView() {
     }
   }
 
+  function openEditRow(r: CustomerIntelLedgerRow) {
+    setEditRow(r)
+    setEditForm({
+      date: r.orderedAt ? r.orderedAt.slice(0, 10) : '',
+      orderNumber: r.orderNumber ?? '',
+      customerName: r.customerName ?? '',
+      phoneNumber: r.phoneNumber ?? '',
+      location: r.location ?? '',
+      riderAssigned: r.riderAssigned ?? '',
+      amountToCollectGhs: String(r.amountToCollectGhs ?? 0),
+      cashCollectedGhs: String(r.cashCollectedGhs ?? 0),
+      momoCollectedGhs: String(r.momoCollectedGhs ?? 0),
+      paystackCollectedGhs: String(r.paystackCollectedGhs ?? 0),
+      totalCollectedGhs: String(r.totalCollectedGhs ?? 0),
+      paymentMethod: r.paymentMethod ?? '',
+      deliveryStatus: r.deliveryStatus ?? '',
+      remarks: r.remarks ?? '',
+      additionalRemarks: r.additionalRemarks ?? '',
+    })
+    setEditOpen(true)
+  }
+
+  async function submitEditRow(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editRow) return
+    const name = editForm.customerName.trim()
+    if (!name) {
+      toast.error('Enter a customer name')
+      return
+    }
+    setEditingRow(true)
+    try {
+      const res = await fetch(`/api/dtc/customer-intelligence/${editRow.id}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: editForm.date.trim() || undefined,
+          orderNumber: editForm.orderNumber.trim() || undefined,
+          customerName: name,
+          phoneNumber: editForm.phoneNumber.trim() || undefined,
+          location: editForm.location.trim() || undefined,
+          riderAssigned: editForm.riderAssigned.trim() || undefined,
+          amountToCollectGhs:
+            editForm.amountToCollectGhs.trim() === '' ? undefined : Number(editForm.amountToCollectGhs),
+          cashCollectedGhs:
+            editForm.cashCollectedGhs.trim() === '' ? undefined : Number(editForm.cashCollectedGhs),
+          momoCollectedGhs:
+            editForm.momoCollectedGhs.trim() === '' ? undefined : Number(editForm.momoCollectedGhs),
+          paystackCollectedGhs:
+            editForm.paystackCollectedGhs.trim() === ''
+              ? undefined
+              : Number(editForm.paystackCollectedGhs),
+          totalCollectedGhs:
+            editForm.totalCollectedGhs.trim() === '' ? undefined : Number(editForm.totalCollectedGhs),
+          paymentMethod: editForm.paymentMethod.trim() || undefined,
+          deliveryStatus: editForm.deliveryStatus.trim() || undefined,
+          remarks: editForm.remarks.trim() || undefined,
+          additionalRemarks: editForm.additionalRemarks.trim() || undefined,
+        }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'Could not save row')
+      toast.success('Row updated')
+      setEditOpen(false)
+      setEditRow(null)
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save row')
+    } finally {
+      setEditingRow(false)
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-col">
       <DtcPageHeader
@@ -429,90 +545,6 @@ export function CustomerIntelligenceView() {
               <Plus className="h-4 w-4" />
               Add customer
             </Button>
-
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              type="button"
-              disabled={importing || loading}
-              onClick={() => document.getElementById('dtc-customer-import')?.click()}
-            >
-              <Download className="h-4 w-4" />
-              Import Excel
-            </Button>
-            <input
-              id="dtc-customer-import"
-              type="file"
-              accept=".xlsx,.xls,.xlsm"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                e.target.value = ''
-                if (f) void handleImportExcel(f)
-              }}
-            />
-
-            <Dialog open={clearOpen} onOpenChange={setClearOpen}>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                type="button"
-                disabled={loading || customers.length === 0}
-                onClick={() => setClearOpen(true)}
-              >
-                <Trash2 className="h-4 w-4" />
-                Clear list
-              </Button>
-              <DialogContent className="sm:max-w-lg">
-                <DialogHeader>
-                  <DialogTitle>Clear all customers?</DialogTitle>
-                  <DialogDescription>
-                    This deletes every row in Customer Intelligence. To confirm, type{' '}
-                    <span className="font-mono">{CLEAR_DTC_CUSTOMERS_CONFIRM}</span>.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-2">
-                  <Label htmlFor="dtc-clear-confirm">Confirmation phrase</Label>
-                  <Input
-                    id="dtc-clear-confirm"
-                    value={clearPhrase}
-                    onChange={(e) => setClearPhrase(e.target.value)}
-                    placeholder={CLEAR_DTC_CUSTOMERS_CONFIRM}
-                    autoComplete="off"
-                  />
-                </div>
-                <DialogFooter>
-                  <Button
-                    variant="outline"
-                    type="button"
-                    onClick={() => {
-                      setClearOpen(false)
-                      setClearPhrase('')
-                    }}
-                    disabled={clearing}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    onClick={() => void handleResetCustomers()}
-                    disabled={clearing}
-                  >
-                    {clearing ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Clearing…
-                      </>
-                    ) : (
-                      'Clear now'
-                    )}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
 
             <Button
               variant="outline"
@@ -602,9 +634,9 @@ export function CustomerIntelligenceView() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="billed">Total billed (high first)</SelectItem>
-                  <SelectItem value="orders">Total orders (most first)</SelectItem>
-                  <SelectItem value="lastOrder">Last order date (recent first)</SelectItem>
+                  <SelectItem value="date">Date (recent first)</SelectItem>
+                  <SelectItem value="amountToCollect">Amount to collect (high first)</SelectItem>
+                  <SelectItem value="totalCollected">Total collected (high first)</SelectItem>
                   <SelectItem value="name">Customer name (A–Z)</SelectItem>
                 </SelectContent>
               </Select>
@@ -681,6 +713,7 @@ export function CustomerIntelligenceView() {
                   <TableHead className="whitespace-nowrap">Delivery Status</TableHead>
                   <TableHead className="min-w-[12rem] whitespace-nowrap">Remarks</TableHead>
                   <TableHead className="min-w-[12rem] whitespace-nowrap">Additional Remarks</TableHead>
+                  <TableHead className="w-[64px] text-right" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -736,6 +769,18 @@ export function CustomerIntelligenceView() {
                       >
                         {c.additionalRemarks || '—'}
                       </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => openEditRow(c)}
+                          aria-label="Edit row"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   )
                 })}
@@ -745,6 +790,190 @@ export function CustomerIntelligenceView() {
           )}
         </Card>
       </div>
+
+      <Dialog
+        open={editOpen}
+        onOpenChange={(open) => {
+          setEditOpen(open)
+          if (!open) setEditRow(null)
+        }}
+      >
+        <DialogContent className="!flex min-h-0 max-h-[90vh] flex-col overflow-hidden p-0 sm:max-w-3xl">
+          <form onSubmit={submitEditRow} className="flex min-h-0 flex-1 flex-col">
+            <DialogHeader className="shrink-0 space-y-2 border-b border-border px-6 pt-6 pb-4 pr-12 text-left">
+              <DialogTitle>Edit row</DialogTitle>
+              <DialogDescription>Updates the Customer Intelligence row.</DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-date">Date</Label>
+                  <Input
+                    id="ci-edit-date"
+                    type="date"
+                    value={editForm.date}
+                    onChange={(e) => setEditForm((f) => ({ ...f, date: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-order">Order #</Label>
+                  <Input
+                    id="ci-edit-order"
+                    value={editForm.orderNumber}
+                    onChange={(e) => setEditForm((f) => ({ ...f, orderNumber: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="ci-edit-name">Customer Name</Label>
+                  <Input
+                    id="ci-edit-name"
+                    value={editForm.customerName}
+                    onChange={(e) => setEditForm((f) => ({ ...f, customerName: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-phone">Phone Number</Label>
+                  <Input
+                    id="ci-edit-phone"
+                    value={editForm.phoneNumber}
+                    onChange={(e) => setEditForm((f) => ({ ...f, phoneNumber: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-location">Location</Label>
+                  <Input
+                    id="ci-edit-location"
+                    value={editForm.location}
+                    onChange={(e) => setEditForm((f) => ({ ...f, location: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-rider">Rider Assigned</Label>
+                  <Input
+                    id="ci-edit-rider"
+                    value={editForm.riderAssigned}
+                    onChange={(e) => setEditForm((f) => ({ ...f, riderAssigned: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-paymethod">Payment Method</Label>
+                  <Input
+                    id="ci-edit-paymethod"
+                    value={editForm.paymentMethod}
+                    onChange={(e) => setEditForm((f) => ({ ...f, paymentMethod: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-status">Delivery Status</Label>
+                  <Input
+                    id="ci-edit-status"
+                    value={editForm.deliveryStatus}
+                    onChange={(e) => setEditForm((f) => ({ ...f, deliveryStatus: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-amt">Amount to Collect (GHC)</Label>
+                  <Input
+                    id="ci-edit-amt"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={editForm.amountToCollectGhs}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, amountToCollectGhs: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-cash">Cash Collected (GHC)</Label>
+                  <Input
+                    id="ci-edit-cash"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={editForm.cashCollectedGhs}
+                    onChange={(e) => setEditForm((f) => ({ ...f, cashCollectedGhs: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-momo">MoMo Collected (GHC)</Label>
+                  <Input
+                    id="ci-edit-momo"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={editForm.momoCollectedGhs}
+                    onChange={(e) => setEditForm((f) => ({ ...f, momoCollectedGhs: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-paystack">Paystack Collected (GHC)</Label>
+                  <Input
+                    id="ci-edit-paystack"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={editForm.paystackCollectedGhs}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, paystackCollectedGhs: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="ci-edit-total">Total Collected (GHC)</Label>
+                  <Input
+                    id="ci-edit-total"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={editForm.totalCollectedGhs}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, totalCollectedGhs: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="ci-edit-remarks">Remarks</Label>
+                  <Input
+                    id="ci-edit-remarks"
+                    value={editForm.remarks}
+                    onChange={(e) => setEditForm((f) => ({ ...f, remarks: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="ci-edit-additional">Additional Remarks</Label>
+                  <Input
+                    id="ci-edit-additional"
+                    value={editForm.additionalRemarks}
+                    onChange={(e) => setEditForm((f) => ({ ...f, additionalRemarks: e.target.value }))}
+                  />
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="shrink-0 border-t bg-background px-6 py-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setEditOpen(false)}
+                disabled={editingRow}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={editingRow}>
+                {editingRow ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  'Save changes'
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-2xl">
