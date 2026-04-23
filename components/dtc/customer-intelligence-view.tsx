@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import * as XLSX from 'xlsx'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import {
   Dialog,
@@ -62,6 +63,29 @@ export type CustomerIntelLedgerRow = {
   deliveryStatus: string
   remarks: string
   additionalRemarks: string
+}
+
+const DELIVERY_STATUS_NONE = '__none__'
+
+const DELIVERY_STATUS_OPTIONS = [
+  { value: DELIVERY_STATUS_NONE, label: 'Not set' },
+  { value: 'Fulfilled', label: 'Fulfilled' },
+  { value: 'Processing', label: 'Processing' },
+  { value: 'Out for delivery', label: 'Out for delivery' },
+  { value: 'Cancelled', label: 'Cancelled' },
+  { value: 'Returned', label: 'Returned' },
+] as const
+
+function deliveryStatusBadge(value: string) {
+  const v = String(value ?? '').trim()
+  if (!v || v === DELIVERY_STATUS_NONE) return <Badge variant="outline">—</Badge>
+  const key = v.toLowerCase()
+  if (key.includes('fulfill')) return <Badge className="bg-emerald-600 hover:bg-emerald-600">{v}</Badge>
+  if (key.includes('process')) return <Badge variant="secondary">{v}</Badge>
+  if (key.includes('out')) return <Badge className="bg-blue-600 hover:bg-blue-600">{v}</Badge>
+  if (key.includes('return')) return <Badge className="bg-amber-600 hover:bg-amber-600">{v}</Badge>
+  if (key.includes('cancel')) return <Badge variant="destructive">{v}</Badge>
+  return <Badge variant="outline">{v}</Badge>
 }
 
 type OrdersEngineOrderRow = {
@@ -185,6 +209,8 @@ export function CustomerIntelligenceView({
   const [newOrderOpen, setNewOrderOpen] = useState(false)
   const [newOrderSubmitting, setNewOrderSubmitting] = useState(false)
   const [sortBy, setSortBy] = useState<CustomerSortKey>('date')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [createForm, setCreateForm] = useState({
     date: '',
     orderNumber: '',
@@ -218,7 +244,7 @@ export function CustomerIntelligenceView({
     paystackCollectedGhs: '',
     totalCollectedGhs: '',
     paymentMethod: '',
-    deliveryStatus: '',
+    deliveryStatus: DELIVERY_STATUS_NONE,
     remarks: '',
     additionalRemarks: '',
     items: [{ sku: '', name: '', qty: '1', unitPrice: '' } satisfies DraftItem],
@@ -280,7 +306,10 @@ export function CustomerIntelligenceView({
           paystackCollectedGhs: newOrderForm.paystackCollectedGhs.trim() === '' ? 0 : Number(newOrderForm.paystackCollectedGhs),
           totalCollectedGhs: newOrderForm.totalCollectedGhs.trim() === '' ? 0 : Number(newOrderForm.totalCollectedGhs),
           paymentMethod: newOrderForm.paymentMethod.trim() || undefined,
-          deliveryStatus: newOrderForm.deliveryStatus.trim() || undefined,
+          deliveryStatus:
+            newOrderForm.deliveryStatus.trim() === '' || newOrderForm.deliveryStatus === DELIVERY_STATUS_NONE
+              ? undefined
+              : newOrderForm.deliveryStatus.trim(),
           remarks: newOrderForm.remarks.trim() || undefined,
           additionalRemarks: newOrderForm.additionalRemarks.trim() || undefined,
         }),
@@ -307,7 +336,7 @@ export function CustomerIntelligenceView({
         paystackCollectedGhs: '',
         totalCollectedGhs: '',
         paymentMethod: '',
-        deliveryStatus: '',
+        deliveryStatus: DELIVERY_STATUS_NONE,
         remarks: '',
         additionalRemarks: '',
         items: [{ sku: '', name: '', qty: '1', unitPrice: '' }],
@@ -412,10 +441,12 @@ export function CustomerIntelligenceView({
 
   const displayRows = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const base = !q
-      ? [...ledgerRows]
-      : ledgerRows.filter((r) => {
-          const hay = [
+    const fromTs = dateFrom ? new Date(`${dateFrom}T00:00:00.000Z`).getTime() : null
+    const toTs = dateTo ? new Date(`${dateTo}T23:59:59.999Z`).getTime() : null
+    const base = ledgerRows.filter((r) => {
+      const okSearch = !q
+        ? true
+        : [
             r.customerName,
             r.phoneNumber,
             r.location,
@@ -428,8 +459,18 @@ export function CustomerIntelligenceView({
           ]
             .join(' ')
             .toLowerCase()
-          return hay.includes(q)
-        })
+            .includes(q)
+      if (!okSearch) return false
+
+      // Orders Engine needs a date range filter; Customer Intelligence page does not.
+      if (mode !== 'orders-engine') return true
+      if (!fromTs && !toTs) return true
+      const t = r.orderedAt ? new Date(r.orderedAt).getTime() : NaN
+      if (!Number.isFinite(t)) return false
+      if (fromTs != null && t < fromTs) return false
+      if (toTs != null && t > toTs) return false
+      return true
+    })
 
     base.sort((a, b) => {
       switch (sortBy) {
@@ -449,7 +490,7 @@ export function CustomerIntelligenceView({
     })
 
     return base
-  }, [ledgerRows, query, sortBy])
+  }, [dateFrom, dateTo, ledgerRows, mode, query, sortBy])
 
   const totals = useMemo(() => {
     const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
@@ -896,7 +937,23 @@ export function CustomerIntelligenceView({
                         </div>
                         <div className="space-y-2">
                           <Label htmlFor="oe-add-status">Delivery Status</Label>
-                          <Input id="oe-add-status" value={newOrderForm.deliveryStatus} onChange={(e) => setNewOrderForm((f) => ({ ...f, deliveryStatus: e.target.value }))} />
+                          <Select
+                            value={newOrderForm.deliveryStatus}
+                            onValueChange={(v) => setNewOrderForm((f) => ({ ...f, deliveryStatus: v }))}
+                          >
+                            <SelectTrigger id="oe-add-status" className="w-full justify-between">
+                              <SelectValue placeholder="Not set" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {DELIVERY_STATUS_OPTIONS.map((o) => (
+                                <SelectItem key={o.value || 'blank'} value={o.value}>
+                                  <span className="flex items-center gap-2">
+                                    {deliveryStatusBadge(o.value)}
+                                  </span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
                         <div className="space-y-2 sm:col-span-2">
                           <Label htmlFor="oe-add-remarks">Remarks</Label>
@@ -1181,6 +1238,31 @@ export function CustomerIntelligenceView({
             />
           </div>
           <div className="flex flex-wrap items-end gap-3 sm:justify-end">
+            {mode === 'orders-engine' ? (
+              <div className="flex w-full flex-col gap-2 sm:w-auto">
+                <Label className="text-muted-foreground">Date range</Label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className="w-[10.5rem]"
+                  />
+                  <span className="text-xs text-muted-foreground">to</span>
+                  <Input
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className="w-[10.5rem]"
+                  />
+                  {(dateFrom || dateTo) && (
+                    <Button type="button" variant="ghost" size="sm" onClick={() => { setDateFrom(''); setDateTo('') }}>
+                      Clear dates
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ) : null}
             <div className="w-full min-w-[10rem] space-y-2 sm:w-44">
               <Label htmlFor="customer-sort" className="text-muted-foreground">
                 Sort by
@@ -1317,9 +1399,7 @@ export function CustomerIntelligenceView({
                       <TableCell className="text-muted-foreground whitespace-nowrap">
                         {c.paymentMethod || '—'}
                       </TableCell>
-                      <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {c.deliveryStatus || '—'}
-                      </TableCell>
+                      <TableCell className="whitespace-nowrap">{deliveryStatusBadge(c.deliveryStatus)}</TableCell>
                       <TableCell className="max-w-[18rem] truncate text-muted-foreground" title={c.remarks}>
                         {c.remarks || '—'}
                       </TableCell>
