@@ -221,9 +221,10 @@ export function CustomerIntelligenceView() {
 
   const totals = useMemo(() => {
     const totalCustomers = customers.length
+    const totalOrders = customers.reduce((sum, c) => sum + (Number.isFinite(c.totalOrders) ? c.totalOrders : 0), 0)
     const totalBilled = customers.reduce((sum, c) => sum + c.totalBilled, 0)
     const avgTotalBilled = totalCustomers === 0 ? 0 : totalBilled / totalCustomers
-    return { totalCustomers, totalBilled, avgTotalBilled }
+    return { totalCustomers, totalOrders, totalBilled, avgTotalBilled }
   }, [customers])
 
   function handleExport() {

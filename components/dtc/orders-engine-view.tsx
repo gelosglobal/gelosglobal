@@ -40,6 +40,7 @@ import {
 } from '@/components/dtc/dtc-order-customer-field'
 import { formatGhs, type OrderStatus } from '@/lib/dtc-orders'
 import type { DtcOrdersEngineCustomerJson } from '@/lib/dtc-orders-engine-customer-sheet'
+import type { CustomerRow } from '@/components/dtc/customer-intelligence-view'
 
 type OrderRow = {
   id: string
@@ -205,11 +206,12 @@ export function OrdersEngineView() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [ordersRes, sheetRes] = await Promise.all([
+      const [ordersRes, sheetRes, customersRes] = await Promise.all([
         fetch('/api/dtc/orders', { credentials: 'include' }),
         fetch('/api/dtc/orders-engine/customers', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/dtc/customers', { credentials: 'include', cache: 'no-store' }),
       ])
-      if (ordersRes.status === 401 || sheetRes.status === 401) {
+      if (ordersRes.status === 401 || sheetRes.status === 401 || customersRes.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
       }
@@ -223,9 +225,25 @@ export function OrdersEngineView() {
         const json = (await sheetRes.json()) as { customers?: DtcOrdersEngineCustomerJson[] }
         const rows = Array.isArray(json.customers) ? json.customers : []
         setSheetCustomers(rows)
-        setIntelAgg(aggregateCustomerIntel(rows))
       } else {
         setSheetCustomers([])
+      }
+
+      if (customersRes.ok) {
+        const json = (await customersRes.json()) as { customers?: CustomerRow[] }
+        const rows = Array.isArray(json.customers) ? json.customers : []
+        // KPI cards should reflect Customer Intelligence totals (e.g. total orders = 30,021).
+        setIntelAgg(
+          aggregateCustomerIntel(
+            rows.map((c) => ({
+              totalOrders: c.totalOrders,
+              totalBilledGhs: c.totalBilled,
+              totalCollectedGhs: c.totalCollected,
+              returned: c.returned,
+            })),
+          ),
+        )
+      } else {
         setIntelAgg(null)
       }
     } catch {
