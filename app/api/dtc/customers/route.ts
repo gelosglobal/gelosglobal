@@ -48,7 +48,7 @@ const createCustomerSchema = z.object({
   phone: z.string().trim().min(6).max(40).optional(),
   email: z.string().trim().email().optional(),
   location: z.string().trim().min(1).max(200).optional(),
-  source: z.enum(['walk_in', 'instagram', 'web', 'referral', 'sales_rep', 'other']),
+  source: z.enum(['walk_in', 'instagram', 'web', 'referral', 'sales_rep', 'other']).optional(),
   joinDate: z
     .union([z.string().datetime(), z.string().min(1)])
     .optional()
@@ -57,6 +57,27 @@ const createCustomerSchema = z.object({
       message: 'Invalid joinDate',
     }),
   segment: z.enum(['High LTV', 'At risk', 'New (30d)', 'Core']).optional(),
+  totalOrders: z.coerce.number().int().min(0).max(10_000_000).optional(),
+  totalBilledGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  totalCollectedGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  returnedType: z.enum(['count', 'ghs']).optional(),
+  returned: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  firstOrderDate: z
+    .string()
+    .trim()
+    .min(1)
+    .max(32)
+    .optional()
+    .transform((v) => (v ? new Date(`${v}T12:00:00.000Z`) : undefined))
+    .refine((d) => !d || !Number.isNaN(d.getTime()), { message: 'Invalid firstOrderDate' }),
+  lastOrderDate: z
+    .string()
+    .trim()
+    .min(1)
+    .max(32)
+    .optional()
+    .transform((v) => (v ? new Date(`${v}T12:00:00.000Z`) : undefined))
+    .refine((d) => !d || !Number.isNaN(d.getTime()), { message: 'Invalid lastOrderDate' }),
 })
 
 export async function GET() {
@@ -268,10 +289,21 @@ export async function POST(request: Request) {
     phone,
     email: parsed.data.email ?? '',
     location: parsed.data.location ?? '',
-    source: parsed.data.source,
+    source: parsed.data.source ?? 'other',
     joinDate: parsed.data.joinDate ?? new Date(),
     segment: parsed.data.segment ?? undefined,
+    importTotalOrders: parsed.data.totalOrders ?? undefined,
+    importTotalBilledGhs: parsed.data.totalBilledGhs ?? undefined,
+    importTotalCollectedGhs: parsed.data.totalCollectedGhs ?? undefined,
+    ...(parsed.data.returned !== undefined
+      ? parsed.data.returnedType === 'ghs'
+        ? { importReturnedGhs: parsed.data.returned }
+        : { importReturnedCount: Math.trunc(parsed.data.returned) }
+      : {}),
+    importFirstOrderAt: parsed.data.firstOrderDate ?? undefined,
+    importLastOrderAt: parsed.data.lastOrderDate ?? undefined,
     createdAt: new Date(),
+    updatedAt: new Date(),
   })
 
   return NextResponse.json({ customer }, { status: 201 })

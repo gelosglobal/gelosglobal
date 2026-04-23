@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Loader2, Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 
-type SearchHit = {
+export type DtcOrderCustomerSearchHit = {
   id: string
   customerName: string
   phoneNumber: string
@@ -17,6 +17,8 @@ type Props = {
   'aria-label'?: string
   value: string
   onChange: (next: string) => void
+  /** When set, choosing a search result calls this with full row data (name, phone, etc.). */
+  onPickCustomer?: (hit: DtcOrderCustomerSearchHit) => void
   required?: boolean
   placeholder?: string
 }
@@ -26,6 +28,7 @@ export function DtcOrderCustomerField({
   'aria-label': ariaLabel,
   value,
   onChange,
+  onPickCustomer,
   required,
   placeholder = 'Search by name, phone, email, location — or type a new name',
 }: Props) {
@@ -34,7 +37,7 @@ export function DtcOrderCustomerField({
   const [debounced, setDebounced] = useState(value)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [results, setResults] = useState<SearchHit[]>([])
+  const [results, setResults] = useState<DtcOrderCustomerSearchHit[]>([])
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(value), 300)
@@ -57,7 +60,7 @@ export function DtcOrderCustomerField({
         setResults([])
         return
       }
-      const data = (await res.json()) as { results: SearchHit[] }
+      const data = (await res.json()) as { results: DtcOrderCustomerSearchHit[] }
       setResults(data.results ?? [])
     } catch {
       setResults([])
@@ -136,7 +139,11 @@ export function DtcOrderCustomerField({
                   className="cursor-default px-3 py-2 hover:bg-accent focus:bg-accent focus:outline-none"
                   onMouseDown={(e) => {
                     e.preventDefault()
-                    onChange(r.customerName)
+                    if (onPickCustomer) {
+                      onPickCustomer(r)
+                    } else {
+                      onChange(r.customerName)
+                    }
                     setOpen(false)
                   }}
                 >

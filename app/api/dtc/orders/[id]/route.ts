@@ -11,6 +11,9 @@ export const runtime = 'nodejs'
 const patchBodySchema = z
   .object({
     customer: z.string().trim().min(1).max(200).optional(),
+    customerPhone: z.string().trim().max(40).optional(),
+    customerEmail: z.string().trim().max(200).optional(),
+    customerLocation: z.string().trim().max(200).optional(),
     channel: z.enum(['Web', 'Instagram', 'B2B portal', 'TikTok', 'Other']).optional(),
     paymentMethod: z
       .enum(['cash', 'momo', 'card', 'bank_transfer', 'pay_on_delivery'])
@@ -71,6 +74,9 @@ export async function PATCH(
   const { db } = getMongo()
   const updated = await updateDtcOrder(db, new ObjectId(id), {
     customer: parsed.data.customer,
+    customerPhone: parsed.data.customerPhone,
+    customerEmail: parsed.data.customerEmail,
+    customerLocation: parsed.data.customerLocation,
     channel: parsed.data.channel,
     paymentMethod: parsed.data.paymentMethod,
     items: parsed.data.items?.map((i) => ({

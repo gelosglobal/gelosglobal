@@ -14,6 +14,9 @@ export const runtime = 'nodejs'
 
 const createBodySchema = z.object({
   customer: z.string().min(1).max(200),
+  customerPhone: z.string().trim().max(40).optional(),
+  customerEmail: z.string().trim().max(200).optional(),
+  customerLocation: z.string().trim().max(200).optional(),
   channel: z.enum(['Web', 'Instagram', 'B2B portal', 'TikTok', 'Other']),
   orderedAt: z
     .union([z.string().datetime(), z.string().min(1)])
@@ -100,6 +103,9 @@ export async function POST(request: Request) {
   const { db } = getMongo()
   const created = await createDtcOrder(db, {
     customer: parsed.data.customer,
+    customerPhone: parsed.data.customerPhone,
+    customerEmail: parsed.data.customerEmail,
+    customerLocation: parsed.data.customerLocation,
     channel: parsed.data.channel,
     paymentMethod: parsed.data.paymentMethod,
     items: parsed.data.items.map((i) => ({

@@ -34,13 +34,20 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { DtcOrderCustomerField } from '@/components/dtc/dtc-order-customer-field'
+import {
+  DtcOrderCustomerField,
+  type DtcOrderCustomerSearchHit,
+} from '@/components/dtc/dtc-order-customer-field'
+import type { CustomerRow } from '@/components/dtc/customer-intelligence-view'
 import { formatGhs, type OrderStatus } from '@/lib/dtc-orders'
 
 type OrderRow = {
   id: string
   orderNumber: string
   customer: string
+  customerPhone: string
+  customerEmail: string
+  customerLocation: string
   channel: string
   paymentMethod: 'cash' | 'momo' | 'card' | 'bank_transfer' | 'pay_on_delivery'
   items: { sku?: string; name: string; qty: number; unitPrice: number }[]
@@ -50,12 +57,6 @@ type OrderRow = {
   status: OrderStatus
   orderedAt: string
   createdAt: string
-}
-
-type StatsPayload = {
-  ordersToday: number
-  avgOrderValue: number
-  awaitingFulfillment: number
 }
 
 const CHANNELS = ['Web', 'Instagram', 'B2B portal', 'TikTok', 'Other'] as const
@@ -74,6 +75,52 @@ type DraftItem = {
   name: string
   qty: string
   unitPrice: string
+}
+
+function customerSearchToFormFields(hit: DtcOrderCustomerSearchHit) {
+  return {
+    customer: hit.customerName,
+    customerPhone: hit.phoneNumber,
+    customerEmail: hit.email,
+    customerLocation: hit.location,
+  }
+}
+
+type CustomerIntelAgg = {
+  totalOrders: number
+  totalBilled: number
+  totalCollected: number
+  returnedFormatted: string
+}
+
+function aggregateCustomerIntel(customers: CustomerRow[]): CustomerIntelAgg {
+  const totalOrders = customers.reduce((s, c) => s + (Number.isFinite(c.totalOrders) ? c.totalOrders : 0), 0)
+  const totalBilled = customers.reduce((s, c) => s + (Number.isFinite(c.totalBilled) ? c.totalBilled : 0), 0)
+  const totalCollected = customers.reduce(
+    (s, c) => s + (Number.isFinite(c.totalCollected) ? c.totalCollected : 0),
+    0,
+  )
+  const returnedSum = customers.reduce(
+    (s, c) => s + (Number.isFinite(c.returned) ? c.returned : 0),
+    0,
+  )
+  const sample = customers.find((c) => c.returned !== 0)
+  const useGhs =
+    sample != null &&
+    (sample.returnedFormatted.includes('GHS') || sample.returnedFormatted.includes('₵'))
+  const returnedFormatted =
+    returnedSum === 0
+      ? '—'
+      : useGhs
+        ? formatGhs(returnedSum)
+        : returnedSum.toLocaleString()
+
+  return {
+    totalOrders,
+    totalBilled,
+    totalCollected,
+    returnedFormatted,
+  }
 }
 
 function toDatetimeLocalValue(d: Date) {
@@ -98,7 +145,7 @@ function orderStatusBadge(status: OrderStatus) {
 
 export function OrdersEngineView() {
   const [orders, setOrders] = useState<OrderRow[]>([])
-  const [stats, setStats] = useState<StatsPayload | null>(null)
+  const [intelAgg, setIntelAgg] = useState<CustomerIntelAgg | null>(null)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -110,6 +157,9 @@ export function OrdersEngineView() {
   const [editOrder, setEditOrder] = useState<OrderRow | null>(null)
   const [editForm, setEditForm] = useState({
     customer: '',
+    customerPhone: '',
+    customerEmail: '',
+    customerLocation: '',
     channel: 'Web' as (typeof CHANNELS)[number],
     orderedAt: toDatetimeLocalValue(new Date()),
     paymentMethod: 'momo' as PaymentMethod,
@@ -119,6 +169,9 @@ export function OrdersEngineView() {
   })
   const [form, setForm] = useState({
     customer: '',
+    customerPhone: '',
+    customerEmail: '',
+    customerLocation: '',
     channel: 'Web' as (typeof CHANNELS)[number],
     orderedAt: toDatetimeLocalValue(new Date()),
     paymentMethod: 'momo' as PaymentMethod,
@@ -132,22 +185,33 @@ export function OrdersEngineView() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/dtc/orders', { credentials: 'include' })
-      if (res.status === 401) {
+      const [ordersRes, customersRes] = await Promise.all([
+        fetch('/api/dtc/orders', { credentials: 'include' }),
+        fetch('/api/dtc/customers', { credentials: 'include', cache: 'no-store' }),
+      ])
+      if (ordersRes.status === 401 || customersRes.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
       }
-      if (!res.ok) {
+      if (!ordersRes.ok) {
         throw new Error('Failed to load orders')
       }
-      const data = (await res.json()) as {
-        orders: OrderRow[]
-        stats: StatsPayload
+      const orderData = (await ordersRes.json()) as { orders: OrderRow[] }
+      setOrders(orderData.orders)
+
+      if (customersRes.ok) {
+        try {
+          const customerData = (await customersRes.json()) as { customers: CustomerRow[] }
+          setIntelAgg(aggregateCustomerIntel(customerData.customers ?? []))
+        } catch {
+          setIntelAgg(null)
+        }
+      } else {
+        setIntelAgg(null)
       }
-      setOrders(data.orders)
-      setStats(data.stats)
     } catch {
       toast.error('Could not load orders')
+      setIntelAgg(null)
     } finally {
       setLoading(false)
     }
@@ -164,7 +228,10 @@ export function OrdersEngineView() {
       (o) =>
         o.orderNumber.toLowerCase().includes(q) ||
         o.customer.toLowerCase().includes(q) ||
-        o.channel.toLowerCase().includes(q),
+        o.channel.toLowerCase().includes(q) ||
+        (o.customerPhone ?? '').toLowerCase().includes(q) ||
+        (o.customerEmail ?? '').toLowerCase().includes(q) ||
+        (o.customerLocation ?? '').toLowerCase().includes(q),
     )
   }, [orders, filter])
 
@@ -278,6 +345,9 @@ export function OrdersEngineView() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer: form.customer.trim(),
+          customerPhone: form.customerPhone.trim() || undefined,
+          customerEmail: form.customerEmail.trim() || undefined,
+          customerLocation: form.customerLocation.trim() || undefined,
           channel: form.channel,
           orderedAt: new Date(form.orderedAt).toISOString(),
           paymentMethod: form.paymentMethod,
@@ -298,6 +368,9 @@ export function OrdersEngineView() {
       setDialogOpen(false)
       setForm({
         customer: '',
+        customerPhone: '',
+        customerEmail: '',
+        customerLocation: '',
         channel: 'Web',
         orderedAt: toDatetimeLocalValue(new Date()),
         paymentMethod: 'momo',
@@ -317,6 +390,9 @@ export function OrdersEngineView() {
     setEditOrder(o)
     setEditForm({
       customer: o.customer,
+      customerPhone: o.customerPhone ?? '',
+      customerEmail: o.customerEmail ?? '',
+      customerLocation: o.customerLocation ?? '',
       channel: (CHANNELS.includes(o.channel as any) ? (o.channel as any) : 'Other') as (typeof CHANNELS)[number],
       orderedAt: toDatetimeLocalValue(new Date(o.orderedAt)),
       paymentMethod: o.paymentMethod as PaymentMethod,
@@ -387,6 +463,9 @@ export function OrdersEngineView() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customer: editForm.customer.trim(),
+          customerPhone: editForm.customerPhone.trim(),
+          customerEmail: editForm.customerEmail.trim(),
+          customerLocation: editForm.customerLocation.trim(),
           channel: editForm.channel,
           orderedAt: new Date(editForm.orderedAt).toISOString(),
           paymentMethod: editForm.paymentMethod,
@@ -427,6 +506,9 @@ export function OrdersEngineView() {
     const header = [
       'orderNumber',
       'customer',
+      'customerPhone',
+      'customerEmail',
+      'customerLocation',
       'channel',
       'paymentMethod',
       'itemsCount',
@@ -442,6 +524,9 @@ export function OrdersEngineView() {
         [
           o.orderNumber,
           `"${o.customer.replace(/"/g, '""')}"`,
+          `"${(o.customerPhone ?? '').replace(/"/g, '""')}"`,
+          `"${(o.customerEmail ?? '').replace(/"/g, '""')}"`,
+          `"${(o.customerLocation ?? '').replace(/"/g, '""')}"`,
           o.channel,
           o.paymentMethod,
           o.items.length,
@@ -501,27 +586,73 @@ export function OrdersEngineView() {
                   New order
                 </Button>
               </DialogTrigger>
-              <DialogContent className="sm:max-w-3xl">
-                <form onSubmit={handleCreate}>
-                  <DialogHeader>
+              <DialogContent className="!flex min-h-0 max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+                <form
+                  onSubmit={handleCreate}
+                  className="flex min-h-0 min-w-0 flex-1 flex-col"
+                >
+                  <DialogHeader className="shrink-0 space-y-2 border-b border-border px-6 pt-6 pb-4 pr-12 text-left">
                     <DialogTitle>New DTC order</DialogTitle>
                     <DialogDescription>
                       Creates a sell-out order in the shared database (live for your team).
                     </DialogDescription>
                   </DialogHeader>
-                  <div className="grid gap-4 py-4">
+                  <div className="min-h-0 min-w-0 flex-1 flex-basis-0 overflow-y-auto overflow-x-hidden px-6 py-4">
+                  <div className="grid gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="customer">Customer</Label>
                       <DtcOrderCustomerField
                         id="customer"
                         value={form.customer}
                         onChange={(customer) => setForm((f) => ({ ...f, customer }))}
+                        onPickCustomer={(hit) =>
+                          setForm((f) => ({ ...f, ...customerSearchToFormFields(hit) }))
+                        }
                         required
                       />
                       <p className="text-xs text-muted-foreground">
                         Search by name, phone, email, or location from Customer Intelligence, or type a
                         new name.
                       </p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="customer-phone">Phone</Label>
+                        <Input
+                          id="customer-phone"
+                          value={form.customerPhone}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, customerPhone: e.target.value }))
+                          }
+                          placeholder="+233 …"
+                          autoComplete="tel"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="customer-email">Email</Label>
+                        <Input
+                          id="customer-email"
+                          type="email"
+                          value={form.customerEmail}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, customerEmail: e.target.value }))
+                          }
+                          placeholder="name@example.com"
+                          autoComplete="email"
+                        />
+                      </div>
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="customer-location">Location</Label>
+                        <Input
+                          id="customer-location"
+                          value={form.customerLocation}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, customerLocation: e.target.value }))
+                          }
+                          placeholder="City or area"
+                          autoComplete="street-address"
+                        />
+                      </div>
                     </div>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
@@ -772,7 +903,8 @@ export function OrdersEngineView() {
                       </Select>
                     </div>
                   </div>
-                  <DialogFooter>
+                  </div>
+                  <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4">
                     <Button
                       type="button"
                       variant="outline"
@@ -795,27 +927,73 @@ export function OrdersEngineView() {
               </DialogContent>
             </Dialog>
             <Dialog open={editOpen} onOpenChange={setEditOpen}>
-              <DialogContent className="sm:max-w-3xl">
-                <form onSubmit={handleEditSubmit}>
-                  <DialogHeader>
+              <DialogContent className="!flex min-h-0 max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+                <form
+                  onSubmit={handleEditSubmit}
+                  className="flex min-h-0 min-w-0 flex-1 flex-col"
+                >
+                  <DialogHeader className="shrink-0 space-y-2 border-b border-border px-6 pt-6 pb-4 pr-12 text-left">
                     <DialogTitle>Edit order</DialogTitle>
                     <DialogDescription>
                       Update customer, items, discount, and status. Totals are recalculated.
                     </DialogDescription>
                   </DialogHeader>
-                  <div className="grid gap-4 py-4">
+                  <div className="min-h-0 min-w-0 flex-1 flex-basis-0 overflow-y-auto overflow-x-hidden px-6 py-4">
+                  <div className="grid gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="edit-customer">Customer</Label>
                       <DtcOrderCustomerField
                         id="edit-customer"
                         value={editForm.customer}
                         onChange={(customer) => setEditForm((f) => ({ ...f, customer }))}
+                        onPickCustomer={(hit) =>
+                          setEditForm((f) => ({ ...f, ...customerSearchToFormFields(hit) }))
+                        }
                         required
                       />
                       <p className="text-xs text-muted-foreground">
                         Search by name, phone, email, or location from Customer Intelligence, or type a
                         new name.
                       </p>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-customer-phone">Phone</Label>
+                        <Input
+                          id="edit-customer-phone"
+                          value={editForm.customerPhone}
+                          onChange={(e) =>
+                            setEditForm((f) => ({ ...f, customerPhone: e.target.value }))
+                          }
+                          placeholder="+233 …"
+                          autoComplete="tel"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-customer-email">Email</Label>
+                        <Input
+                          id="edit-customer-email"
+                          type="email"
+                          value={editForm.customerEmail}
+                          onChange={(e) =>
+                            setEditForm((f) => ({ ...f, customerEmail: e.target.value }))
+                          }
+                          placeholder="name@example.com"
+                          autoComplete="email"
+                        />
+                      </div>
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="edit-customer-location">Location</Label>
+                        <Input
+                          id="edit-customer-location"
+                          value={editForm.customerLocation}
+                          onChange={(e) =>
+                            setEditForm((f) => ({ ...f, customerLocation: e.target.value }))
+                          }
+                          placeholder="City or area"
+                          autoComplete="street-address"
+                        />
+                      </div>
                     </div>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
@@ -1045,7 +1223,8 @@ export function OrdersEngineView() {
                       </Select>
                     </div>
                   </div>
-                  <DialogFooter>
+                  </div>
+                  <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4">
                     <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
                       Cancel
                     </Button>
@@ -1070,8 +1249,8 @@ export function OrdersEngineView() {
                 if (!open) setViewOrder(null)
               }}
             >
-              <DialogContent className="sm:max-w-2xl">
-                <DialogHeader>
+              <DialogContent className="!flex min-h-0 max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl">
+                <DialogHeader className="shrink-0 space-y-2 border-b border-border px-6 pt-6 pb-4 pr-12 text-left">
                   <DialogTitle>Order items</DialogTitle>
                   <DialogDescription>
                     {viewOrder ? (
@@ -1083,8 +1262,38 @@ export function OrdersEngineView() {
                   </DialogDescription>
                 </DialogHeader>
 
+                <div className="min-h-0 min-w-0 flex-1 flex-basis-0 overflow-y-auto overflow-x-hidden px-6 py-4">
                 {viewOrder ? (
                   <div className="space-y-4">
+                    {(viewOrder.customerPhone ||
+                      viewOrder.customerEmail ||
+                      viewOrder.customerLocation) && (
+                      <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm">
+                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                          Customer contact
+                        </p>
+                        <dl className="mt-2 grid gap-1 text-foreground sm:grid-cols-2">
+                          {viewOrder.customerPhone ? (
+                            <div>
+                              <dt className="text-xs text-muted-foreground">Phone</dt>
+                              <dd className="tabular-nums">{viewOrder.customerPhone}</dd>
+                            </div>
+                          ) : null}
+                          {viewOrder.customerEmail ? (
+                            <div>
+                              <dt className="text-xs text-muted-foreground">Email</dt>
+                              <dd className="break-all">{viewOrder.customerEmail}</dd>
+                            </div>
+                          ) : null}
+                          {viewOrder.customerLocation ? (
+                            <div className="sm:col-span-2">
+                              <dt className="text-xs text-muted-foreground">Location</dt>
+                              <dd>{viewOrder.customerLocation}</dd>
+                            </div>
+                          ) : null}
+                        </dl>
+                      </div>
+                    )}
                     <div className="rounded-lg border border-border">
                       <Table>
                         <TableHeader>
@@ -1134,8 +1343,9 @@ export function OrdersEngineView() {
                     </div>
                   </div>
                 ) : null}
+                </div>
 
-                <DialogFooter>
+                <DialogFooter className="shrink-0 border-t bg-background px-6 py-4">
                   <Button type="button" variant="outline" onClick={() => setViewOpen(false)}>
                     Close
                   </Button>
@@ -1153,7 +1363,7 @@ export function OrdersEngineView() {
             </Label>
             <Input
               id="orders-search"
-              placeholder="Order #, customer, or channel…"
+              placeholder="Order #, customer, phone, email, location, or channel…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
@@ -1165,36 +1375,56 @@ export function OrdersEngineView() {
           ) : null}
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Card className="border-l-4 border-l-violet-600 p-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Orders today
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
+              Customer Intelligence totals
+            </h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Sums every tracked customer row (same numbers as Customer Intelligence — sheet values
+              where set, otherwise from sell-out orders).
             </p>
-            <p className="mt-2 text-3xl font-bold">
-              {loading ? '—' : stats?.ordersToday ?? 0}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">Since midnight (local)</p>
-          </Card>
-          <Card className="border-l-4 border-l-blue-600 p-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Avg order value
-            </p>
-            <p className="mt-2 text-3xl font-bold">
-              {loading
-                ? '—'
-                : formatGhs(stats?.avgOrderValue ?? 0)}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">All loaded orders</p>
-          </Card>
-          <Card className="border-l-4 border-l-amber-600 p-5">
-            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Awaiting fulfillment
-            </p>
-            <p className="mt-2 text-3xl font-bold">
-              {loading ? '—' : stats?.awaitingFulfillment ?? 0}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">Processing + pending payment</p>
-          </Card>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Card className="border-l-4 border-l-teal-600 p-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Total orders
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums">
+                {loading || intelAgg === null ? '—' : intelAgg.totalOrders.toLocaleString()}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Across all customers</p>
+            </Card>
+            <Card className="border-l-4 border-l-cyan-600 p-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Total billed
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums">
+                {loading || intelAgg === null ? '—' : formatGhs(intelAgg.totalBilled)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Sum of Total billed column</p>
+            </Card>
+            <Card className="border-l-4 border-l-sky-600 p-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Total collected
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums">
+                {loading || intelAgg === null ? '—' : formatGhs(intelAgg.totalCollected)}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Sum of Total collected column</p>
+            </Card>
+            <Card className="border-l-4 border-l-slate-600 p-5">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Returned
+              </p>
+              <p className="mt-2 text-2xl font-bold tabular-nums">
+                {loading || intelAgg === null ? '—' : intelAgg.returnedFormatted}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Sum of Returned column (GHS or count, matching your sheet)
+              </p>
+            </Card>
+          </div>
         </div>
 
         <Card className="p-0">

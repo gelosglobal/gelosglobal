@@ -23,6 +23,10 @@ export type DtcOrderDoc = {
   _id: ObjectId
   orderNumber: string
   customer: string
+  /** Buyer contact on the order (optional; may differ from Customer Intelligence rows). */
+  customerPhone?: string
+  customerEmail?: string
+  customerLocation?: string
   channel: string
   paymentMethod: PaymentMethod
   items: DtcOrderItem[]
@@ -38,6 +42,9 @@ export type DtcOrderJson = {
   id: string
   orderNumber: string
   customer: string
+  customerPhone: string
+  customerEmail: string
+  customerLocation: string
   channel: string
   paymentMethod: PaymentMethod
   items: DtcOrderItem[]
@@ -54,6 +61,9 @@ export function serializeOrder(doc: DtcOrderDoc): DtcOrderJson {
     id: doc._id.toHexString(),
     orderNumber: doc.orderNumber,
     customer: doc.customer,
+    customerPhone: String(doc.customerPhone ?? ''),
+    customerEmail: String(doc.customerEmail ?? ''),
+    customerLocation: String(doc.customerLocation ?? ''),
     channel: doc.channel,
     paymentMethod: doc.paymentMethod,
     items: doc.items,
@@ -85,6 +95,9 @@ function newOrderNumber(): string {
 
 export type CreateDtcOrderInput = {
   customer: string
+  customerPhone?: string
+  customerEmail?: string
+  customerLocation?: string
   channel: string
   paymentMethod: PaymentMethod
   items: DtcOrderItem[]
@@ -103,9 +116,15 @@ export async function createDtcOrder(
   )
   const discount = Math.max(0, Math.min(subtotal, input.discountGhs ?? 0))
   const totalAmount = Math.max(0, subtotal - discount)
+  const phone = (input.customerPhone ?? '').trim().slice(0, 40)
+  const email = (input.customerEmail ?? '').trim().slice(0, 200)
+  const location = (input.customerLocation ?? '').trim().slice(0, 200)
   const doc: WithoutId<DtcOrderDoc> = {
     orderNumber: newOrderNumber(),
     customer: input.customer.trim(),
+    ...(phone ? { customerPhone: phone } : {}),
+    ...(email ? { customerEmail: email } : {}),
+    ...(location ? { customerLocation: location } : {}),
     channel: input.channel,
     paymentMethod: input.paymentMethod,
     items: input.items,
@@ -127,6 +146,9 @@ export async function deleteDtcOrder(db: Db, id: ObjectId): Promise<boolean> {
 
 export type UpdateDtcOrderInput = Partial<{
   customer: string
+  customerPhone: string
+  customerEmail: string
+  customerLocation: string
   channel: string
   paymentMethod: PaymentMethod
   items: DtcOrderItem[]
@@ -143,6 +165,21 @@ export async function updateDtcOrder(
   const $set: Record<string, unknown> = {}
 
   if (patch.customer !== undefined) $set.customer = patch.customer.trim()
+  if (patch.customerPhone !== undefined) {
+    const p = patch.customerPhone.trim().slice(0, 40)
+    if (p) $set.customerPhone = p
+    else $set.customerPhone = ''
+  }
+  if (patch.customerEmail !== undefined) {
+    const em = patch.customerEmail.trim().slice(0, 200)
+    if (em) $set.customerEmail = em
+    else $set.customerEmail = ''
+  }
+  if (patch.customerLocation !== undefined) {
+    const loc = patch.customerLocation.trim().slice(0, 200)
+    if (loc) $set.customerLocation = loc
+    else $set.customerLocation = ''
+  }
   if (patch.channel !== undefined) $set.channel = patch.channel
   if (patch.paymentMethod !== undefined) $set.paymentMethod = patch.paymentMethod
   if (patch.status !== undefined) $set.status = patch.status

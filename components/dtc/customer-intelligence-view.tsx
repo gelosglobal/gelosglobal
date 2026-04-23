@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
-import { Download, Loader2, Plus, Trash2, Users } from 'lucide-react'
+import { Download, Loader2, Plus, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import * as XLSX from 'xlsx'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
@@ -39,8 +39,6 @@ import { formatGhs } from '@/lib/dtc-orders'
 
 export type CustomerSegment = 'High LTV' | 'At risk' | 'New (30d)' | 'Core'
 
-export type CustomerSource = 'walk_in' | 'instagram' | 'web' | 'referral' | 'sales_rep' | 'other'
-
 /** Matches GET `/api/dtc/customers` — same field names as the on-page table headers. */
 export type CustomerRow = {
   id: string
@@ -67,9 +65,6 @@ type SegmentCounts = {
   core: number
 }
 
-/** Must match `app/api/dtc/customers/reset/route.ts` body schema. */
-const CLEAR_DTC_CUSTOMERS_CONFIRM = 'CLEAR_ALL_DTC_CUSTOMERS'
-
 type CustomerSortKey = 'billed' | 'name' | 'orders' | 'lastOrder'
 
 function fmtTableDate(s: string): string {
@@ -89,19 +84,19 @@ export function CustomerIntelligenceView() {
   const [query, setQuery] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [clearOpen, setClearOpen] = useState(false)
-  const [clearPhrase, setClearPhrase] = useState('')
-  const [clearing, setClearing] = useState(false)
   const [sortBy, setSortBy] = useState<CustomerSortKey>('billed')
   const [createForm, setCreateForm] = useState({
     customer: '',
     phone: '',
-    email: '',
     location: '',
-    source: 'instagram' as CustomerSource,
-    joinDate: new Date().toISOString().slice(0, 10),
     segment: 'Core' as CustomerSegment,
+    totalOrders: '',
+    totalBilled: '',
+    totalCollected: '',
+    returnedType: 'count' as 'count' | 'ghs',
+    returnedValue: '',
+    firstOrderDate: '',
+    lastOrderDate: '',
   })
 
   async function load() {
@@ -268,65 +263,6 @@ export function CustomerIntelligenceView() {
     toast.success('Excel download started')
   }
 
-  async function handleImportExcel(file: File) {
-    setImporting(true)
-    try {
-      const form = new FormData()
-      form.set('file', file, file.name)
-      const res = await fetch('/api/dtc/customers/import-file', {
-        method: 'POST',
-        body: form,
-        credentials: 'include',
-      })
-      if (res.status === 401) {
-        toast.error('Session expired. Sign in again.')
-        return
-      }
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string; issues?: unknown }
-        if (err.issues) console.error('DTC import validation', err.issues)
-        throw new Error(err.error ?? 'Import failed')
-      }
-      const data = (await res.json()) as {
-        rowCount: number
-        uniqueCustomerCount: number
-        duplicateRows: number
-        parseStats: { dataRowsInRange: number; droppedEmptyCustomer: number }
-      }
-      const dups = data.duplicateRows
-      const dropped = data.parseStats.droppedEmptyCustomer
-      if (dups === 0 && dropped === 0) {
-        toast.success(
-          `Imported ${data.rowCount.toLocaleString()} row(s)${
-            data.rowCount === data.uniqueCustomerCount
-              ? '.'
-              : ` → ${data.uniqueCustomerCount.toLocaleString()} unique customer name(s) in the list.`
-          }`,
-        )
-      } else {
-        const bits: string[] = [
-          `Read ${data.rowCount.toLocaleString()} row(s) with a customer name from the sheet into ${data.uniqueCustomerCount.toLocaleString()} unique name(s) in the database`,
-        ]
-        if (dropped > 0) {
-          bits.push(
-            `${dropped.toLocaleString()} row(s) in the file had an empty name column and were not imported${data.parseStats.dataRowsInRange > 0 ? ` (sheet data range had ${data.parseStats.dataRowsInRange.toLocaleString()} body row(s) below the header)` : ''}`,
-          )
-        }
-        if (dups > 0) {
-          bits.push(
-            `${dups.toLocaleString()} import row(s) were the same name as a prior row; each name is one customer record, so the list can show fewer than the row count in Excel`,
-          )
-        }
-        toast.success(bits.join(' · '))
-      }
-      await load()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Import failed')
-    } finally {
-      setImporting(false)
-    }
-  }
-
   async function handleCreateCustomer(e: React.FormEvent) {
     e.preventDefault()
     const name = createForm.customer.trim()
@@ -343,11 +279,17 @@ export function CustomerIntelligenceView() {
         body: JSON.stringify({
           customer: name,
           phone: createForm.phone.trim() || undefined,
-          email: createForm.email.trim() || undefined,
           location: createForm.location.trim() || undefined,
-          source: createForm.source,
-          joinDate: createForm.joinDate ? new Date(createForm.joinDate).toISOString() : undefined,
           segment: createForm.segment,
+          totalOrders: createForm.totalOrders.trim() === '' ? undefined : Number(createForm.totalOrders),
+          totalBilledGhs: createForm.totalBilled.trim() === '' ? undefined : Number(createForm.totalBilled),
+          totalCollectedGhs:
+            createForm.totalCollected.trim() === '' ? undefined : Number(createForm.totalCollected),
+          returnedType: createForm.returnedType,
+          returned:
+            createForm.returnedValue.trim() === '' ? undefined : Number(createForm.returnedValue),
+          firstOrderDate: createForm.firstOrderDate.trim() || undefined,
+          lastOrderDate: createForm.lastOrderDate.trim() || undefined,
         }),
       })
       if (res.status === 401) {
@@ -363,11 +305,15 @@ export function CustomerIntelligenceView() {
       setCreateForm({
         customer: '',
         phone: '',
-        email: '',
         location: '',
-        source: 'instagram',
-        joinDate: new Date().toISOString().slice(0, 10),
         segment: 'Core',
+        totalOrders: '',
+        totalBilled: '',
+        totalCollected: '',
+        returnedType: 'count',
+        returnedValue: '',
+        firstOrderDate: '',
+        lastOrderDate: '',
       })
       await load()
     } catch (err) {
@@ -377,88 +323,13 @@ export function CustomerIntelligenceView() {
     }
   }
 
-  async function handleResetCustomers() {
-    const phrase = clearPhrase.trim()
-    if (phrase !== CLEAR_DTC_CUSTOMERS_CONFIRM) {
-      toast.error('Confirmation phrase does not match')
-      return
-    }
-    setClearing(true)
-    try {
-      const res = await fetch('/api/dtc/customers/reset', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm: CLEAR_DTC_CUSTOMERS_CONFIRM }),
-      })
-      if (res.status === 401) {
-        toast.error('Session expired. Sign in again.')
-        return
-      }
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string }
-        throw new Error(err.error ?? 'Could not clear customers')
-      }
-      const data = (await res.json()) as { deletedCount?: number }
-      const n = typeof data.deletedCount === 'number' ? data.deletedCount : 0
-      if (n === 0) {
-        toast.message('No customer rows were deleted (list may already be empty).')
-      } else {
-        toast.success(`Removed ${n.toLocaleString()} customer row(s)`)
-      }
-      setClearOpen(false)
-      setClearPhrase('')
-      await load()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to clear')
-    } finally {
-      setClearing(false)
-    }
-  }
-
   return (
     <div className="flex min-h-0 flex-col">
       <DtcPageHeader
         title="Customer Intelligence"
-        description="Upload your .xlsx here — parsing runs on the server (up to 20 MB). Full lists (3,000+ rows) supported. Columns: customer name, phone, orders, billed, collected, location, returned, first/last order dates."
+        description="Customer list with totals from your sheet and from sell-out orders. Columns include name, phone, orders, billed, collected, location, returns, and first/last order dates."
         actions={
           <>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              type="button"
-              disabled={importing || loading || customers.length === 0}
-              onClick={() => {
-                setClearPhrase('')
-                setClearOpen(true)
-              }}
-            >
-              <Trash2 className="h-4 w-4" />
-              Clear list
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-1.5"
-              type="button"
-              disabled={importing || loading}
-              onClick={() => document.getElementById('ci-import')?.click()}
-            >
-              <Download className="h-4 w-4" />
-              Import Excel
-            </Button>
-            <input
-              id="ci-import"
-              type="file"
-              accept=".xlsx,.xls"
-              className="hidden"
-              onChange={(e) => {
-                const f = e.target.files?.[0]
-                e.target.value = ''
-                if (f) void handleImportExcel(f)
-              }}
-            />
             <Button
               size="sm"
               className="gap-1.5"
@@ -609,7 +480,7 @@ export function CustomerIntelligenceView() {
                   </EmptyTitle>
                   <EmptyDescription>
                     {customers.length === 0
-                      ? 'Import a customer sheet or use Add customer. Rows live in the customer list until you clear them; sell-out orders stay in Orders.'
+                      ? 'Use Add customer to create a record, or wait until customer data is available. Sell-out orders stay in Orders.'
                       : 'Try a different search term.'}
                   </EmptyDescription>
                 </EmptyHeader>
@@ -676,63 +547,13 @@ export function CustomerIntelligenceView() {
         </Card>
       </div>
 
-      <Dialog
-        open={clearOpen}
-        onOpenChange={(open) => {
-          setClearOpen(open)
-          if (!open) setClearPhrase('')
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Clear all customer rows?</DialogTitle>
-            <DialogDescription>
-              This deletes every record in the customer list (including imports and manually added customers).
-              DTC orders in the system are not removed. This cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 py-2">
-            <Label htmlFor="clear-confirm" className="text-muted-foreground">
-              Type <span className="font-mono text-foreground">{CLEAR_DTC_CUSTOMERS_CONFIRM}</span> to confirm
-            </Label>
-            <Input
-              id="clear-confirm"
-              value={clearPhrase}
-              onChange={(e) => setClearPhrase(e.target.value)}
-              placeholder={CLEAR_DTC_CUSTOMERS_CONFIRM}
-              autoComplete="off"
-            />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setClearOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={clearing || clearPhrase.trim() !== CLEAR_DTC_CUSTOMERS_CONFIRM}
-              onClick={() => void handleResetCustomers()}
-            >
-              {clearing ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Clearing…
-                </>
-              ) : (
-                'Clear all'
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-2xl">
           <form onSubmit={handleCreateCustomer}>
             <DialogHeader>
               <DialogTitle>Add customer</DialogTitle>
               <DialogDescription>
-                Adds a customer record so they appear in segmentation even before orders are logged.
+                Add a customer row to the intelligence list (same columns as the table).
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
@@ -759,18 +580,6 @@ export function CustomerIntelligenceView() {
                     autoComplete="tel"
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="customer-email">Email</Label>
-                  <Input
-                    id="customer-email"
-                    value={createForm.email}
-                    onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))}
-                    placeholder="buyer@company.com"
-                    type="email"
-                    inputMode="email"
-                    autoComplete="email"
-                  />
-                </div>
                 <div className="space-y-2 sm:col-span-2">
                   <Label htmlFor="customer-location">Location</Label>
                   <Input
@@ -782,33 +591,97 @@ export function CustomerIntelligenceView() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Source</Label>
-                  <Select
-                    value={createForm.source}
-                    onValueChange={(v) =>
-                      setCreateForm((f) => ({ ...f, source: v as CustomerSource }))
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="instagram">Instagram</SelectItem>
-                      <SelectItem value="web">Web</SelectItem>
-                      <SelectItem value="walk_in">Walk-in</SelectItem>
-                      <SelectItem value="referral">Referral</SelectItem>
-                      <SelectItem value="sales_rep">Sales rep</SelectItem>
-                      <SelectItem value="other">Other</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="ci-total-orders">Total orders</Label>
+                  <Input
+                    id="ci-total-orders"
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    step={1}
+                    value={createForm.totalOrders}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, totalOrders: e.target.value }))}
+                    placeholder="0"
+                  />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="customer-join-date">Join date</Label>
+                  <Label htmlFor="ci-total-billed">Total billed (GHS)</Label>
                   <Input
-                    id="customer-join-date"
+                    id="ci-total-billed"
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step="0.01"
+                    value={createForm.totalBilled}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, totalBilled: e.target.value }))}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-total-collected">Total collected (GHS)</Label>
+                  <Input
+                    id="ci-total-collected"
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step="0.01"
+                    value={createForm.totalCollected}
+                    onChange={(e) =>
+                      setCreateForm((f) => ({ ...f, totalCollected: e.target.value }))
+                    }
+                    placeholder="0.00"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Returned</Label>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Select
+                      value={createForm.returnedType}
+                      onValueChange={(v) =>
+                        setCreateForm((f) => ({ ...f, returnedType: v as 'count' | 'ghs' }))
+                      }
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="count">Count</SelectItem>
+                        <SelectItem value="ghs">GHS</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      id="ci-returned"
+                      type="number"
+                      inputMode="decimal"
+                      min={0}
+                      step={createForm.returnedType === 'count' ? 1 : '0.01'}
+                      value={createForm.returnedValue}
+                      onChange={(e) =>
+                        setCreateForm((f) => ({ ...f, returnedValue: e.target.value }))
+                      }
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-first-order">First order date</Label>
+                  <Input
+                    id="ci-first-order"
                     type="date"
-                    value={createForm.joinDate}
-                    onChange={(e) => setCreateForm((f) => ({ ...f, joinDate: e.target.value }))}
+                    value={createForm.firstOrderDate}
+                    onChange={(e) =>
+                      setCreateForm((f) => ({ ...f, firstOrderDate: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-last-order">Last order date</Label>
+                  <Input
+                    id="ci-last-order"
+                    type="date"
+                    value={createForm.lastOrderDate}
+                    onChange={(e) =>
+                      setCreateForm((f) => ({ ...f, lastOrderDate: e.target.value }))
+                    }
                   />
                 </div>
                 <div className="space-y-2 sm:col-span-2">

@@ -25,7 +25,6 @@ import {
   ShoppingCart,
   Store,
   Target,
-  TrendingUp,
   Wallet,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -98,8 +97,6 @@ type FinancePayload = {
   b2bInvoicePaidGhs?: number
   totalRevenue: number
   marketingSpendGhs: number
-  netProfit: number
-  b2bOutstandingGhs: number
 }
 
 type OrderRow = {
@@ -202,6 +199,10 @@ export function ManagerDashboard() {
   const [loading, setLoading] = useState(true)
   const [sf, setSf] = useState<SfDashboardPayload | null>(null)
   const [finance, setFinance] = useState<FinancePayload | null>(null)
+  /** Sum of unpaid invoice balance from B2B Payments (same as `/sf/b2b-payments`). */
+  const [b2bPaymentsOutstandingGhs, setB2bPaymentsOutstandingGhs] = useState<number | null>(null)
+  /** Net invoiced amount (after discounts) from B2B Payments. */
+  const [b2bPaymentsInvoicedGhs, setB2bPaymentsInvoicedGhs] = useState<number | null>(null)
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [tasks, setTasks] = useState<RepTaskRow[]>([])
 
@@ -283,13 +284,14 @@ export function ManagerDashboard() {
         finQs.set('end', endIso)
       }
 
-      const [sfRes, finRes, ordRes, taskRes] = await Promise.all([
+      const [sfRes, finRes, b2bPayRes, ordRes, taskRes] = await Promise.all([
         fetch(`/api/sf/dashboard${sfQs.toString() ? `?${sfQs.toString()}` : ''}`, {
           credentials: 'include',
         }),
         fetch(`/api/dtc/finance-layer${finQs.toString() ? `?${finQs.toString()}` : ''}`, {
           credentials: 'include',
         }),
+        fetch('/api/sf/b2b-payments', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/dtc/orders', { credentials: 'include' }),
         fetch('/api/master/rep-tasks', { credentials: 'include' }),
       ])
@@ -297,6 +299,7 @@ export function ManagerDashboard() {
       if (
         sfRes.status === 401 ||
         finRes.status === 401 ||
+        b2bPayRes.status === 401 ||
         ordRes.status === 401 ||
         taskRes.status === 401
       ) {
@@ -304,23 +307,36 @@ export function ManagerDashboard() {
         return
       }
 
-      if (!sfRes.ok || !finRes.ok || !ordRes.ok || !taskRes.ok) {
+      if (!sfRes.ok || !finRes.ok || !b2bPayRes.ok || !ordRes.ok || !taskRes.ok) {
         throw new Error('One or more requests failed')
       }
 
       const sfJson = (await sfRes.json()) as SfDashboardPayload
       const finJson = (await finRes.json()) as FinancePayload
+      const b2bPayJson = (await b2bPayRes.json()) as {
+        kpis?: { outstandingGhs?: number; invoicedGhs?: number }
+      }
       const ordJson = (await ordRes.json()) as { orders: OrderRow[] }
       const taskJson = (await taskRes.json()) as { tasks: RepTaskRow[] }
 
       setSf(sfJson)
       setFinance(finJson)
+      const out = b2bPayJson.kpis?.outstandingGhs
+      setB2bPaymentsOutstandingGhs(
+        typeof out === 'number' && Number.isFinite(out) ? Math.max(0, out) : 0,
+      )
+      const inv = b2bPayJson.kpis?.invoicedGhs
+      setB2bPaymentsInvoicedGhs(
+        typeof inv === 'number' && Number.isFinite(inv) ? Math.max(0, inv) : 0,
+      )
       setOrders(ordJson.orders ?? [])
       setTasks(taskJson.tasks ?? [])
     } catch {
       toast.error('Could not load master dashboard data')
       setSf(null)
       setFinance(null)
+      setB2bPaymentsOutstandingGhs(null)
+      setB2bPaymentsInvoicedGhs(null)
       setOrders([])
       setTasks([])
     } finally {
@@ -346,11 +362,6 @@ export function ManagerDashboard() {
     { channel: 'DTC', percentage: dtcPct, fill: '#7c3aed' },
     { channel: 'B2B collected', percentage: b2bPct, fill: '#2563eb' },
   ]
-
-  const roasX =
-    finance && finance.marketingSpendGhs > 0
-      ? `${Math.min(999, Math.round((finance.totalRevenue / finance.marketingSpendGhs) * 10) / 10)}x`
-      : '—'
 
   const recentOrders = orders.slice(0, 6)
   const upcoming = sf?.upcomingVisits.slice(0, 6) ?? []
@@ -489,12 +500,8 @@ export function ManagerDashboard() {
             iconWrapClass="bg-blue-600/10"
             iconClass="text-blue-600"
             label="Total revenue"
-            value={finance ? formatGhs(finance.totalRevenue) : '—'}
-            subtitle={
-              finance
-                ? `Last ${finance.periodDays} days · DTC + B2B collected = ${formatGhs(finance.totalRevenue)}`
-                : `DTC + B2B collected`
-            }
+            value={b2bPaymentsInvoicedGhs === null ? '—' : formatGhs(b2bPaymentsInvoicedGhs)}
+            subtitle="B2B Payments · Net invoiced (after discounts)"
           />
           <MasterKpiCard
             borderAccent="border-l-purple-600"
@@ -520,8 +527,12 @@ export function ManagerDashboard() {
             iconWrapClass="bg-red-600/10"
             iconClass="text-red-600"
             label="B2B outstanding"
-            value={finance ? formatGhs(finance.b2bOutstandingGhs) : '—'}
-            subtitle="Manual AR · Finance Layer"
+            value={
+              b2bPaymentsOutstandingGhs === null
+                ? '—'
+                : formatGhs(b2bPaymentsOutstandingGhs)
+            }
+            subtitle="Net unpaid on B2B invoices · B2B Payments"
           />
           <MasterKpiCard
             borderAccent="border-l-indigo-600"
@@ -534,19 +545,6 @@ export function ManagerDashboard() {
               <>
                 Visits · {sf ? formatGhs(sf.kpis.collectionsGhs) : '—'} paid ·{' '}
                 {sf ? `${sf.kpis.openPosmTasks} open POSM` : '—'}
-              </>
-            }
-          />
-          <MasterKpiCard
-            borderAccent="border-l-teal-600"
-            icon={TrendingUp}
-            iconWrapClass="bg-teal-600/10"
-            iconClass="text-teal-600"
-            label="Net profit · ROAS hint"
-            value={finance ? formatGhs(finance.netProfit) : '—'}
-            subtitle={
-              <>
-                Net (period) · Revenue ÷ mktg spend ≈ {roasX}
               </>
             }
           />

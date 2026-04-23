@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
         sort: { customer: 1, _id: 1 },
       },
     )
-    .toArray()) as {
+    .toArray()) as unknown as {
     _id: { toString: () => string }
     customer: string
     phone?: string
