@@ -34,6 +34,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { DtcOrderCustomerField } from '@/components/dtc/dtc-order-customer-field'
 import { formatGhs, type OrderStatus } from '@/lib/dtc-orders'
 
 type OrderRow = {
@@ -511,16 +512,16 @@ export function OrdersEngineView() {
                   <div className="grid gap-4 py-4">
                     <div className="space-y-2">
                       <Label htmlFor="customer">Customer</Label>
-                      <Input
+                      <DtcOrderCustomerField
                         id="customer"
                         value={form.customer}
-                        onChange={(e) =>
-                          setForm((f) => ({ ...f, customer: e.target.value }))
-                        }
-                        placeholder="Store or buyer name"
-                        autoComplete="organization"
+                        onChange={(customer) => setForm((f) => ({ ...f, customer }))}
                         required
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Search by name, phone, email, or location from Customer Intelligence, or type a
+                        new name.
+                      </p>
                     </div>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
@@ -805,12 +806,16 @@ export function OrdersEngineView() {
                   <div className="grid gap-4 py-4">
                     <div className="space-y-2">
                       <Label htmlFor="edit-customer">Customer</Label>
-                      <Input
+                      <DtcOrderCustomerField
                         id="edit-customer"
                         value={editForm.customer}
-                        onChange={(e) => setEditForm((f) => ({ ...f, customer: e.target.value }))}
+                        onChange={(customer) => setEditForm((f) => ({ ...f, customer }))}
                         required
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Search by name, phone, email, or location from Customer Intelligence, or type a
+                        new name.
+                      </p>
                     </div>
                     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <div className="space-y-2">

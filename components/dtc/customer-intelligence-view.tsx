@@ -1,12 +1,11 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { formatDistanceToNowStrict } from 'date-fns'
-import { Download, Loader2, Plus, Users } from 'lucide-react'
+import { format, parseISO } from 'date-fns'
+import { Download, Loader2, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import * as XLSX from 'xlsx'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
@@ -16,7 +15,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '@/components/ui/dialog'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
@@ -39,20 +37,27 @@ import {
 import { cn } from '@/lib/utils'
 import { formatGhs } from '@/lib/dtc-orders'
 
-type CustomerRow = {
-  customer: string
-  phone: string
-  email: string
+export type CustomerSegment = 'High LTV' | 'At risk' | 'New (30d)' | 'Core'
+
+export type CustomerSource = 'walk_in' | 'instagram' | 'web' | 'referral' | 'sales_rep' | 'other'
+
+/** Matches GET `/api/dtc/customers` — same field names as the on-page table headers. */
+export type CustomerRow = {
+  id: string
+  customerName: string
+  phoneNumber: string
+  totalOrders: number
+  totalBilled: number
+  totalCollected: number
   location: string
-  source: 'walk_in' | 'instagram' | 'web' | 'referral' | 'sales_rep' | 'other'
-  joinDate: string
-  orders: number
-  ltv: number
-  ltvFormatted: string
-  firstOrderAt: string
-  lastOrderAt: string
-  segment: 'High LTV' | 'At risk' | 'New (30d)' | 'Core'
-  computedSegment: 'High LTV' | 'At risk' | 'New (30d)' | 'Core'
+  returned: number
+  firstOrderDate: string
+  lastOrderDate: string
+  totalBilledFormatted: string
+  totalCollectedFormatted: string
+  returnedFormatted: string
+  segment: CustomerSegment
+  computedSegment: CustomerSegment
 }
 
 type SegmentCounts = {
@@ -62,16 +67,18 @@ type SegmentCounts = {
   core: number
 }
 
-function segmentBadge(segment: CustomerRow['segment']) {
-  switch (segment) {
-    case 'High LTV':
-      return <Badge className="bg-indigo-600 hover:bg-indigo-600">High LTV</Badge>
-    case 'At risk':
-      return <Badge variant="destructive">At risk</Badge>
-    case 'New (30d)':
-      return <Badge className="bg-emerald-600 hover:bg-emerald-600">New</Badge>
-    default:
-      return <Badge variant="outline">Core</Badge>
+/** Must match `app/api/dtc/customers/reset/route.ts` body schema. */
+const CLEAR_DTC_CUSTOMERS_CONFIRM = 'CLEAR_ALL_DTC_CUSTOMERS'
+
+type CustomerSortKey = 'billed' | 'name' | 'orders' | 'lastOrder'
+
+function fmtTableDate(s: string): string {
+  if (!s?.trim()) return '—'
+  try {
+    const d = s.includes('T') ? parseISO(s) : parseISO(`${s}T12:00:00`)
+    return Number.isNaN(d.getTime()) ? s : format(d, 'dd MMM yyyy')
+  } catch {
+    return s
   }
 }
 
@@ -83,20 +90,27 @@ export function CustomerIntelligenceView() {
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [clearOpen, setClearOpen] = useState(false)
+  const [clearPhrase, setClearPhrase] = useState('')
+  const [clearing, setClearing] = useState(false)
+  const [sortBy, setSortBy] = useState<CustomerSortKey>('billed')
   const [createForm, setCreateForm] = useState({
     customer: '',
     phone: '',
     email: '',
     location: '',
-    source: 'instagram' as CustomerRow['source'],
+    source: 'instagram' as CustomerSource,
     joinDate: new Date().toISOString().slice(0, 10),
-    segment: 'Core' as CustomerRow['segment'],
+    segment: 'Core' as CustomerSegment,
   })
 
   async function load() {
     setLoading(true)
     try {
-      const res = await fetch('/api/dtc/customers', { credentials: 'include' })
+      const res = await fetch('/api/dtc/customers', {
+        credentials: 'include',
+        cache: 'no-store',
+      })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
@@ -119,17 +133,45 @@ export function CustomerIntelligenceView() {
     void load()
   }, [])
 
-  const filtered = useMemo(() => {
+  const displayRows = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return customers
-    return customers.filter((c) => c.customer.toLowerCase().includes(q))
-  }, [customers, query])
+    const base = !q
+      ? [...customers]
+      : customers.filter((c) => c.customerName.toLowerCase().includes(q))
+
+    base.sort((a, b) => {
+      switch (sortBy) {
+        case 'name':
+          return a.customerName.localeCompare(b.customerName)
+        case 'orders':
+          return (
+            b.totalOrders - a.totalOrders ||
+            b.totalBilled - a.totalBilled ||
+            a.customerName.localeCompare(b.customerName)
+          )
+        case 'lastOrder': {
+          const ta = a.lastOrderDate ? new Date(a.lastOrderDate).getTime() : 0
+          const tb = b.lastOrderDate ? new Date(b.lastOrderDate).getTime() : 0
+          return tb - ta || b.totalBilled - a.totalBilled
+        }
+        case 'billed':
+        default:
+          return (
+            b.totalBilled - a.totalBilled ||
+            b.totalOrders - a.totalOrders ||
+            a.customerName.localeCompare(b.customerName)
+          )
+      }
+    })
+
+    return base
+  }, [customers, query, sortBy])
 
   const totals = useMemo(() => {
     const totalCustomers = customers.length
-    const totalLtv = customers.reduce((sum, c) => sum + c.ltv, 0)
-    const avgLtv = totalCustomers === 0 ? 0 : totalLtv / totalCustomers
-    return { totalCustomers, totalLtv, avgLtv }
+    const totalBilled = customers.reduce((sum, c) => sum + c.totalBilled, 0)
+    const avgTotalBilled = totalCustomers === 0 ? 0 : totalBilled / totalCustomers
+    return { totalCustomers, totalBilled, avgTotalBilled }
   }, [customers])
 
   function handleExport() {
@@ -138,35 +180,31 @@ export function CustomerIntelligenceView() {
       return
     }
     const header = [
-      'customer',
-      'phone',
-      'email',
-      'location',
-      'source',
-      'joinDate',
-      'segment',
-      'computedSegment',
-      'orders',
-      'ltv',
-      'firstOrderAt',
-      'lastOrderAt',
+      '#',
+      'Customer name',
+      'Phone number',
+      'Total orders',
+      'Total billed',
+      'Total collected',
+      'Location',
+      'Returned',
+      'First order date',
+      'Last order date',
     ]
     const lines = [
       header.join(','),
-      ...customers.map((c) =>
+      ...customers.map((c, i) =>
         [
-          `"${c.customer.replace(/"/g, '""')}"`,
-          `"${(c.phone ?? '').replace(/"/g, '""')}"`,
-          `"${(c.email ?? '').replace(/"/g, '""')}"`,
+          i + 1,
+          `"${c.customerName.replace(/"/g, '""')}"`,
+          `"${(c.phoneNumber ?? '').replace(/"/g, '""')}"`,
+          c.totalOrders,
+          c.totalBilled,
+          c.totalCollected,
           `"${(c.location ?? '').replace(/"/g, '""')}"`,
-          c.source,
-          c.joinDate,
-          c.segment,
-          c.computedSegment,
-          c.orders,
-          c.ltv,
-          c.firstOrderAt,
-          c.lastOrderAt,
+          c.returned,
+          c.firstOrderDate,
+          c.lastOrderDate,
         ].join(','),
       ),
     ]
@@ -189,19 +227,17 @@ export function CustomerIntelligenceView() {
     const wb = XLSX.utils.book_new()
 
     const customersSheet = XLSX.utils.json_to_sheet(
-      customers.map((c) => ({
-        customer: c.customer,
-        phone: c.phone,
-        email: c.email,
-        location: c.location,
-        source: c.source,
-        joinDate: c.joinDate,
-        segment: c.segment,
-        computedSegment: c.computedSegment,
-        orders: c.orders,
-        ltv: c.ltv,
-        firstOrderAt: c.firstOrderAt,
-        lastOrderAt: c.lastOrderAt,
+      customers.map((c, i) => ({
+        '#': i + 1,
+        'Customer name': c.customerName,
+        'Phone number': c.phoneNumber,
+        'Total orders': c.totalOrders,
+        'Total billed': c.totalBilled,
+        'Total collected': c.totalCollected,
+        Location: c.location,
+        Returned: c.returned,
+        'First order date': c.firstOrderDate,
+        'Last order date': c.lastOrderDate,
       })),
     )
     XLSX.utils.book_append_sheet(wb, customersSheet, 'Customers')
@@ -209,8 +245,8 @@ export function CustomerIntelligenceView() {
     const segmentsSheet = XLSX.utils.json_to_sheet([
       {
         customersTracked: totals.totalCustomers,
-        totalLtv: totals.totalLtv,
-        avgLtv: totals.avgLtv,
+        totalBilled: totals.totalBilled,
+        avgTotalBilled: totals.avgTotalBilled,
         highLtv: segments?.highLtv ?? 0,
         atRisk: segments?.atRisk ?? 0,
         new30d: segments?.new30d ?? 0,
@@ -235,170 +271,54 @@ export function CustomerIntelligenceView() {
   async function handleImportExcel(file: File) {
     setImporting(true)
     try {
-      const buf = await file.arrayBuffer()
-      const wb = XLSX.read(buf, { type: 'array' })
-
-      const sheet =
-        wb.Sheets['Customers'] ??
-        wb.Sheets[wb.SheetNames[0] ?? '']
-      if (!sheet) {
-        toast.error('No sheets found in this file')
-        return
-      }
-
-      const normalizeHeader = (h: unknown) =>
-        String(h ?? '')
-          .trim()
-          .toLowerCase()
-          // remove punctuation but keep letters/numbers
-          .replace(/[^a-z0-9]+/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-
-      const get = (row: Record<string, unknown>, ...candidates: string[]) => {
-        const normalizedCandidates = new Set(candidates.map((c) => normalizeHeader(c)))
-        for (const k of Object.keys(row)) {
-          const nk = normalizeHeader(k)
-          if (normalizedCandidates.has(nk)) return row[k]
-        }
-        return undefined
-      }
-
-      const parseMoney = (v: unknown): number | undefined => {
-        if (typeof v === 'number' && Number.isFinite(v)) return v
-        const s = String(v ?? '').trim()
-        if (!s) return undefined
-        const n = Number(s.replace(/[^0-9.\-]/g, ''))
-        return Number.isFinite(n) ? n : undefined
-      }
-
-      // Some Excel sheets have title/date rows above the header row.
-      // First try to detect the real header row by scanning the sheet (AOA mode).
-      const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' }) as unknown[][]
-
-      const headerRowIdx = aoa.findIndex((row) => {
-        const cells = row.map((c) => normalizeHeader(c))
-        return cells.includes('name') && (cells.includes('number') || cells.includes('phone'))
-      })
-
-      const rowsFromAoa =
-        headerRowIdx >= 0
-          ? (() => {
-              const headerRow = aoa[headerRowIdx] ?? []
-              const colKeys = headerRow.map((c) => normalizeHeader(c))
-              const colIndex = (key: string) => colKeys.findIndex((k) => k === normalizeHeader(key))
-              const idxName = colIndex('name')
-              const idxNumber = colIndex('number')
-              const idxLocation = colIndex('location')
-              const idxRider = colIndex('rider assigned')
-              const idxAmt = colIndex('amount to be collected')
-              const idxCash = colIndex('ac cash collected')
-              const idxMomo = colIndex('ac momo')
-              const idxPaystack = colIndex('ac paystack')
-              const idxRemarks = colIndex('remarks')
-
-              return aoa
-                .slice(headerRowIdx + 1)
-                .map((r) => {
-                  const customer = String(r[idxName] ?? '').trim()
-                  if (!customer) return null
-                  const phone = String(r[idxNumber] ?? '').trim()
-                  const location = String(r[idxLocation] ?? '').trim()
-                  const riderAssigned = String(r[idxRider] ?? '').trim()
-                  const amountToBeCollectedGhs = parseMoney(r[idxAmt])
-                  const acCashCollectedGhs = parseMoney(r[idxCash])
-                  const acMomoGhs = parseMoney(r[idxMomo])
-                  const acPaystackGhs = parseMoney(r[idxPaystack])
-                  const remarks = String(r[idxRemarks] ?? '').trim()
-
-                  return {
-                    customer,
-                    phone: phone || undefined,
-                    email: undefined,
-                    location: location || undefined,
-                    source: undefined,
-                    joinDate: undefined,
-                    segment: undefined,
-                    riderAssigned: riderAssigned || undefined,
-                    amountToBeCollectedGhs,
-                    acCashCollectedGhs,
-                    acMomoGhs,
-                    acPaystackGhs,
-                    remarks: remarks || undefined,
-                  }
-                })
-                .filter((x): x is NonNullable<typeof x> => Boolean(x))
-            })()
-          : []
-
-      // Fallback to object-mode parsing (simple sheets)
-      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
-      const rowsFromJson = Array.isArray(json)
-        ? json
-            .map((r) => {
-              const customer = String(
-                get(r, 'customer', 'customer name', 'name', 'full name') ??
-                  r.customer ??
-                  r.Customer ??
-                  r.name ??
-                  r.Name ??
-                  '',
-              ).trim()
-              if (!customer) return null
-              const phone = String(get(r, 'phone', 'number', 'mobile') ?? r.phone ?? r.Phone ?? '').trim()
-              const email = String(get(r, 'email') ?? r.email ?? r.Email ?? '').trim()
-              const location = String(get(r, 'location') ?? r.location ?? r.Location ?? '').trim()
-              const riderAssigned = String(get(r, 'rider assigned', 'rider', 'assigned rider') ?? '').trim()
-              const amountToBeCollectedGhs = parseMoney(
-                get(r, 'amount to be collected', 'amount_to_be_collected') ?? '',
-              )
-              const acCashCollectedGhs = parseMoney(get(r, 'ac cash collected', 'ac cash') ?? '')
-              const acMomoGhs = parseMoney(get(r, 'ac momo', 'acmomo') ?? '')
-              const acPaystackGhs = parseMoney(get(r, 'ac paystack', 'paystack') ?? '')
-              const remarks = String(get(r, 'remarks', 'remark', 'notes') ?? '').trim()
-
-              return {
-                customer,
-                phone: phone || undefined,
-                email: email || undefined,
-                location: location || undefined,
-                source: undefined,
-                joinDate: undefined,
-                segment: undefined,
-                riderAssigned: riderAssigned || undefined,
-                amountToBeCollectedGhs,
-                acCashCollectedGhs,
-                acMomoGhs,
-                acPaystackGhs,
-                remarks: remarks || undefined,
-              }
-            })
-            .filter((x): x is NonNullable<typeof x> => Boolean(x))
-        : []
-
-      const rows = rowsFromAoa.length > 0 ? rowsFromAoa : rowsFromJson
-
-      if (rows.length === 0) {
-        toast.error('No valid customer rows found (missing customer name)')
-        return
-      }
-
-      const res = await fetch('/api/dtc/customers/import', {
+      const form = new FormData()
+      form.set('file', file, file.name)
+      const res = await fetch('/api/dtc/customers/import-file', {
         method: 'POST',
+        body: form,
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rows }),
       })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
       }
       if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        const err = (await res.json().catch(() => ({}))) as { error?: string; issues?: unknown }
+        if (err.issues) console.error('DTC import validation', err.issues)
         throw new Error(err.error ?? 'Import failed')
       }
-
-      toast.success(`Imported ${rows.length.toLocaleString()} rows`)
+      const data = (await res.json()) as {
+        rowCount: number
+        uniqueCustomerCount: number
+        duplicateRows: number
+        parseStats: { dataRowsInRange: number; droppedEmptyCustomer: number }
+      }
+      const dups = data.duplicateRows
+      const dropped = data.parseStats.droppedEmptyCustomer
+      if (dups === 0 && dropped === 0) {
+        toast.success(
+          `Imported ${data.rowCount.toLocaleString()} row(s)${
+            data.rowCount === data.uniqueCustomerCount
+              ? '.'
+              : ` → ${data.uniqueCustomerCount.toLocaleString()} unique customer name(s) in the list.`
+          }`,
+        )
+      } else {
+        const bits: string[] = [
+          `Read ${data.rowCount.toLocaleString()} row(s) with a customer name from the sheet into ${data.uniqueCustomerCount.toLocaleString()} unique name(s) in the database`,
+        ]
+        if (dropped > 0) {
+          bits.push(
+            `${dropped.toLocaleString()} row(s) in the file had an empty name column and were not imported${data.parseStats.dataRowsInRange > 0 ? ` (sheet data range had ${data.parseStats.dataRowsInRange.toLocaleString()} body row(s) below the header)` : ''}`,
+          )
+        }
+        if (dups > 0) {
+          bits.push(
+            `${dups.toLocaleString()} import row(s) were the same name as a prior row; each name is one customer record, so the list can show fewer than the row count in Excel`,
+          )
+        }
+        toast.success(bits.join(' · '))
+      }
       await load()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Import failed')
@@ -457,13 +377,66 @@ export function CustomerIntelligenceView() {
     }
   }
 
+  async function handleResetCustomers() {
+    const phrase = clearPhrase.trim()
+    if (phrase !== CLEAR_DTC_CUSTOMERS_CONFIRM) {
+      toast.error('Confirmation phrase does not match')
+      return
+    }
+    setClearing(true)
+    try {
+      const res = await fetch('/api/dtc/customers/reset', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: CLEAR_DTC_CUSTOMERS_CONFIRM }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error ?? 'Could not clear customers')
+      }
+      const data = (await res.json()) as { deletedCount?: number }
+      const n = typeof data.deletedCount === 'number' ? data.deletedCount : 0
+      if (n === 0) {
+        toast.message('No customer rows were deleted (list may already be empty).')
+      } else {
+        toast.success(`Removed ${n.toLocaleString()} customer row(s)`)
+      }
+      setClearOpen(false)
+      setClearPhrase('')
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to clear')
+    } finally {
+      setClearing(false)
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-col">
       <DtcPageHeader
         title="Customer Intelligence"
-        description="Segment DTC buyers, compare lifetime value, and spot churn risk before sell-out momentum drops."
+        description="Upload your .xlsx here — parsing runs on the server (up to 20 MB). Full lists (3,000+ rows) supported. Columns: customer name, phone, orders, billed, collected, location, returned, first/last order dates."
         actions={
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              type="button"
+              disabled={importing || loading || customers.length === 0}
+              onClick={() => {
+                setClearPhrase('')
+                setClearOpen(true)
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+              Clear list
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -486,153 +459,15 @@ export function CustomerIntelligenceView() {
                 if (f) void handleImportExcel(f)
               }}
             />
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5" type="button">
-                  <Plus className="h-4 w-4" />
-                  Add customer
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="sm:max-w-2xl">
-                <form onSubmit={handleCreateCustomer}>
-                  <DialogHeader>
-                    <DialogTitle>Add customer</DialogTitle>
-                    <DialogDescription>
-                      Adds a customer record so they appear in segmentation even before orders are logged.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="grid gap-4 py-4">
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor="new-customer">Customer name</Label>
-                        <Input
-                          id="new-customer"
-                          value={createForm.customer}
-                          onChange={(e) =>
-                            setCreateForm((f) => ({ ...f, customer: e.target.value }))
-                          }
-                          placeholder="Elite Pharmacy"
-                          autoComplete="organization"
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="customer-phone">Phone</Label>
-                        <Input
-                          id="customer-phone"
-                          value={createForm.phone}
-                          onChange={(e) =>
-                            setCreateForm((f) => ({ ...f, phone: e.target.value }))
-                          }
-                          placeholder="+233 20 000 0000"
-                          inputMode="tel"
-                          autoComplete="tel"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="customer-email">Email</Label>
-                        <Input
-                          id="customer-email"
-                          value={createForm.email}
-                          onChange={(e) =>
-                            setCreateForm((f) => ({ ...f, email: e.target.value }))
-                          }
-                          placeholder="buyer@company.com"
-                          type="email"
-                          inputMode="email"
-                          autoComplete="email"
-                        />
-                      </div>
-                      <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor="customer-location">Location</Label>
-                        <Input
-                          id="customer-location"
-                          value={createForm.location}
-                          onChange={(e) =>
-                            setCreateForm((f) => ({ ...f, location: e.target.value }))
-                          }
-                          placeholder="Accra, Ghana"
-                          autoComplete="address-level2"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Source</Label>
-                        <Select
-                          value={createForm.source}
-                          onValueChange={(v) =>
-                            setCreateForm((f) => ({ ...f, source: v as CustomerRow['source'] }))
-                          }
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="instagram">Instagram</SelectItem>
-                            <SelectItem value="web">Web</SelectItem>
-                            <SelectItem value="walk_in">Walk-in</SelectItem>
-                            <SelectItem value="referral">Referral</SelectItem>
-                            <SelectItem value="sales_rep">Sales rep</SelectItem>
-                            <SelectItem value="other">Other</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="customer-join-date">Join date</Label>
-                        <Input
-                          id="customer-join-date"
-                          type="date"
-                          value={createForm.joinDate}
-                          onChange={(e) =>
-                            setCreateForm((f) => ({ ...f, joinDate: e.target.value }))
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2 sm:col-span-2">
-                        <Label>Segment</Label>
-                        <Select
-                          value={createForm.segment}
-                          onValueChange={(v) =>
-                            setCreateForm((f) => ({ ...f, segment: v as CustomerRow['segment'] }))
-                          }
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="Core">Core</SelectItem>
-                            <SelectItem value="New (30d)">New (30d)</SelectItem>
-                            <SelectItem value="High LTV">High LTV</SelectItem>
-                            <SelectItem value="At risk">At risk</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">
-                          This is a manual label. The table also computes a live segment from order history.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  <DialogFooter>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setCreateOpen(false)}
-                    >
-                      Cancel
-                    </Button>
-                    <Button type="submit" disabled={creating}>
-                      {creating ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Saving…
-                        </>
-                      ) : (
-                        'Add customer'
-                      )}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
+            <Button
+              size="sm"
+              className="gap-1.5"
+              type="button"
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus className="h-4 w-4" />
+              Add customer
+            </Button>
 
             <Button
               variant="outline"
@@ -673,21 +508,21 @@ export function CustomerIntelligenceView() {
           </Card>
           <Card className="p-4">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Avg LTV
+              Avg total billed
             </p>
             <p className="mt-2 text-2xl font-bold">
-              {loading ? '—' : formatGhs(totals.avgLtv)}
+              {loading ? '—' : formatGhs(totals.avgTotalBilled)}
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">Based on all sell-out orders</p>
+            <p className="mt-1 text-xs text-muted-foreground">Per customer (sheet or orders)</p>
           </Card>
           <Card className="p-4 border-l-4 border-l-indigo-600">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              High LTV
+              High billed
             </p>
             <p className="mt-2 text-2xl font-bold">
               {loading ? '—' : segments?.highLtv ?? 0}
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">LTV ≥ GHS 2,000 or 10+ orders</p>
+            <p className="mt-1 text-xs text-muted-foreground">Billed ≥ GHS 2,000 or 10+ orders</p>
           </Card>
           <Card className="p-4 border-l-4 border-l-red-600">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -700,7 +535,7 @@ export function CustomerIntelligenceView() {
           </Card>
         </div>
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="max-w-md flex-1 space-y-2">
             <Label htmlFor="customer-search" className="text-muted-foreground">
               Search customers
@@ -712,18 +547,36 @@ export function CustomerIntelligenceView() {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          {query ? (
-            <Button type="button" variant="ghost" size="sm" onClick={() => setQuery('')}>
-              Clear
-            </Button>
-          ) : null}
+          <div className="flex flex-wrap items-end gap-3 sm:justify-end">
+            <div className="w-full min-w-[10rem] space-y-2 sm:w-44">
+              <Label htmlFor="customer-sort" className="text-muted-foreground">
+                Sort by
+              </Label>
+              <Select value={sortBy} onValueChange={(v) => setSortBy(v as CustomerSortKey)}>
+                <SelectTrigger id="customer-sort" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="billed">Total billed (high first)</SelectItem>
+                  <SelectItem value="orders">Total orders (most first)</SelectItem>
+                  <SelectItem value="lastOrder">Last order date (recent first)</SelectItem>
+                  <SelectItem value="name">Customer name (A–Z)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {query ? (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setQuery('')}>
+                Clear search
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         <Card className="p-0">
           <div className="border-b border-border px-4 py-3 sm:px-6">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold uppercase tracking-wide">
-                Customer segments
+                Customer list
               </h2>
               <Button
                 type="button"
@@ -744,7 +597,7 @@ export function CustomerIntelligenceView() {
               <Loader2 className="h-5 w-5 animate-spin" />
               Loading customers…
             </div>
-          ) : filtered.length === 0 ? (
+          ) : displayRows.length === 0 ? (
             <div className="p-6">
               <Empty className="border-0 p-0">
                 <EmptyHeader>
@@ -756,55 +609,250 @@ export function CustomerIntelligenceView() {
                   </EmptyTitle>
                   <EmptyDescription>
                     {customers.length === 0
-                      ? 'Create DTC orders first; customers are derived from order history.'
+                      ? 'Import a customer sheet or use Add customer. Rows live in the customer list until you clear them; sell-out orders stay in Orders.'
                       : 'Try a different search term.'}
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
             </div>
           ) : (
+            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Segment</TableHead>
-                  <TableHead className="text-right">Orders</TableHead>
-                  <TableHead className="text-right">LTV</TableHead>
-                  <TableHead className="hidden lg:table-cell">Source</TableHead>
-                  <TableHead className="hidden md:table-cell">Last order</TableHead>
+                  <TableHead className="w-10 min-w-10 text-right tabular-nums text-muted-foreground">#</TableHead>
+                  <TableHead className="min-w-[10rem] whitespace-nowrap">Customer name</TableHead>
+                  <TableHead className="min-w-[7rem] whitespace-nowrap">Phone number</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Total orders</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Total billed</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Total collected</TableHead>
+                  <TableHead className="min-w-[8rem] whitespace-nowrap">Location</TableHead>
+                  <TableHead className="text-right whitespace-nowrap">Returned</TableHead>
+                  <TableHead className="whitespace-nowrap">First order date</TableHead>
+                  <TableHead className="whitespace-nowrap">Last order date</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((c) => {
-                  const last = c.lastOrderAt ? new Date(c.lastOrderAt) : null
+                {displayRows.map((c, i) => {
                   const isAtRisk = c.segment === 'At risk'
                   return (
-                    <TableRow key={c.customer}>
-                      <TableCell className="font-medium">{c.customer}</TableCell>
-                      <TableCell>{segmentBadge(c.segment)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{c.orders}</TableCell>
-                      <TableCell className="text-right font-medium tabular-nums">
-                        {c.ltvFormatted}
+                    <TableRow key={c.id}>
+                      <TableCell className="text-right text-muted-foreground tabular-nums text-sm">
+                        {i + 1}
                       </TableCell>
-                      <TableCell className="hidden lg:table-cell text-muted-foreground">
-                        {c.source.replace(/_/g, ' ')}
+                      <TableCell className="font-medium">{c.customerName}</TableCell>
+                      <TableCell className="text-muted-foreground tabular-nums">
+                        {c.phoneNumber || '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {c.totalOrders.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right font-medium tabular-nums">
+                        {c.totalBilledFormatted}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{c.totalCollectedFormatted}</TableCell>
+                      <TableCell className="max-w-[14rem] truncate text-muted-foreground" title={c.location}>
+                        {c.location || '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{c.returnedFormatted}</TableCell>
+                      <TableCell className="text-muted-foreground whitespace-nowrap">
+                        {fmtTableDate(c.firstOrderDate)}
                       </TableCell>
                       <TableCell
                         className={cn(
-                          'hidden md:table-cell text-muted-foreground',
+                          'whitespace-nowrap text-muted-foreground',
                           isAtRisk && 'text-red-600',
                         )}
                       >
-                        {last ? formatDistanceToNowStrict(last, { addSuffix: true }) : '—'}
+                        {fmtTableDate(c.lastOrderDate)}
                       </TableCell>
                     </TableRow>
                   )
                 })}
               </TableBody>
             </Table>
+            </div>
           )}
         </Card>
       </div>
+
+      <Dialog
+        open={clearOpen}
+        onOpenChange={(open) => {
+          setClearOpen(open)
+          if (!open) setClearPhrase('')
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Clear all customer rows?</DialogTitle>
+            <DialogDescription>
+              This deletes every record in the customer list (including imports and manually added customers).
+              DTC orders in the system are not removed. This cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="clear-confirm" className="text-muted-foreground">
+              Type <span className="font-mono text-foreground">{CLEAR_DTC_CUSTOMERS_CONFIRM}</span> to confirm
+            </Label>
+            <Input
+              id="clear-confirm"
+              value={clearPhrase}
+              onChange={(e) => setClearPhrase(e.target.value)}
+              placeholder={CLEAR_DTC_CUSTOMERS_CONFIRM}
+              autoComplete="off"
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setClearOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={clearing || clearPhrase.trim() !== CLEAR_DTC_CUSTOMERS_CONFIRM}
+              onClick={() => void handleResetCustomers()}
+            >
+              {clearing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Clearing…
+                </>
+              ) : (
+                'Clear all'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <form onSubmit={handleCreateCustomer}>
+            <DialogHeader>
+              <DialogTitle>Add customer</DialogTitle>
+              <DialogDescription>
+                Adds a customer record so they appear in segmentation even before orders are logged.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="new-customer">Customer name</Label>
+                  <Input
+                    id="new-customer"
+                    value={createForm.customer}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, customer: e.target.value }))}
+                    placeholder="Elite Pharmacy"
+                    autoComplete="organization"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="customer-phone">Phone</Label>
+                  <Input
+                    id="customer-phone"
+                    value={createForm.phone}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, phone: e.target.value }))}
+                    placeholder="+233 20 000 0000"
+                    inputMode="tel"
+                    autoComplete="tel"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="customer-email">Email</Label>
+                  <Input
+                    id="customer-email"
+                    value={createForm.email}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))}
+                    placeholder="buyer@company.com"
+                    type="email"
+                    inputMode="email"
+                    autoComplete="email"
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label htmlFor="customer-location">Location</Label>
+                  <Input
+                    id="customer-location"
+                    value={createForm.location}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, location: e.target.value }))}
+                    placeholder="Accra, Ghana"
+                    autoComplete="address-level2"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Source</Label>
+                  <Select
+                    value={createForm.source}
+                    onValueChange={(v) =>
+                      setCreateForm((f) => ({ ...f, source: v as CustomerSource }))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="instagram">Instagram</SelectItem>
+                      <SelectItem value="web">Web</SelectItem>
+                      <SelectItem value="walk_in">Walk-in</SelectItem>
+                      <SelectItem value="referral">Referral</SelectItem>
+                      <SelectItem value="sales_rep">Sales rep</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="customer-join-date">Join date</Label>
+                  <Input
+                    id="customer-join-date"
+                    type="date"
+                    value={createForm.joinDate}
+                    onChange={(e) => setCreateForm((f) => ({ ...f, joinDate: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Segment</Label>
+                  <Select
+                    value={createForm.segment}
+                    onValueChange={(v) =>
+                      setCreateForm((f) => ({ ...f, segment: v as CustomerSegment }))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Core">Core</SelectItem>
+                      <SelectItem value="New (30d)">New (30d)</SelectItem>
+                      <SelectItem value="High LTV">High LTV</SelectItem>
+                      <SelectItem value="At risk">At risk</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    This is a manual label. The table also computes a live segment from order history.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={creating}>
+                {creating ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving…
+                  </>
+                ) : (
+                  'Add customer'
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
