@@ -41,6 +41,7 @@ type SellInStatus = 'ordered' | 'in_transit' | 'arrived'
 type SellInRow = {
   id: string
   sellInGhs: number
+  costPriceGhs: number
   productName: string
   country: string
   manufacturerName: string
@@ -54,6 +55,7 @@ type SellInRow = {
 function emptyForm() {
   return {
     sellInGhs: '',
+    costPriceGhs: '',
     productName: '',
     country: '',
     manufacturerName: '',
@@ -154,6 +156,7 @@ export function SellInView() {
     setEditId(row.id)
     setEditForm({
       sellInGhs: String(row.sellInGhs),
+      costPriceGhs: String(row.costPriceGhs ?? 0),
       productName: row.productName,
       country: row.country,
       manufacturerName: row.manufacturerName,
@@ -169,6 +172,7 @@ export function SellInView() {
   async function submitCreate(e: React.FormEvent) {
     e.preventDefault()
     const sellInGhs = Number(form.sellInGhs)
+    const costPriceGhs = form.costPriceGhs.trim() === '' ? 0 : Number(form.costPriceGhs)
     const quantity = Number(form.quantity)
     const productName = form.productName.trim()
     const country = form.country.trim()
@@ -194,6 +198,10 @@ export function SellInView() {
       toast.error('Enter a valid sell-in value')
       return
     }
+    if (!Number.isFinite(costPriceGhs) || costPriceGhs < 0) {
+      toast.error('Enter a valid cost price')
+      return
+    }
     if (!Number.isFinite(quantity) || quantity < 0) {
       toast.error('Enter a valid quantity')
       return
@@ -213,6 +221,7 @@ export function SellInView() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sellInGhs,
+          costPriceGhs,
           productName,
           country,
           manufacturerName,
@@ -246,6 +255,7 @@ export function SellInView() {
     e.preventDefault()
     if (!editId) return
     const sellInGhs = Number(editForm.sellInGhs)
+    const costPriceGhs = editForm.costPriceGhs.trim() === '' ? 0 : Number(editForm.costPriceGhs)
     const quantity = Number(editForm.quantity)
     const productName = editForm.productName.trim()
     const country = editForm.country.trim()
@@ -271,6 +281,10 @@ export function SellInView() {
       toast.error('Enter a valid sell-in value')
       return
     }
+    if (!Number.isFinite(costPriceGhs) || costPriceGhs < 0) {
+      toast.error('Enter a valid cost price')
+      return
+    }
     if (!Number.isFinite(quantity) || quantity < 0) {
       toast.error('Enter a valid quantity')
       return
@@ -290,6 +304,7 @@ export function SellInView() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sellInGhs,
+          costPriceGhs,
           productName,
           country,
           manufacturerName,
@@ -370,6 +385,18 @@ export function SellInView() {
                         onChange={(e) => setForm((f) => ({ ...f, sellInGhs: e.target.value }))}
                         placeholder="0"
                         required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="si-cost">Cost price (GHS)</Label>
+                      <Input
+                        id="si-cost"
+                        inputMode="decimal"
+                        value={form.costPriceGhs}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, costPriceGhs: e.target.value }))
+                        }
+                        placeholder="0"
                       />
                     </div>
                     <div className="space-y-2">
@@ -468,13 +495,15 @@ export function SellInView() {
                     />
                   </div>
                   <div className="rounded-lg bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-                    Total ={' '}
+                    Expected income ={' '}
                     <span className="font-semibold text-foreground">
                       {(() => {
                         const u = Number(form.sellInGhs)
+                        const c = form.costPriceGhs.trim() === '' ? 0 : Number(form.costPriceGhs)
                         const q = Number(form.quantity)
                         if (!Number.isFinite(u) || !Number.isFinite(q)) return '—'
-                        return formatGhs(Math.max(0, u) * Math.max(0, q))
+                        if (!Number.isFinite(c)) return '—'
+                        return formatGhs(Math.max(0, c) * Math.max(0, q))
                       })()}
                     </span>
                   </div>
@@ -575,12 +604,14 @@ export function SellInView() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="text-right">Unit sell-in</TableHead>
+                  <TableHead className="hidden lg:table-cell text-right">Cost price</TableHead>
                   <TableHead>Product name</TableHead>
                   <TableHead className="hidden lg:table-cell">Country</TableHead>
                   <TableHead className="hidden lg:table-cell">Manufacturer</TableHead>
                   <TableHead className="hidden md:table-cell">Date</TableHead>
                   <TableHead className="text-right">Quantity</TableHead>
-                  <TableHead className="hidden lg:table-cell text-right">Total</TableHead>
+                  <TableHead className="hidden lg:table-cell text-right">Expected income</TableHead>
+                  <TableHead className="hidden xl:table-cell text-right">Total</TableHead>
                   <TableHead>Ordered</TableHead>
                   <TableHead>In transit</TableHead>
                   <TableHead>Arrived | ETA</TableHead>
@@ -593,10 +624,14 @@ export function SellInView() {
                   const isTransit = r.status === 'in_transit'
                   const isArrived = r.status === 'arrived'
                   const total = r.sellInGhs * r.quantity
+                  const expectedIncome = (Number(r.costPriceGhs ?? 0) || 0) * r.quantity
                   return (
                     <TableRow key={r.id}>
                       <TableCell className="text-right font-medium tabular-nums">
                         {formatGhs(r.sellInGhs)}
+                      </TableCell>
+                      <TableCell className="hidden lg:table-cell text-right tabular-nums text-muted-foreground">
+                        {formatGhs(Number(r.costPriceGhs ?? 0))}
                       </TableCell>
                       <TableCell className="font-medium">{r.productName}</TableCell>
                       <TableCell className="hidden lg:table-cell text-muted-foreground">
@@ -613,6 +648,9 @@ export function SellInView() {
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{r.quantity}</TableCell>
                       <TableCell className="hidden lg:table-cell text-right font-semibold tabular-nums">
+                        {formatGhs(expectedIncome)}
+                      </TableCell>
+                      <TableCell className="hidden xl:table-cell text-right tabular-nums text-muted-foreground">
                         {formatGhs(total)}
                       </TableCell>
                       <TableCell>{isOrdered ? statusBadge('ordered') : <span>—</span>}</TableCell>
@@ -677,6 +715,18 @@ export function SellInView() {
                     inputMode="decimal"
                     value={editForm.sellInGhs}
                     onChange={(e) => setEditForm((f) => ({ ...f, sellInGhs: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-si-cost">Cost price (GHS)</Label>
+                  <Input
+                    id="edit-si-cost"
+                    inputMode="decimal"
+                    value={editForm.costPriceGhs}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, costPriceGhs: e.target.value }))
+                    }
+                    placeholder="0"
                   />
                 </div>
                 <div className="space-y-2">

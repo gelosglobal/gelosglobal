@@ -10,6 +10,7 @@ export const runtime = 'nodejs'
 
 const patchSchema = z.object({
   sellInGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  costPriceGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
   productName: z.string().trim().min(1).max(200).optional(),
   country: z.string().trim().min(1).max(120).optional(),
   manufacturerName: z.string().trim().min(1).max(160).optional(),

@@ -8,6 +8,7 @@ export type SfSellInStatus = 'ordered' | 'in_transit' | 'arrived'
 export type SfSellInDoc = {
   _id: ObjectId
   sellInGhs: number
+  costPriceGhs?: number
   productName: string
   country: string
   /** Optional for backward compatibility; prefer manufacturerName + manufacturerContact. */
@@ -25,6 +26,7 @@ export type SfSellInDoc = {
 export type SfSellInJson = {
   id: string
   sellInGhs: number
+  costPriceGhs: number
   productName: string
   country: string
   manufacturerName: string
@@ -43,6 +45,7 @@ export function serializeSfSellIn(doc: SfSellInDoc): SfSellInJson {
   return {
     id: doc._id.toHexString(),
     sellInGhs: doc.sellInGhs,
+    costPriceGhs: Number(doc.costPriceGhs ?? 0) || 0,
     productName: doc.productName,
     country: doc.country,
     manufacturerName,
@@ -71,6 +74,7 @@ export async function listSfSellIn(db: Db): Promise<SfSellInDoc[]> {
 
 export type CreateSfSellInInput = {
   sellInGhs: number
+  costPriceGhs?: number
   productName: string
   country: string
   manufacturerName: string
@@ -88,6 +92,10 @@ export async function createSfSellIn(
   const now = new Date()
   const doc: WithoutId<SfSellInDoc> = {
     sellInGhs: input.sellInGhs,
+    costPriceGhs:
+      typeof input.costPriceGhs === 'number' && Number.isFinite(input.costPriceGhs)
+        ? input.costPriceGhs
+        : undefined,
     productName: input.productName.trim(),
     country: input.country.trim(),
     manufacturerName: input.manufacturerName.trim(),
@@ -105,6 +113,7 @@ export async function createSfSellIn(
 
 export type UpdateSfSellInInput = Partial<{
   sellInGhs: number
+  costPriceGhs: number
   productName: string
   country: string
   manufacturerName: string
@@ -122,6 +131,7 @@ export async function updateSfSellIn(
 ): Promise<SfSellInDoc | null> {
   const $set: Record<string, unknown> = { updatedAt: new Date() }
   if (patch.sellInGhs !== undefined) $set.sellInGhs = patch.sellInGhs
+  if (patch.costPriceGhs !== undefined) $set.costPriceGhs = patch.costPriceGhs
   if (patch.productName !== undefined) $set.productName = patch.productName.trim()
   if (patch.country !== undefined) $set.country = patch.country.trim()
   if (patch.manufacturerName !== undefined)
