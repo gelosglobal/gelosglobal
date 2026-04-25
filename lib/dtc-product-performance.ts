@@ -37,19 +37,26 @@ function itemKey(item: DtcOrderItem): string {
 }
 
 /**
- * Rolls up DTC order line items for the last 7 calendar days vs the prior 7 days
- * (rolling windows from now).
+ * Rolls up DTC order line items for a current window vs the prior window.
+ * The API defaults to last 7 days vs prior 7 days, but can pass custom windows.
  */
 export async function computeProductPerformance(
   db: Db,
+  opts?: {
+    currentStart?: Date
+    currentEnd?: Date
+  },
 ): Promise<{ rows: ProductPerformanceRow[]; highlights: ProductPerformanceHighlights }> {
   const now = new Date()
-  const currentStart = subDays(now, 7)
-  const prevStart = subDays(now, 14)
+  const currentEnd = opts?.currentEnd ?? now
+  const currentStart = opts?.currentStart ?? subDays(currentEnd, 7)
+  const windowMs = Math.max(0, currentEnd.getTime() - currentStart.getTime())
+  const prevEnd = currentStart
+  const prevStart = new Date(prevEnd.getTime() - windowMs)
 
   const orders = (await db
     .collection(DTC_ORDERS_COLLECTION)
-    .find({ orderedAt: { $gte: prevStart } })
+    .find({ orderedAt: { $gte: prevStart, $lt: currentEnd } })
     .project({ orderedAt: 1, items: 1 })
     .limit(5000)
     .toArray()) as Pick<DtcOrderDoc, 'orderedAt' | 'items'>[]
@@ -61,7 +68,7 @@ export async function computeProductPerformance(
   >()
 
   for (const order of orders) {
-    const isCurrent = order.orderedAt >= currentStart
+    const isCurrent = order.orderedAt >= currentStart && order.orderedAt < currentEnd
     const bucketKey: 'current' | 'previous' = isCurrent ? 'current' : 'previous'
     for (const item of order.items ?? []) {
       const key = itemKey(item)

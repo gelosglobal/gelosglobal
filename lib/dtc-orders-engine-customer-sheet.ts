@@ -35,6 +35,14 @@ export type DtcOrdersEngineCustomerJson = {
 export function serializeDtcOrdersEngineCustomer(
   doc: DtcOrdersEngineCustomerDoc,
 ): DtcOrdersEngineCustomerJson {
+  const toLocalYmd = (d: Date | null) => {
+    if (!d || Number.isNaN(d.getTime())) return ''
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+
   const d1 =
     doc.firstOrderAt instanceof Date && !Number.isNaN(doc.firstOrderAt.getTime())
       ? doc.firstOrderAt
@@ -63,8 +71,8 @@ export function serializeDtcOrdersEngineCustomer(
     totalCollectedGhs: Number(doc.totalCollectedGhs ?? 0) || 0,
     location: doc.location ?? '',
     returned: Number(doc.returned ?? 0) || 0,
-    firstOrderDate: d1 ? d1.toISOString().slice(0, 10) : '',
-    lastOrderDate: d2 ? d2.toISOString().slice(0, 10) : '',
+    firstOrderDate: toLocalYmd(d1),
+    lastOrderDate: toLocalYmd(d2),
   }
 }
 

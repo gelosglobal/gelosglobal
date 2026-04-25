@@ -2020,7 +2020,9 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                       <TableCell className="hidden xl:table-cell text-muted-foreground whitespace-nowrap">
                         {c.lastOrderAt
                           ? format(new Date(c.lastOrderAt), 'dd MMM yyyy, HH:mm')
-                          : '—'}
+                          : c.lastOrderDate
+                            ? format(new Date(`${c.lastOrderDate}T12:00:00`), 'dd MMM yyyy')
+                            : '—'}
                       </TableCell>
                       <TableCell className="text-right tabular-nums whitespace-nowrap">
                         {ordersForSheetRow(c).toLocaleString()}
@@ -2038,10 +2040,14 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                         {Number(c.returned ?? 0).toLocaleString()}
                       </TableCell>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {c.firstOrderDate ? format(new Date(`${c.firstOrderDate}T12:00:00`), 'dd MMM yyyy') : '—'}
+                        {c.firstOrderDate
+                          ? format(new Date(`${c.firstOrderDate}T12:00:00`), 'dd MMM yyyy')
+                          : '—'}
                       </TableCell>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {c.lastOrderDate ? format(new Date(`${c.lastOrderDate}T12:00:00`), 'dd MMM yyyy') : '—'}
+                        {c.lastOrderDate
+                          ? format(new Date(`${c.lastOrderDate}T12:00:00`), 'dd MMM yyyy')
+                          : '—'}
                       </TableCell>
                       <TableCell className="text-right">
                         <Button

@@ -509,21 +509,34 @@ export function CustomerIntelligenceView({
   }, [customers, ledgerRows])
 
   const ordersEngineCards = useMemo(() => {
+    const fromTs = dateFrom ? new Date(`${dateFrom}T00:00:00.000Z`).getTime() : null
+    const toTs = dateTo ? new Date(`${dateTo}T23:59:59.999Z`).getTime() : null
+    const rowsForCards =
+      mode !== 'orders-engine' || (!fromTs && !toTs)
+        ? ledgerRows
+        : ledgerRows.filter((r) => {
+            const t = r.orderedAt ? new Date(r.orderedAt).getTime() : NaN
+            if (!Number.isFinite(t)) return false
+            if (fromTs != null && t < fromTs) return false
+            if (toTs != null && t > toTs) return false
+            return true
+          })
+
     const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
     const uniqueCustomerKeys = new Set(
-      ledgerRows.map((r) => {
+      rowsForCards.map((r) => {
         const p = normalizePhone(r.phoneNumber ?? '')
         return p ? `p:${p}` : `n:${String(r.customerName ?? '').trim().toLowerCase()}`
       }),
     )
-    const totalOrders = ledgerRows.length
-    const totalBilled = ledgerRows.reduce((s, r) => s + (Number(r.amountToCollectGhs ?? 0) || 0), 0)
-    const totalCollected = ledgerRows.reduce((s, r) => s + (Number(r.totalCollectedGhs ?? 0) || 0), 0)
+    const totalOrders = rowsForCards.length
+    const totalBilled = rowsForCards.reduce((s, r) => s + (Number(r.amountToCollectGhs ?? 0) || 0), 0)
+    const totalCollected = rowsForCards.reduce((s, r) => s + (Number(r.totalCollectedGhs ?? 0) || 0), 0)
     const isReturnedish = (s: string) => {
       const t = s.trim().toLowerCase()
       return t.includes('returned') || t.includes('return')
     }
-    const returnedCount = ledgerRows.reduce((s, r) => {
+    const returnedCount = rowsForCards.reduce((s, r) => {
       const hit =
         isReturnedish(String(r.deliveryStatus ?? '')) ||
         isReturnedish(String(r.remarks ?? '')) ||
@@ -537,7 +550,7 @@ export function CustomerIntelligenceView({
       totalCollected,
       returnedCount,
     }
-  }, [ledgerRows])
+  }, [dateFrom, dateTo, ledgerRows, mode])
 
   function handleExport() {
     if (ledgerRows.length === 0) {

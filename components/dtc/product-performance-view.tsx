@@ -11,6 +11,13 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Table,
   TableBody,
   TableCell,
@@ -67,24 +74,38 @@ function formatWow(p: number | null, isNew: boolean) {
   )
 }
 
+type RangePreset = '7d' | '1m' | '3m' | '6m' | '12m' | 'custom'
+
 export function ProductPerformanceView() {
   const [rows, setRows] = useState<ProductRow[]>([])
   const [highlights, setHighlights] = useState<Highlights | null>(null)
   const [periodLabel, setPeriodLabel] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
+  const [rangePreset, setRangePreset] = useState<RangePreset>('7d')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/dtc/product-performance', {
+      const params = new URLSearchParams()
+      params.set('preset', rangePreset)
+      if (rangePreset === 'custom') {
+        if (from) params.set('from', from)
+        if (to) params.set('to', to)
+      }
+      const res = await fetch(`/api/dtc/product-performance?${params.toString()}`, {
         credentials: 'include',
       })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
       }
-      if (!res.ok) throw new Error('Failed to load')
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(data.error || 'Failed to load')
+      }
       const data = (await res.json()) as {
         rows: ProductRow[]
         highlights: Highlights
@@ -102,7 +123,7 @@ export function ProductPerformanceView() {
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, rangePreset, from, to])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -176,6 +197,54 @@ export function ProductPerformanceView() {
         {periodLabel ? (
           <p className="text-xs text-muted-foreground">{periodLabel}</p>
         ) : null}
+
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">Date range</Label>
+            <Select value={rangePreset} onValueChange={(v) => setRangePreset(v as RangePreset)}>
+              <SelectTrigger className="w-[220px]">
+                <SelectValue placeholder="Select range" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="7d">Last 7 days</SelectItem>
+                <SelectItem value="1m">Last 1 month</SelectItem>
+                <SelectItem value="3m">Last 3 months</SelectItem>
+                <SelectItem value="6m">Last 6 months</SelectItem>
+                <SelectItem value="12m">Last 12 months</SelectItem>
+                <SelectItem value="custom">Custom…</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {rangePreset === 'custom' ? (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="pp-from" className="text-muted-foreground">
+                  From
+                </Label>
+                <Input
+                  id="pp-from"
+                  type="date"
+                  value={from}
+                  onChange={(e) => setFrom(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="pp-to" className="text-muted-foreground">
+                  To
+                </Label>
+                <Input
+                  id="pp-to"
+                  type="date"
+                  value={to}
+                  onChange={(e) => setTo(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+            </>
+          ) : null}
+        </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
           <Card className="p-5">
