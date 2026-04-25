@@ -12,6 +12,13 @@ import { Card } from '@/components/ui/card'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatGhs } from '@/lib/dtc-orders'
 
@@ -52,11 +59,21 @@ export function RetailCustomerIntelligenceView() {
   const [segments, setSegments] = useState<Segments | null>(null)
   const [generatedAt, setGeneratedAt] = useState<string>('')
   const [query, setQuery] = useState('')
+  type RangePreset = 'all' | '7d' | '1m' | '3m' | '6m' | '12m' | 'custom'
+  const [rangePreset, setRangePreset] = useState<RangePreset>('all')
+  const [rangeFrom, setRangeFrom] = useState('')
+  const [rangeTo, setRangeTo] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch('/api/sf/customer-intelligence', { credentials: 'include' })
+      const params = new URLSearchParams()
+      params.set('preset', rangePreset)
+      if (rangePreset === 'custom') {
+        if (rangeFrom) params.set('from', rangeFrom)
+        if (rangeTo) params.set('to', rangeTo)
+      }
+      const res = await fetch(`/api/sf/customer-intelligence?${params.toString()}`, { credentials: 'include' })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
@@ -79,7 +96,7 @@ export function RetailCustomerIntelligenceView() {
 
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, rangeFrom, rangePreset, rangeTo])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -245,6 +262,71 @@ export function RetailCustomerIntelligenceView() {
             <p className="text-xs text-muted-foreground">
               {totals.count.toLocaleString()} outlets · Invoiced {formatGhs(totals.invoiced)} · Paid {formatGhs(totals.paid)} · Balance {formatGhs(totals.balance)}
             </p>
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap items-end gap-4">
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">Date range</Label>
+            <Select value={rangePreset} onValueChange={(v) => setRangePreset(v as RangePreset)}>
+              <SelectTrigger className="w-[220px]">
+                <SelectValue placeholder="Select range" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All time</SelectItem>
+                <SelectItem value="7d">Last 7 days</SelectItem>
+                <SelectItem value="1m">Last 1 month</SelectItem>
+                <SelectItem value="3m">Last 3 months</SelectItem>
+                <SelectItem value="6m">Last 6 months</SelectItem>
+                <SelectItem value="12m">Last 12 months</SelectItem>
+                <SelectItem value="custom">Custom…</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {rangePreset === 'custom' ? (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="retail-ci-from" className="text-muted-foreground">
+                  From
+                </Label>
+                <Input
+                  id="retail-ci-from"
+                  type="date"
+                  value={rangeFrom}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="retail-ci-to" className="text-muted-foreground">
+                  To
+                </Label>
+                <Input
+                  id="retail-ci-to"
+                  type="date"
+                  value={rangeTo}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                  disabled={loading}
+                />
+              </div>
+            </>
+          ) : null}
+
+          {(rangePreset !== 'all' || rangeFrom || rangeTo) ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setRangePreset('all')
+                setRangeFrom('')
+                setRangeTo('')
+              }}
+              disabled={loading}
+            >
+              Clear
+            </Button>
           ) : null}
         </div>
 

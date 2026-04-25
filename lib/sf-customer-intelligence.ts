@@ -28,12 +28,16 @@ function segmentFor(now: Date, row: { invoices: number; invoicedNetGhs: number; 
   return 'Core'
 }
 
-export async function computeRetailCustomerIntelligence(db: Db): Promise<{
+export async function computeRetailCustomerIntelligence(
+  db: Db,
+  opts?: { since?: Date; until?: Date },
+): Promise<{
   rows: RetailCustomerRow[]
   segments: Record<'highValue' | 'atRisk' | 'new30d' | 'core', number>
 }> {
   const now = new Date()
-  const since = subDays(now, 365 * 5) // effectively "all time", bounded for index use
+  const since = opts?.since ?? subDays(now, 365 * 5) // default "all time", bounded for index use
+  const until = opts?.until ?? now
 
   const agg = await db
     .collection(SF_B2B_INVOICES_COLLECTION)
@@ -46,7 +50,7 @@ export async function computeRetailCustomerIntelligence(db: Db): Promise<{
       firstAt: Date
       lastAt: Date
     }>([
-      { $match: { createdAt: { $gte: since, $lte: now } } },
+      { $match: { createdAt: { $gte: since, $lt: until } } },
       {
         $project: {
           outletName: 1,
@@ -88,7 +92,7 @@ export async function computeRetailCustomerIntelligence(db: Db): Promise<{
         },
       },
       { $sort: { invoicedNetGhs: -1, invoices: -1, outletName: 1 } },
-      { $limit: 2000 },
+      { $limit: 20_000 },
     ])
     .toArray()
 

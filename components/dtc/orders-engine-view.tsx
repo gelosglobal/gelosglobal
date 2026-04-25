@@ -132,9 +132,15 @@ type CustomerIntelAgg = {
 
 function aggregateCustomerIntel(customers: Array<Pick<DtcOrdersEngineCustomerJson, 'totalOrders' | 'totalBilledGhs' | 'totalCollectedGhs' | 'returned'>>): CustomerIntelAgg {
   const totalOrders = customers.reduce((s, c) => s + (Number.isFinite(c.totalOrders) ? c.totalOrders : 0), 0)
-  const totalBilled = customers.reduce((s, c) => s + (Number.isFinite((c as any).totalBilledGhs) ? (c as any).totalBilledGhs : 0), 0)
+  const totalBilled = customers.reduce((s, c) => {
+    const n = Number((c as any).totalBilledGhs ?? 0)
+    return s + (Number.isFinite(n) ? n : 0)
+  }, 0)
   const totalCollected = customers.reduce(
-    (s, c) => s + (Number.isFinite((c as any).totalCollectedGhs) ? (c as any).totalCollectedGhs : 0),
+    (s, c) => {
+      const n = Number((c as any).totalCollectedGhs ?? 0)
+      return s + (Number.isFinite(n) ? n : 0)
+    },
     0,
   )
   const returnedSum = customers.reduce(
@@ -186,6 +192,8 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
   } | null>(null)
   const [ciCustomerCount, setCiCustomerCount] = useState<number | null>(null)
   const [ciAvgTotalBilled, setCiAvgTotalBilled] = useState<number | null>(null)
+  const [ciHighBilled, setCiHighBilled] = useState<number | null>(null)
+  const [ciAtRisk, setCiAtRisk] = useState<number | null>(null)
   const [sheetCustomers, setSheetCustomers] = useState<DtcOrdersEngineCustomerJson[]>([])
   const [intelUniqueCustomers, setIntelUniqueCustomers] = useState<number | null>(null)
   const [intelOrdersByKey, setIntelOrdersByKey] = useState<Record<string, number>>({})
@@ -301,17 +309,54 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
           segments?: { highLtv: number; atRisk: number; new30d: number; core: number }
         }
         const rows = Array.isArray(json.customers) ? json.customers : []
-        setCiSegments(json.segments ?? null)
         setCiCustomerCount(rows.length)
+        // Compute KPIs from totals and recency (not from precomputed segments).
+        const toNumber = (v: unknown) => {
+          if (typeof v === 'number') return Number.isFinite(v) ? v : 0
+          if (typeof v === 'string') {
+            // Accept "GHS 1,234.50" and similar formatted values.
+            const n = Number(v.replace(/[^0-9.-]+/g, ''))
+            return Number.isFinite(n) ? n : 0
+          }
+          return 0
+        }
+
+        const totalBilled = rows.reduce((s, c) => s + toNumber((c as any).totalBilled), 0)
+        setCiAvgTotalBilled(rows.length ? totalBilled / rows.length : 0)
+
+        const highBilled = rows.reduce((s, c) => {
+          const billed = toNumber((c as any).totalBilled)
+          const orders = toNumber((c as any).totalOrders)
+          return s + (billed >= 2000 || orders >= 10 ? 1 : 0)
+        }, 0)
+        setCiHighBilled(highBilled)
+
+        const now = new Date()
+        const ymdToMs = (ymd: string) => {
+          const v = String(ymd ?? '').trim()
+          if (!v) return NaN
+          const d = new Date(`${v}T12:00:00.000Z`)
+          return Number.isNaN(d.getTime()) ? NaN : d.getTime()
+        }
+        const atRisk = rows.reduce((s, c) => {
+          const lastMs = ymdToMs(c.lastOrderDate)
+          if (!Number.isFinite(lastMs)) return s
+          const daysSince = Math.floor((now.getTime() - lastMs) / 86_400_000)
+          return s + (daysSince >= 60 ? 1 : 0)
+        }, 0)
+        setCiAtRisk(atRisk)
+
+        // Keep legacy segment counts available (some screens still show it).
+        setCiSegments(json.segments ?? null)
+
         const baseAgg = aggregateCustomerIntel(
           rows.map((c) => ({
-            totalOrders: c.totalOrders,
-            totalBilledGhs: c.totalBilled,
-            totalCollectedGhs: c.totalCollected,
-            returned: c.returned,
+            totalOrders: Number(c.totalOrders ?? 0) || 0,
+            totalBilledGhs: Number(c.totalBilled ?? 0) || 0,
+            totalCollectedGhs: Number(c.totalCollected ?? 0) || 0,
+            returned: Number(c.returned ?? 0) || 0,
           })),
         )
-        setCiAvgTotalBilled(rows.length ? baseAgg.totalBilled / rows.length : 0)
 
         // Total orders should represent "how many order rows exist" in Customer Intelligence ledger.
         // (each ledger row = 1 order, including duplicates).
@@ -386,6 +431,8 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
         setCiSegments(null)
         setCiCustomerCount(null)
         setCiAvgTotalBilled(null)
+        setCiHighBilled(null)
+        setCiAtRisk(null)
       }
     } catch {
       toast.error('Could not load orders')
@@ -397,6 +444,8 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
       setCiSegments(null)
       setCiCustomerCount(null)
       setCiAvgTotalBilled(null)
+      setCiHighBilled(null)
+      setCiAtRisk(null)
     } finally {
       setLoading(false)
     }
@@ -672,6 +721,34 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
     )
     return { totalCustomers, rowCount, totalOrders, totalBilledGhs, totalCollectedGhs }
   }, [effectiveSheetCustomers])
+
+  const sheetKpis = useMemo(() => {
+    const now = new Date()
+    const ymdToMs = (s: string) => {
+      const v = String(s ?? '').trim()
+      if (!v) return NaN
+      const d = new Date(`${v}T12:00:00.000Z`)
+      return Number.isNaN(d.getTime()) ? NaN : d.getTime()
+    }
+
+    const avgTotalBilled =
+      sheetTotals.totalCustomers === 0 ? 0 : sheetTotals.totalBilledGhs / sheetTotals.totalCustomers
+
+    const highBilled = effectiveSheetCustomers.reduce((sum, c) => {
+      const billed = Number(c.totalBilledGhs ?? 0) || 0
+      const orders = Number(c.totalOrders ?? 0) || 0
+      return sum + (billed >= 2000 || orders >= 10 ? 1 : 0)
+    }, 0)
+
+    const atRisk = effectiveSheetCustomers.reduce((sum, c) => {
+      const lastMs = ymdToMs(c.lastOrderDate)
+      if (!Number.isFinite(lastMs)) return sum
+      const daysSince = Math.floor((now.getTime() - lastMs) / 86_400_000)
+      return sum + (daysSince >= 60 ? 1 : 0)
+    }, 0)
+
+    return { avgTotalBilled, highBilled, atRisk }
+  }, [effectiveSheetCustomers, sheetTotals.totalBilledGhs, sheetTotals.totalCustomers])
 
   const ordersForSheetRow = useCallback(
     (c: Pick<DtcOrdersEngineCustomerJson, 'phoneNumber' | 'customerName' | 'totalOrders'>) => {
@@ -1815,7 +1892,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                 Customers tracked
               </p>
               <p className="mt-2 text-2xl font-bold">
-                {loading ? '—' : (ciCustomerCount ?? 0).toLocaleString()}
+                {loading ? '—' : sheetTotals.totalCustomers.toLocaleString()}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">Unique customer names</p>
             </Card>
@@ -1824,7 +1901,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                 Avg total billed
               </p>
               <p className="mt-2 text-2xl font-bold">
-                {loading ? '—' : formatGhs(ciAvgTotalBilled ?? 0)}
+                {loading ? '—' : formatGhs(sheetKpis.avgTotalBilled)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">Per customer (sheet or orders)</p>
             </Card>
@@ -1833,7 +1910,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                 High billed
               </p>
               <p className="mt-2 text-2xl font-bold">
-                {loading ? '—' : ciSegments?.highLtv ?? 0}
+                {loading ? '—' : sheetKpis.highBilled}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">Billed ≥ GHS 2,000 or 10+ orders</p>
             </Card>
@@ -1842,7 +1919,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                 At risk
               </p>
               <p className="mt-2 text-2xl font-bold">
-                {loading ? '—' : ciSegments?.atRisk ?? 0}
+                {loading ? '—' : sheetKpis.atRisk}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">No order in 60+ days</p>
             </Card>

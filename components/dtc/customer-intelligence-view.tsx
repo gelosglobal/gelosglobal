@@ -611,6 +611,37 @@ export function CustomerIntelligenceView({
     return base
   }, [customers, query, rangeFrom, rangePreset, rangeTo, sortBy])
 
+  const customerIntelCards = useMemo(() => {
+    const now = new Date()
+    const ymdToMs = (ymd: string) => {
+      const v = String(ymd ?? '').trim()
+      if (!v) return NaN
+      const d = new Date(`${v}T12:00:00.000Z`)
+      return Number.isNaN(d.getTime()) ? NaN : d.getTime()
+    }
+
+    let totalBilled = 0
+    let highBilled = 0
+    let atRisk = 0
+
+    for (const c of displayCustomers) {
+      const billed = Number(c.totalBilled ?? 0) || 0
+      totalBilled += billed
+      const orders = Number(c.totalOrders ?? 0) || 0
+      if (billed >= 2000 || orders >= 10) highBilled += 1
+
+      const lastMs = ymdToMs(c.lastOrderDate)
+      if (Number.isFinite(lastMs)) {
+        const daysSince = Math.floor((now.getTime() - lastMs) / 86_400_000)
+        if (daysSince >= 60) atRisk += 1
+      }
+    }
+
+    const avgTotalBilled =
+      displayCustomers.length === 0 ? 0 : totalBilled / displayCustomers.length
+    return { avgTotalBilled, highBilled, atRisk }
+  }, [displayCustomers])
+
   const ordersEngineCards = useMemo(() => {
     const { fromTs, toTs } = computeRangeTs(rangePreset, rangeFrom, rangeTo)
     const rowsForCards =
@@ -1338,7 +1369,7 @@ export function CustomerIntelligenceView({
                 Avg total billed
               </p>
               <p className="mt-2 text-2xl font-bold">
-                {loading ? '—' : formatGhs(totals.avgTotalBilled)}
+                {loading ? '—' : formatGhs(customerIntelCards.avgTotalBilled)}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">Per customer (sheet or orders)</p>
             </Card>
@@ -1347,7 +1378,7 @@ export function CustomerIntelligenceView({
                 High billed
               </p>
               <p className="mt-2 text-2xl font-bold">
-                {loading ? '—' : segments?.highLtv ?? 0}
+                {loading ? '—' : customerIntelCards.highBilled}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">Billed ≥ GHS 2,000 or 10+ orders</p>
             </Card>
@@ -1356,7 +1387,7 @@ export function CustomerIntelligenceView({
                 At risk
               </p>
               <p className="mt-2 text-2xl font-bold">
-                {loading ? '—' : segments?.atRisk ?? 0}
+                {loading ? '—' : customerIntelCards.atRisk}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">No order in 60+ days</p>
             </Card>
