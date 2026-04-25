@@ -1052,6 +1052,29 @@ export function CustomerIntelligenceView({
     }
   }
 
+  async function removeRow(r: Pick<CustomerIntelLedgerRow, 'id' | 'orderNumber'>) {
+    const label = r.orderNumber?.trim() ? `order ${r.orderNumber}` : 'this row'
+    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return
+    try {
+      const isLegacyOrder = r.id.startsWith('order:')
+      const legacyId = isLegacyOrder ? r.id.slice('order:'.length) : ''
+      const res = await fetch(
+        isLegacyOrder ? `/api/dtc/orders/${legacyId}` : `/api/dtc/customer-intelligence/${r.id}`,
+        { method: 'DELETE', credentials: 'include' },
+      )
+      if (res.status === 401) {
+        toast.error('Session expired')
+        return
+      }
+      const data = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'Could not delete row')
+      toast.success('Deleted')
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete row')
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-col">
       <DtcPageHeader
@@ -1641,16 +1664,28 @@ export function CustomerIntelligenceView({
                           {c.additionalRemarks || '—'}
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => openEditRow(c)}
-                            aria-label="Edit row"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => openEditRow(c)}
+                              aria-label="Edit row"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-destructive hover:text-destructive"
+                              onClick={() => removeRow(c)}
+                              aria-label="Delete row"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     )

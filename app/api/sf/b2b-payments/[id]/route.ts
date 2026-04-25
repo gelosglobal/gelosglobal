@@ -77,19 +77,14 @@ export async function PATCH(
   }
 
   const { db } = getMongo()
-  const effectiveInvoiceAt =
-    parsed.data.dueAt !== undefined
-      ? parsed.data.dueAt
-      : parsed.data.invoiceAt === undefined
+  const updated = await updateSfB2bInvoice(db, new ObjectId(id), {
+    ...parsed.data,
+    invoiceAt:
+      parsed.data.invoiceAt === undefined
         ? undefined
         : parsed.data.invoiceAt === null
           ? null
-          : new Date(parsed.data.invoiceAt)
-  const updated = await updateSfB2bInvoice(db, new ObjectId(id), {
-    ...parsed.data,
-    // Keep invoiceAt and dueAt identical (either field can drive the shared date).
-    invoiceAt: effectiveInvoiceAt,
-    dueAt: parsed.data.dueAt !== undefined ? parsed.data.dueAt : effectiveInvoiceAt,
+          : new Date(parsed.data.invoiceAt),
     paidAt:
       parsed.data.paidAt === undefined
         ? undefined

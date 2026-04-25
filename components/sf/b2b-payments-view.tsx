@@ -265,8 +265,8 @@ export function B2bPaymentsView() {
       toast.error('Enter valid numbers for amount and paid')
       return
     }
-    const dueAt = form.dueDate.trim() ? dateToIsoNoon(form.dueDate) : undefined
     const invoiceAt = form.invoiceDate.trim() ? dateToIsoNoon(form.invoiceDate) : undefined
+    const dueAt = form.dueDate.trim() ? dateToIsoNoon(form.dueDate) : invoiceAt
     const paidAt = form.paidDate.trim() ? dateToIsoNoon(form.paidDate) : undefined
     const items = form.items
       .map((it) => {
@@ -340,8 +340,8 @@ export function B2bPaymentsView() {
       toast.error('Enter valid numbers for amount and paid')
       return
     }
-    const dueAt = editForm.dueDate.trim() ? dateToIsoNoon(editForm.dueDate) : null
     const invoiceAt = editForm.invoiceDate.trim() ? dateToIsoNoon(editForm.invoiceDate) : null
+    const dueAt = editForm.dueDate.trim() ? dateToIsoNoon(editForm.dueDate) : null
     const paidAt = editForm.paidDate.trim() ? dateToIsoNoon(editForm.paidDate) : null
     const items = editForm.items
       .map((it) => {
@@ -648,7 +648,13 @@ export function B2bPaymentsView() {
                           id="b2b-invoice-date"
                           type="date"
                           value={form.invoiceDate}
-                          onChange={(e) => setForm((f) => ({ ...f, invoiceDate: e.target.value }))}
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              invoiceDate: e.target.value,
+                              dueDate: e.target.value,
+                            }))
+                          }
                         />
                       </div>
                       <div className="space-y-2">
@@ -749,16 +755,7 @@ export function B2bPaymentsView() {
                           id="b2b-due"
                           type="date"
                           value={form.dueDate}
-                          onChange={(e) =>
-                            setForm((f) => {
-                              const dueDate = e.target.value
-                              return {
-                                ...f,
-                                dueDate,
-                                invoiceDate: dueDate,
-                              }
-                            })
-                          }
+                          onChange={(e) => setForm((f) => ({ ...f, dueDate: e.target.value }))}
                         />
                       </div>
                       <div className="space-y-2">
@@ -1249,16 +1246,7 @@ export function B2bPaymentsView() {
                     id="edit-b2b-due"
                     type="date"
                     value={editForm.dueDate}
-                    onChange={(e) =>
-                      setEditForm((f) => {
-                        const dueDate = e.target.value
-                        return {
-                          ...f,
-                          dueDate,
-                          invoiceDate: dueDate,
-                        }
-                      })
-                    }
+                    onChange={(e) => setEditForm((f) => ({ ...f, dueDate: e.target.value }))}
                     placeholder="Clear to remove"
                   />
                 </div>

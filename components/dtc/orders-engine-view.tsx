@@ -872,10 +872,6 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
   async function submitEditSheetRow(e: React.FormEvent) {
     e.preventDefault()
     if (!editSheetRow) return
-    if (String(editSheetRow.id ?? '').startsWith('order:')) {
-      toast.error('This row is derived from Orders and cannot be edited here. Import the customer sheet to edit it.')
-      return
-    }
     const name = editSheetForm.customerName.trim()
     if (!name) {
       toast.error('Enter a customer name')
@@ -883,33 +879,37 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
     }
     setEditingSheet(true)
     try {
-      const res = await fetch(`/api/dtc/orders-engine/customers/${editSheetRow.id}`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerName: name,
-          phoneNumber: editSheetForm.phoneNumber.trim() || '',
-          location: editSheetForm.location.trim() || '',
-          totalOrders: editSheetForm.totalOrders.trim() === '' ? 0 : Number(editSheetForm.totalOrders),
-          totalBilledGhs:
-            editSheetForm.totalBilledGhs.trim() === '' ? 0 : Number(editSheetForm.totalBilledGhs),
-          totalCollectedGhs:
-            editSheetForm.totalCollectedGhs.trim() === ''
-              ? 0
-              : Number(editSheetForm.totalCollectedGhs),
-          returned: editSheetForm.returned.trim() === '' ? 0 : Number(editSheetForm.returned),
-          firstOrderDate: editSheetForm.firstOrderDate.trim() || undefined,
-          lastOrderDate: editSheetForm.lastOrderDate.trim() || undefined,
-        }),
-      })
+      const body = {
+        customerName: name,
+        phoneNumber: editSheetForm.phoneNumber.trim() || '',
+        location: editSheetForm.location.trim() || '',
+        totalOrders: editSheetForm.totalOrders.trim() === '' ? 0 : Number(editSheetForm.totalOrders),
+        totalBilledGhs:
+          editSheetForm.totalBilledGhs.trim() === '' ? 0 : Number(editSheetForm.totalBilledGhs),
+        totalCollectedGhs:
+          editSheetForm.totalCollectedGhs.trim() === '' ? 0 : Number(editSheetForm.totalCollectedGhs),
+        returned: editSheetForm.returned.trim() === '' ? 0 : Number(editSheetForm.returned),
+        firstOrderDate: editSheetForm.firstOrderDate.trim() || undefined,
+        lastOrderDate: editSheetForm.lastOrderDate.trim() || undefined,
+      }
+
+      const isDerived = String(editSheetRow.id ?? '').startsWith('order:')
+      const res = await fetch(
+        isDerived ? '/api/dtc/orders-engine/customers' : `/api/dtc/orders-engine/customers/${editSheetRow.id}`,
+        {
+          method: isDerived ? 'POST' : 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      )
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
       }
       const data = (await res.json().catch(() => ({}))) as { error?: string }
       if (!res.ok) throw new Error(data.error ?? 'Could not save row')
-      toast.success('Row updated')
+      toast.success(isDerived ? 'Row created' : 'Row updated')
       setEditSheetOpen(false)
       setEditSheetRow(null)
       await load()
@@ -1998,10 +1998,10 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
         <Card className="p-0">
           <div className="border-b border-border px-4 py-3 sm:px-6">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
-              Customer List
+             
             </h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              
+            
             </p>
             {!loading && effectiveSheetCustomers.length > 0 ? (
               <p className="mt-2 text-xs text-muted-foreground">
@@ -2192,7 +2192,6 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
-                          disabled={String(c.id ?? '').startsWith('order:')}
                           onClick={() => openEditSheetRow(c)}
                           aria-label="Edit customer row"
                         >

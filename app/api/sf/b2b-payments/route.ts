@@ -65,20 +65,6 @@ export async function GET(request: Request) {
   const now = new Date()
   const periodDays = parsePeriodDays(new URL(request.url))
 
-  // Ensure invoiceAt always mirrors dueAt (backfill older/mismatched rows).
-  // Best-effort: if this fails, we still return data (serialization also falls back).
-  try {
-    await db.collection('sf_b2b_invoices').updateMany(
-      {
-        dueAt: { $type: 'date' },
-        $or: [{ invoiceAt: { $exists: false } }, { $expr: { $ne: ['$invoiceAt', '$dueAt'] } }],
-      },
-      [{ $set: { invoiceAt: '$dueAt' } }],
-    )
-  } catch {
-    // ignore
-  }
-
   const rowsAll = await listSfB2bInvoices(db)
   const rows =
     periodDays <= 0

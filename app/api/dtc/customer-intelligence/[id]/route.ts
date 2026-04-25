@@ -137,3 +137,24 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
   return NextResponse.json({ ok: true }, { headers: noStore })
 }
 
+export async function DELETE(_request: Request, ctx: { params: Promise<{ id: string }> }) {
+  const session = await requireSession()
+  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const { id } = await ctx.params
+  let oid: ObjectId
+  try {
+    oid = new ObjectId(id)
+  } catch {
+    return NextResponse.json({ error: 'Invalid id' }, { status: 400 })
+  }
+
+  const { db } = getMongo()
+  const res = await db.collection(DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION).deleteOne({ _id: oid })
+  if (res.deletedCount !== 1) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
+  return NextResponse.json({ ok: true }, { headers: noStore })
+}
+
