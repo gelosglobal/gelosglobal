@@ -11,6 +11,9 @@ import { ObjectId } from 'mongodb'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const noStore = { 'Cache-Control': 'private, no-store, max-age=0' } as const
 
 const itemSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -101,7 +104,7 @@ export async function PATCH(
   return NextResponse.json({
     ok: true,
     invoice: serializeSfB2bInvoice(updated),
-  })
+  }, { headers: noStore })
 }
 
 export async function DELETE(

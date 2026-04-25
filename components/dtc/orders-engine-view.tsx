@@ -747,7 +747,10 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
       return sum + (daysSince >= 60 ? 1 : 0)
     }, 0)
 
-    return { avgTotalBilled, highBilled, atRisk }
+    const atRiskPct =
+      sheetTotals.totalCustomers === 0 ? 0 : (atRisk / sheetTotals.totalCustomers) * 100
+
+    return { avgTotalBilled, highBilled, atRisk, atRiskPct }
   }, [effectiveSheetCustomers, sheetTotals.totalBilledGhs, sheetTotals.totalCustomers])
 
   const ordersForSheetRow = useCallback(
@@ -869,6 +872,10 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
   async function submitEditSheetRow(e: React.FormEvent) {
     e.preventDefault()
     if (!editSheetRow) return
+    if (String(editSheetRow.id ?? '').startsWith('order:')) {
+      toast.error('This row is derived from Orders and cannot be edited here. Import the customer sheet to edit it.')
+      return
+    }
     const name = editSheetForm.customerName.trim()
     if (!name) {
       toast.error('Enter a customer name')
@@ -1095,6 +1102,10 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
   async function handleEditSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!editOrder) return
+    if (!/^[a-f\d]{24}$/i.test(String(editOrder.id ?? ''))) {
+      toast.error('Invalid order id. Refresh the page and try again.')
+      return
+    }
 
     if (!editForm.customer.trim()) {
       toast.error('Enter a customer')
@@ -1919,9 +1930,11 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                 At risk
               </p>
               <p className="mt-2 text-2xl font-bold">
-                {loading ? '—' : sheetKpis.atRisk}
+                {loading ? '—' : `${(Math.round(sheetKpis.atRiskPct * 10) / 10).toFixed(1)}%`}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">No order in 60+ days</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {loading ? '—' : `${sheetKpis.atRisk.toLocaleString()} customers`} · No order in 60+ days
+              </p>
             </Card>
           </div>
         ) : (
@@ -1985,10 +1998,10 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
         <Card className="p-0">
           <div className="border-b border-border px-4 py-3 sm:px-6">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
-              Customer sheet (imported)
+              Customer List
             </h2>
             <p className="mt-1 text-xs text-muted-foreground">
-              This table stays empty until you import an Excel file with the headers above. New orders you create are merged into this list by phone (name fallback).
+              
             </p>
             {!loading && effectiveSheetCustomers.length > 0 ? (
               <p className="mt-2 text-xs text-muted-foreground">
@@ -2179,6 +2192,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
+                          disabled={String(c.id ?? '').startsWith('order:')}
                           onClick={() => openEditSheetRow(c)}
                           aria-label="Edit customer row"
                         >

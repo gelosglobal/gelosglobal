@@ -448,6 +448,12 @@ export function CustomerIntelligenceView({
             orderedAt: o.orderedAt ?? null,
             orderNumber: o.orderNumber ?? '',
             itemsOrdered: toItemsOrdered(o.items),
+            items: (o.items ?? []).map((it) => ({
+              ...(it.sku ? { sku: String(it.sku) } : {}),
+              name: String(it.name ?? ''),
+              qty: Number(it.qty ?? 0) || 0,
+              unitPrice: Number((it as any).unitPrice ?? 0) || 0,
+            })),
             customerName: o.customer ?? '',
             phoneNumber: String(o.customerPhone ?? ''),
             location: String(o.customerLocation ?? ''),
@@ -639,7 +645,9 @@ export function CustomerIntelligenceView({
 
     const avgTotalBilled =
       displayCustomers.length === 0 ? 0 : totalBilled / displayCustomers.length
-    return { avgTotalBilled, highBilled, atRisk }
+    const atRiskPct =
+      displayCustomers.length === 0 ? 0 : (atRisk / displayCustomers.length) * 100
+    return { avgTotalBilled, highBilled, atRisk, atRiskPct }
   }, [displayCustomers])
 
   const ordersEngineCards = useMemo(() => {
@@ -960,51 +968,73 @@ export function CustomerIntelligenceView({
     setEditingRow(true)
     try {
       const computedItemsOrdered = draftItemsToItemsOrdered(editForm.items)
-      const res = await fetch(`/api/dtc/customer-intelligence/${editRow.id}`, {
-        method: 'PATCH',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date: editForm.date.trim() || undefined,
-          orderNumber: editForm.orderNumber.trim() || undefined,
-          itemsOrdered: (editForm.itemsOrdered.trim() || computedItemsOrdered || undefined),
-          items: editForm.items
-            .map((it) => ({
-              ...(it.sku.trim() ? { sku: it.sku.trim() } : {}),
-              name: it.name.trim(),
-              qty: Number.parseInt(it.qty, 10),
-              unitPrice: Number.parseFloat(it.unitPrice),
-            }))
-            .filter(
-              (it) =>
-                it.name &&
-                Number.isFinite(it.qty) &&
-                it.qty > 0 &&
-                Number.isFinite(it.unitPrice) &&
-                it.unitPrice >= 0,
-            ),
-          customerName: name,
-          phoneNumber: editForm.phoneNumber.trim() || undefined,
-          location: editForm.location.trim() || undefined,
-          riderAssigned: editForm.riderAssigned.trim() || undefined,
-          amountToCollectGhs:
-            editForm.amountToCollectGhs.trim() === '' ? undefined : Number(editForm.amountToCollectGhs),
-          cashCollectedGhs:
-            editForm.cashCollectedGhs.trim() === '' ? undefined : Number(editForm.cashCollectedGhs),
-          momoCollectedGhs:
-            editForm.momoCollectedGhs.trim() === '' ? undefined : Number(editForm.momoCollectedGhs),
-          paystackCollectedGhs:
-            editForm.paystackCollectedGhs.trim() === ''
-              ? undefined
-              : Number(editForm.paystackCollectedGhs),
-          totalCollectedGhs:
-            editForm.totalCollectedGhs.trim() === '' ? undefined : Number(editForm.totalCollectedGhs),
-          paymentMethod: editForm.paymentMethod.trim() || undefined,
-          deliveryStatus: editForm.deliveryStatus.trim() || undefined,
-          remarks: editForm.remarks.trim() || undefined,
-          additionalRemarks: editForm.additionalRemarks.trim() || undefined,
-        }),
-      })
+      const items = editForm.items
+        .map((it) => ({
+          ...(it.sku.trim() ? { sku: it.sku.trim() } : {}),
+          name: it.name.trim(),
+          qty: Number.parseInt(it.qty, 10),
+          unitPrice: Number.parseFloat(it.unitPrice),
+        }))
+        .filter(
+          (it) =>
+            it.name &&
+            Number.isFinite(it.qty) &&
+            it.qty > 0 &&
+            Number.isFinite(it.unitPrice) &&
+            it.unitPrice >= 0,
+        )
+
+      const isLegacyOrder = editRow.id.startsWith('order:')
+      const legacyId = isLegacyOrder ? editRow.id.slice('order:'.length) : ''
+
+      const res = isLegacyOrder
+        ? await fetch(`/api/dtc/orders/${legacyId}`, {
+            method: 'PATCH',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              customer: name,
+              customerPhone: editForm.phoneNumber.trim() || undefined,
+              customerLocation: editForm.location.trim() || undefined,
+              paymentMethod: (editForm.paymentMethod.trim() || undefined) as any,
+              orderedAt: editForm.date.trim() ? new Date(`${editForm.date.trim()}T12:00:00.000Z`).toISOString() : undefined,
+              items,
+              status: (['fulfilled', 'processing', 'pending_payment'] as const).includes(editForm.deliveryStatus.trim() as any)
+                ? (editForm.deliveryStatus.trim() as any)
+                : undefined,
+            }),
+          })
+        : await fetch(`/api/dtc/customer-intelligence/${editRow.id}`, {
+            method: 'PATCH',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              date: editForm.date.trim() || undefined,
+              orderNumber: editForm.orderNumber.trim() || undefined,
+              itemsOrdered: (editForm.itemsOrdered.trim() || computedItemsOrdered || undefined),
+              items,
+              customerName: name,
+              phoneNumber: editForm.phoneNumber.trim() || undefined,
+              location: editForm.location.trim() || undefined,
+              riderAssigned: editForm.riderAssigned.trim() || undefined,
+              amountToCollectGhs:
+                editForm.amountToCollectGhs.trim() === '' ? undefined : Number(editForm.amountToCollectGhs),
+              cashCollectedGhs:
+                editForm.cashCollectedGhs.trim() === '' ? undefined : Number(editForm.cashCollectedGhs),
+              momoCollectedGhs:
+                editForm.momoCollectedGhs.trim() === '' ? undefined : Number(editForm.momoCollectedGhs),
+              paystackCollectedGhs:
+                editForm.paystackCollectedGhs.trim() === ''
+                  ? undefined
+                  : Number(editForm.paystackCollectedGhs),
+              totalCollectedGhs:
+                editForm.totalCollectedGhs.trim() === '' ? undefined : Number(editForm.totalCollectedGhs),
+              paymentMethod: editForm.paymentMethod.trim() || undefined,
+              deliveryStatus: editForm.deliveryStatus.trim() || undefined,
+              remarks: editForm.remarks.trim() || undefined,
+              additionalRemarks: editForm.additionalRemarks.trim() || undefined,
+            }),
+          })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
         return
@@ -1387,9 +1417,11 @@ export function CustomerIntelligenceView({
                 At risk
               </p>
               <p className="mt-2 text-2xl font-bold">
-                {loading ? '—' : customerIntelCards.atRisk}
+                {loading ? '—' : `${(Math.round(customerIntelCards.atRiskPct * 10) / 10).toFixed(1)}%`}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">No order in 60+ days</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {loading ? '—' : `${customerIntelCards.atRisk.toLocaleString()} customers`} · No order in 60+ days
+              </p>
             </Card>
           </div>
         )}

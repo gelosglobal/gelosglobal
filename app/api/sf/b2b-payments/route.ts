@@ -12,6 +12,9 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const noStore = { 'Cache-Control': 'private, no-store, max-age=0' } as const
 
 const itemSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -89,10 +92,13 @@ export async function GET(request: Request) {
         })
   const kpis = computeInvoiceKpis(rows, now)
 
-  return NextResponse.json({
-    invoices: rows.map((r) => serializeSfB2bInvoice(r, now)),
-    kpis,
-  })
+  return NextResponse.json(
+    {
+      invoices: rows.map((r) => serializeSfB2bInvoice(r, now)),
+      kpis,
+    },
+    { headers: noStore },
+  )
 }
 
 export async function POST(request: Request) {
@@ -137,6 +143,6 @@ export async function POST(request: Request) {
 
   return NextResponse.json(
     { ok: true, invoice: serializeSfB2bInvoice(doc) },
-    { status: 201 },
+    { status: 201, headers: noStore },
   )
 }

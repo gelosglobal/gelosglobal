@@ -147,6 +147,7 @@ export function B2bPaymentsView() {
       const q = `?periodDays=${encodeURIComponent(String(periodDays))}`
       const res = await fetch(`/api/sf/b2b-payments${q}`, {
         credentials: 'include',
+        cache: 'no-store',
       })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
@@ -359,6 +360,7 @@ export function B2bPaymentsView() {
       const res = await fetch(`/api/sf/b2b-payments/${editId}`, {
         method: 'PATCH',
         credentials: 'include',
+        cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           outletName,
@@ -397,6 +399,7 @@ export function B2bPaymentsView() {
       const res = await fetch(`/api/sf/b2b-payments/${id}`, {
         method: 'DELETE',
         credentials: 'include',
+        cache: 'no-store',
       })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
