@@ -86,6 +86,17 @@ export function ProductPerformanceView() {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
 
+  const unitHighlights = useMemo(() => {
+    const sold = rows.filter((r) => (Number(r.units7d ?? 0) || 0) > 0)
+    let top: ProductRow | null = null
+    let bottom: ProductRow | null = null
+    for (const r of sold) {
+      if (!top || r.units7d > top.units7d) top = r
+      if (!bottom || r.units7d < bottom.units7d) bottom = r
+    }
+    return { topUnits: top, lowestUnits: bottom }
+  }, [rows])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -246,7 +257,7 @@ export function ProductPerformanceView() {
           ) : null}
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
           <Card className="p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">
               Top SKU revenue (7d)
@@ -305,6 +316,60 @@ export function ProductPerformanceView() {
               <p className="mt-4 text-sm text-muted-foreground">
                 WoW needs sales in both windows. New SKUs show as &quot;New&quot; in the table.
               </p>
+            )}
+          </Card>
+          <Card className="p-5">
+            <p className="text-xs font-medium uppercase text-muted-foreground">
+              Best selling (units)
+            </p>
+            {loading ? (
+              <div className="mt-6 flex justify-center py-4">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : unitHighlights.topUnits ? (
+              <>
+                <p className="mt-2 text-2xl font-bold leading-tight sm:text-3xl">
+                  {unitHighlights.topUnits.name}
+                </p>
+                {unitHighlights.topUnits.sku ? (
+                  <p className="mt-1 font-mono text-xs text-muted-foreground">
+                    {unitHighlights.topUnits.sku}
+                  </p>
+                ) : null}
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {unitHighlights.topUnits.units7d.toLocaleString()} units ·{' '}
+                  {formatGhs(unitHighlights.topUnits.revenue7d)}
+                </p>
+              </>
+            ) : (
+              <p className="mt-4 text-sm text-muted-foreground">No units sold in this range yet.</p>
+            )}
+          </Card>
+          <Card className="p-5">
+            <p className="text-xs font-medium uppercase text-muted-foreground">
+              Lowest selling (units)
+            </p>
+            {loading ? (
+              <div className="mt-6 flex justify-center py-4">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : unitHighlights.lowestUnits ? (
+              <>
+                <p className="mt-2 text-2xl font-bold leading-tight sm:text-3xl">
+                  {unitHighlights.lowestUnits.name}
+                </p>
+                {unitHighlights.lowestUnits.sku ? (
+                  <p className="mt-1 font-mono text-xs text-muted-foreground">
+                    {unitHighlights.lowestUnits.sku}
+                  </p>
+                ) : null}
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {unitHighlights.lowestUnits.units7d.toLocaleString()} units ·{' '}
+                  {formatGhs(unitHighlights.lowestUnits.revenue7d)}
+                </p>
+              </>
+            ) : (
+              <p className="mt-4 text-sm text-muted-foreground">No units sold in this range yet.</p>
             )}
           </Card>
         </div>

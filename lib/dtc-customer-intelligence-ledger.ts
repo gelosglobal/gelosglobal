@@ -3,11 +3,19 @@ import { ObjectId } from 'mongodb'
 
 export const DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION = 'dtc_customer_intelligence_ledger'
 
+export type DtcCustomerIntelLedgerItem = {
+  sku?: string
+  name: string
+  qty: number
+  unitPrice: number
+}
+
 export type DtcCustomerIntelLedgerDoc = {
   _id: ObjectId
   orderedAt?: Date
   orderNumber?: string
   itemsOrdered?: string
+  items?: DtcCustomerIntelLedgerItem[]
   customerName: string
   phoneNumber?: string
   location?: string
@@ -31,6 +39,7 @@ export type DtcCustomerIntelLedgerJson = {
   orderedAt: string | null
   orderNumber: string
   itemsOrdered: string
+  items: DtcCustomerIntelLedgerItem[]
   customerName: string
   phoneNumber: string
   location: string
@@ -63,6 +72,16 @@ export function serializeDtcCustomerIntelLedgerRow(
     orderedAt: orderedAt ? orderedAt.toISOString() : null,
     orderNumber: doc.orderNumber ?? '',
     itemsOrdered: doc.itemsOrdered ?? '',
+    items: Array.isArray(doc.items)
+      ? doc.items
+          .map((it) => ({
+            ...(it.sku != null && String(it.sku).trim() ? { sku: String(it.sku).trim() } : {}),
+            name: String((it as any).name ?? '').trim(),
+            qty: Number((it as any).qty ?? 0) || 0,
+            unitPrice: Number((it as any).unitPrice ?? 0) || 0,
+          }))
+          .filter((it) => it.name && Number.isFinite(it.qty) && it.qty > 0)
+      : [],
     customerName: doc.customerName,
     phoneNumber: doc.phoneNumber ?? '',
     location: doc.location ?? '',

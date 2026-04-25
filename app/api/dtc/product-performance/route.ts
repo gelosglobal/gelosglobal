@@ -77,7 +77,7 @@ export async function GET(request: Request) {
   } else {
     // default '7d'
     currentStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-    label = 'Last 7 days vs prior 7 days'
+    label = ''
   }
 
   const { db } = getMongo()

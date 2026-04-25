@@ -53,6 +53,16 @@ const createLedgerRowSchema = z.object({
   date: z.string().optional(),
   orderNumber: z.string().optional(),
   itemsOrdered: z.string().optional(),
+  items: z
+    .array(
+      z.object({
+        sku: z.string().trim().min(1).max(64).optional(),
+        name: z.string().trim().min(1).max(200),
+        qty: z.coerce.number().int().positive().max(1_000_000),
+        unitPrice: z.coerce.number().min(0).max(10_000_000),
+      }),
+    )
+    .optional(),
   customerName: z.string().min(1).max(200),
   phoneNumber: z.string().optional(),
   location: z.string().optional(),
@@ -94,10 +104,26 @@ export async function POST(request: Request) {
   const { db } = getMongo()
   const now = new Date()
   const orderedAt = ymdToNoonUtc(parsed.data.date) ?? null
+  const items = Array.isArray(parsed.data.items)
+    ? parsed.data.items
+        .map((it) => ({
+          ...(it.sku ? { sku: it.sku.trim() } : {}),
+          name: it.name.trim(),
+          qty: Number(it.qty),
+          unitPrice: Number(it.unitPrice),
+        }))
+        .filter((it) => it.name && Number.isFinite(it.qty) && it.qty > 0)
+    : []
+  const computedItemsOrdered = items
+    .map((it) => (it.qty > 1 ? `${it.name} x${it.qty}` : it.name))
+    .filter(Boolean)
+    .join(', ')
   const doc = {
-    orderedAt: orderedAt ?? undefined,
+    // Orders Engine creates operational orders; ensure they land in date-range reporting even if date is left blank.
+    orderedAt: orderedAt ?? now,
     orderNumber: parsed.data.orderNumber?.trim() || undefined,
-    itemsOrdered: parsed.data.itemsOrdered?.trim() || undefined,
+    itemsOrdered: parsed.data.itemsOrdered?.trim() || computedItemsOrdered || undefined,
+    items: items.length ? items : undefined,
     customerName: parsed.data.customerName.trim(),
     phoneNumber: phoneKey(parsed.data.phoneNumber) || undefined,
     location: parsed.data.location?.trim() || undefined,

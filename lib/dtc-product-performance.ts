@@ -1,6 +1,7 @@
 import type { Db } from 'mongodb'
 import { subDays } from 'date-fns'
 import { DTC_ORDERS_COLLECTION, type DtcOrderDoc, type DtcOrderItem } from '@/lib/dtc-orders'
+import { DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION } from '@/lib/dtc-customer-intelligence-ledger'
 
 export type ProductPerformanceRow = {
   key: string
@@ -30,10 +31,26 @@ export type ProductPerformanceHighlights = {
   } | null
 }
 
-function itemKey(item: DtcOrderItem): string {
+function itemKey(item: Pick<DtcOrderItem, 'sku' | 'name'>): string {
   const sku = (item.sku ?? '').trim().toLowerCase()
   const name = item.name.trim().toLowerCase()
   return `${sku}::${name}`
+}
+
+function parseItemsOrderedFallback(s: string): Array<{ name: string; qty: number }> {
+  const raw = String(s ?? '').trim()
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const m = part.match(/^(.*?)(?:\s*x\s*(\d+))?$/i)
+      const name = String(m?.[1] ?? part).trim()
+      const qty = Math.max(1, Number.parseInt(String(m?.[2] ?? '1'), 10) || 1)
+      return { name, qty }
+    })
+    .filter((it) => it.name)
 }
 
 /**
@@ -57,9 +74,22 @@ export async function computeProductPerformance(
   const orders = (await db
     .collection(DTC_ORDERS_COLLECTION)
     .find({ orderedAt: { $gte: prevStart, $lt: currentEnd } })
-    .project({ orderedAt: 1, items: 1 })
+    .project({ orderedAt: 1, items: 1, orderNumber: 1 })
     .limit(5000)
-    .toArray()) as Pick<DtcOrderDoc, 'orderedAt' | 'items'>[]
+    .toArray()) as Array<Pick<DtcOrderDoc, 'orderedAt' | 'items'> & { orderNumber?: string }>
+
+  const ledgerOrders = (await db
+    .collection(DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION)
+    .find({ orderedAt: { $gte: prevStart, $lt: currentEnd } })
+    .project({ orderedAt: 1, orderNumber: 1, items: 1, itemsOrdered: 1, amountToCollectGhs: 1 })
+    .limit(20_000)
+    .toArray()) as Array<{
+    orderedAt?: Date
+    orderNumber?: string
+    items?: Array<{ sku?: string; name: string; qty: number; unitPrice: number }>
+    itemsOrdered?: string
+    amountToCollectGhs?: number
+  }>
 
   type Bucket = { units: number; revenue: number }
   const agg = new Map<
@@ -67,7 +97,55 @@ export async function computeProductPerformance(
     { displayName: string; sku: string | null; current: Bucket; previous: Bucket }
   >()
 
+  const seenOrderNumbers = new Set<string>()
+  for (const order of ledgerOrders) {
+    const on = String(order.orderNumber ?? '').trim()
+    if (on) seenOrderNumbers.add(on)
+    const orderedAt = order.orderedAt instanceof Date ? order.orderedAt : order.orderedAt ? new Date(String(order.orderedAt)) : null
+    if (!orderedAt || Number.isNaN(orderedAt.getTime())) continue
+    const isCurrent = orderedAt >= currentStart && orderedAt < currentEnd
+    const bucketKey: 'current' | 'previous' = isCurrent ? 'current' : 'previous'
+    const structuredItems = Array.isArray(order.items) && order.items.length ? order.items : null
+    const fallbackItems = !structuredItems ? parseItemsOrderedFallback(order.itemsOrdered ?? '') : null
+    const fallbackQtySum = (fallbackItems ?? []).reduce((s, it) => s + (Number(it.qty ?? 0) || 0), 0)
+    const estUnitPrice =
+      fallbackItems && fallbackQtySum > 0
+        ? (Number(order.amountToCollectGhs ?? 0) || 0) / fallbackQtySum
+        : 0
+
+    const itemsToUse: Array<{ sku?: string; name: string; qty: number; unitPrice: number }> =
+      structuredItems ??
+      (fallbackItems ?? []).map((it) => ({
+        name: it.name,
+        qty: it.qty,
+        unitPrice: estUnitPrice,
+      }))
+
+    for (const item of itemsToUse) {
+      const key = itemKey({ sku: item.sku, name: item.name })
+      let row = agg.get(key)
+      if (!row) {
+        row = {
+          displayName: String(item.name ?? '').trim(),
+          sku: item.sku?.trim() ? item.sku.trim() : null,
+          current: { units: 0, revenue: 0 },
+          previous: { units: 0, revenue: 0 },
+        }
+        agg.set(key, row)
+      }
+      const qty = Number(item.qty ?? 0) || 0
+      const unitPrice = Number(item.unitPrice ?? 0) || 0
+      if (qty <= 0) continue
+      const line = qty * unitPrice
+      const b = row[bucketKey]
+      b.units += qty
+      b.revenue += line
+    }
+  }
+
   for (const order of orders) {
+    const on = String((order as any).orderNumber ?? '').trim()
+    if (on && seenOrderNumbers.has(on)) continue
     const isCurrent = order.orderedAt >= currentStart && order.orderedAt < currentEnd
     const bucketKey: 'current' | 'previous' = isCurrent ? 'current' : 'previous'
     for (const item of order.items ?? []) {

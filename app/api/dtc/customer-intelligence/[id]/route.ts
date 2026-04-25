@@ -28,6 +28,16 @@ const patchSchema = z.object({
     .transform((v) => (v && v.trim() ? v.trim() : undefined)),
   orderNumber: z.string().trim().max(64).optional(),
   itemsOrdered: z.string().trim().max(1000).optional(),
+  items: z
+    .array(
+      z.object({
+        sku: z.string().trim().min(1).max(64).optional(),
+        name: z.string().trim().min(1).max(200),
+        qty: z.coerce.number().int().positive().max(1_000_000),
+        unitPrice: z.coerce.number().min(0).max(10_000_000),
+      }),
+    )
+    .optional(),
   customerName: z.string().trim().min(1).max(200).optional(),
   phoneNumber: z.string().trim().max(40).optional(),
   location: z.string().trim().max(200).optional(),
@@ -81,6 +91,25 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
   const $set: Record<string, unknown> = { updatedAt: new Date() }
   if (d.date !== undefined) $set.orderedAt = parseYmdToNoonUtc(d.date)
   if (d.orderNumber !== undefined) $set.orderNumber = d.orderNumber
+  if (d.items !== undefined) {
+    const items = Array.isArray(d.items)
+      ? d.items
+          .map((it) => ({
+            ...(it.sku ? { sku: it.sku.trim() } : {}),
+            name: it.name.trim(),
+            qty: Number(it.qty),
+            unitPrice: Number(it.unitPrice),
+          }))
+          .filter((it) => it.name && Number.isFinite(it.qty) && it.qty > 0)
+      : []
+    $set.items = items.length ? items : undefined
+    const computedItemsOrdered = items
+      .map((it) => (it.qty > 1 ? `${it.name} x${it.qty}` : it.name))
+      .filter(Boolean)
+      .join(', ')
+    // If caller didn't supply a separate itemsOrdered string, keep it in sync.
+    if (d.itemsOrdered === undefined) $set.itemsOrdered = computedItemsOrdered || undefined
+  }
   if (d.itemsOrdered !== undefined) $set.itemsOrdered = d.itemsOrdered
   if (d.customerName !== undefined) $set.customerName = d.customerName
   if (d.phoneNumber !== undefined) $set.phoneNumber = d.phoneNumber

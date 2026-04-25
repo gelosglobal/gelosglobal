@@ -50,6 +50,7 @@ export type CustomerIntelLedgerRow = {
   orderedAt: string | null
   orderNumber: string
   itemsOrdered: string
+  items?: Array<{ sku?: string; name: string; qty: number; unitPrice: number }>
   customerName: string
   phoneNumber: string
   location: string
@@ -137,6 +138,14 @@ function fmtTableDate(s: string): string {
   } catch {
     return s
   }
+}
+
+function todayLocalYmd(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
 export function CustomerIntelligenceView({
@@ -231,7 +240,7 @@ export function CustomerIntelligenceView({
   })
 
   const [newOrderForm, setNewOrderForm] = useState({
-    date: '',
+    date: todayLocalYmd(),
     orderNumber: '',
     itemsOrdered: '',
     customerName: '',
@@ -310,6 +319,21 @@ export function CustomerIntelligenceView({
             newOrderForm.deliveryStatus.trim() === '' || newOrderForm.deliveryStatus === DELIVERY_STATUS_NONE
               ? undefined
               : newOrderForm.deliveryStatus.trim(),
+          items: newOrderForm.items
+            .map((it) => ({
+              ...(it.sku.trim() ? { sku: it.sku.trim() } : {}),
+              name: it.name.trim(),
+              qty: Number.parseInt(it.qty, 10),
+              unitPrice: Number.parseFloat(it.unitPrice),
+            }))
+            .filter(
+              (it) =>
+                it.name &&
+                Number.isFinite(it.qty) &&
+                it.qty > 0 &&
+                Number.isFinite(it.unitPrice) &&
+                it.unitPrice >= 0,
+            ),
           remarks: newOrderForm.remarks.trim() || undefined,
           additionalRemarks: newOrderForm.additionalRemarks.trim() || undefined,
         }),
@@ -323,7 +347,7 @@ export function CustomerIntelligenceView({
       toast.success('Order added')
       setNewOrderOpen(false)
       setNewOrderForm({
-        date: '',
+        date: todayLocalYmd(),
         orderNumber: '',
         itemsOrdered: '',
         customerName: '',
@@ -803,7 +827,15 @@ export function CustomerIntelligenceView({
       deliveryStatus: r.deliveryStatus ?? '',
       remarks: r.remarks ?? '',
       additionalRemarks: r.additionalRemarks ?? '',
-      items: parseItemsOrderedToDraftItems(r.itemsOrdered ?? ''),
+      items:
+        r.items && Array.isArray(r.items) && r.items.length
+          ? r.items.map((it) => ({
+              sku: String(it.sku ?? ''),
+              name: String(it.name ?? ''),
+              qty: String(it.qty ?? 1),
+              unitPrice: String(it.unitPrice ?? ''),
+            }))
+          : parseItemsOrderedToDraftItems(r.itemsOrdered ?? ''),
     })
     setEditOpen(true)
   }
@@ -827,6 +859,21 @@ export function CustomerIntelligenceView({
           date: editForm.date.trim() || undefined,
           orderNumber: editForm.orderNumber.trim() || undefined,
           itemsOrdered: (editForm.itemsOrdered.trim() || computedItemsOrdered || undefined),
+          items: editForm.items
+            .map((it) => ({
+              ...(it.sku.trim() ? { sku: it.sku.trim() } : {}),
+              name: it.name.trim(),
+              qty: Number.parseInt(it.qty, 10),
+              unitPrice: Number.parseFloat(it.unitPrice),
+            }))
+            .filter(
+              (it) =>
+                it.name &&
+                Number.isFinite(it.qty) &&
+                it.qty > 0 &&
+                Number.isFinite(it.unitPrice) &&
+                it.unitPrice >= 0,
+            ),
           customerName: name,
           phoneNumber: editForm.phoneNumber.trim() || undefined,
           location: editForm.location.trim() || undefined,
