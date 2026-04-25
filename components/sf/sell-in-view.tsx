@@ -144,12 +144,14 @@ export function SellInView() {
     let totalSellIn = 0
     let totalQty = 0
     let totalValue = 0
+    let totalExpectedIncome = 0
     for (const r of filtered) {
       totalSellIn += r.sellInGhs
       totalQty += r.quantity
       totalValue += r.sellInGhs * r.quantity
+      totalExpectedIncome += (Number(r.costPriceGhs ?? 0) || 0) * r.quantity
     }
-    return { totalSellIn, totalQty, totalValue, lines: filtered.length }
+    return { totalSellIn, totalQty, totalValue, totalExpectedIncome, lines: filtered.length }
   }, [filtered])
 
   function openEdit(row: SellInRow) {
@@ -530,7 +532,7 @@ export function SellInView() {
       />
 
       <div className="flex-1 space-y-6 p-4 sm:p-6">
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-4">
           <Card className="p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">Lines</p>
             <p className="mt-2 text-3xl font-bold tabular-nums">
@@ -543,6 +545,15 @@ export function SellInView() {
             <p className="mt-2 text-3xl font-bold tabular-nums">
               {loading ? '—' : totals.totalQty.toLocaleString()}
             </p>
+          </Card>
+          <Card className="border-l-4 border-l-sky-600 p-5">
+            <p className="text-xs font-medium uppercase text-muted-foreground">
+              Total expected income
+            </p>
+            <p className="mt-2 text-3xl font-bold tabular-nums">
+              {loading ? '—' : formatGhs(totals.totalExpectedIncome)}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">Cost price × quantity</p>
           </Card>
           <Card className="border-l-4 border-l-emerald-600 p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">Total value</p>
