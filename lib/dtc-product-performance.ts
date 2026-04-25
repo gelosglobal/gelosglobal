@@ -71,26 +71,6 @@ export async function computeProductPerformance(
   const prevEnd = currentStart
   const prevStart = new Date(prevEnd.getTime() - windowMs)
 
-  const orders = (await db
-    .collection(DTC_ORDERS_COLLECTION)
-    .find({ orderedAt: { $gte: prevStart, $lt: currentEnd } })
-    .project({ orderedAt: 1, items: 1, orderNumber: 1 })
-    .limit(5000)
-    .toArray()) as Array<Pick<DtcOrderDoc, 'orderedAt' | 'items'> & { orderNumber?: string }>
-
-  const ledgerOrders = (await db
-    .collection(DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION)
-    .find({ orderedAt: { $gte: prevStart, $lt: currentEnd } })
-    .project({ orderedAt: 1, orderNumber: 1, items: 1, itemsOrdered: 1, amountToCollectGhs: 1 })
-    .limit(20_000)
-    .toArray()) as Array<{
-    orderedAt?: Date
-    orderNumber?: string
-    items?: Array<{ sku?: string; name: string; qty: number; unitPrice: number }>
-    itemsOrdered?: string
-    amountToCollectGhs?: number
-  }>
-
   type Bucket = { units: number; revenue: number }
   const agg = new Map<
     string,
@@ -98,16 +78,42 @@ export async function computeProductPerformance(
   >()
 
   const seenOrderNumbers = new Set<string>()
-  for (const order of ledgerOrders) {
+  // IMPORTANT: Do not cap results with `.limit()` — users can have thousands of orders.
+  // Stream with cursors so rollups are accurate for the full time window.
+
+  const ledgerCursor = db
+    .collection(DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION)
+    .find({ orderedAt: { $gte: prevStart, $lt: currentEnd } })
+    .project({ orderedAt: 1, orderNumber: 1, items: 1, itemsOrdered: 1, amountToCollectGhs: 1 })
+    .batchSize(1000)
+
+  for await (const order of ledgerCursor as AsyncIterable<{
+    orderedAt?: Date
+    orderNumber?: string
+    items?: Array<{ sku?: string; name: string; qty: number; unitPrice: number }>
+    itemsOrdered?: string
+    amountToCollectGhs?: number
+  }>) {
     const on = String(order.orderNumber ?? '').trim()
     if (on) seenOrderNumbers.add(on)
-    const orderedAt = order.orderedAt instanceof Date ? order.orderedAt : order.orderedAt ? new Date(String(order.orderedAt)) : null
+    const orderedAt =
+      order.orderedAt instanceof Date
+        ? order.orderedAt
+        : order.orderedAt
+          ? new Date(String(order.orderedAt))
+          : null
     if (!orderedAt || Number.isNaN(orderedAt.getTime())) continue
     const isCurrent = orderedAt >= currentStart && orderedAt < currentEnd
     const bucketKey: 'current' | 'previous' = isCurrent ? 'current' : 'previous'
+
     const structuredItems = Array.isArray(order.items) && order.items.length ? order.items : null
-    const fallbackItems = !structuredItems ? parseItemsOrderedFallback(order.itemsOrdered ?? '') : null
-    const fallbackQtySum = (fallbackItems ?? []).reduce((s, it) => s + (Number(it.qty ?? 0) || 0), 0)
+    const fallbackItems = !structuredItems
+      ? parseItemsOrderedFallback(order.itemsOrdered ?? '')
+      : null
+    const fallbackQtySum = (fallbackItems ?? []).reduce(
+      (s, it) => s + (Number(it.qty ?? 0) || 0),
+      0,
+    )
     const estUnitPrice =
       fallbackItems && fallbackQtySum > 0
         ? (Number(order.amountToCollectGhs ?? 0) || 0) / fallbackQtySum
@@ -122,11 +128,13 @@ export async function computeProductPerformance(
       }))
 
     for (const item of itemsToUse) {
-      const key = itemKey({ sku: item.sku, name: item.name })
+      const name = String(item.name ?? '').trim()
+      if (!name) continue
+      const key = itemKey({ sku: item.sku, name })
       let row = agg.get(key)
       if (!row) {
         row = {
-          displayName: String(item.name ?? '').trim(),
+          displayName: name,
           sku: item.sku?.trim() ? item.sku.trim() : null,
           current: { units: 0, revenue: 0 },
           previous: { units: 0, revenue: 0 },
@@ -143,17 +151,27 @@ export async function computeProductPerformance(
     }
   }
 
-  for (const order of orders) {
+  const ordersCursor = db
+    .collection(DTC_ORDERS_COLLECTION)
+    .find({ orderedAt: { $gte: prevStart, $lt: currentEnd } })
+    .project({ orderedAt: 1, items: 1, orderNumber: 1 })
+    .batchSize(1000)
+
+  for await (const order of ordersCursor as AsyncIterable<
+    Pick<DtcOrderDoc, 'orderedAt' | 'items'> & { orderNumber?: string }
+  >) {
     const on = String((order as any).orderNumber ?? '').trim()
     if (on && seenOrderNumbers.has(on)) continue
     const isCurrent = order.orderedAt >= currentStart && order.orderedAt < currentEnd
     const bucketKey: 'current' | 'previous' = isCurrent ? 'current' : 'previous'
     for (const item of order.items ?? []) {
+      const name = item.name.trim()
+      if (!name) continue
       const key = itemKey(item)
       let row = agg.get(key)
       if (!row) {
         row = {
-          displayName: item.name.trim(),
+          displayName: name,
           sku: item.sku?.trim() ? item.sku.trim() : null,
           current: { units: 0, revenue: 0 },
           previous: { units: 0, revenue: 0 },

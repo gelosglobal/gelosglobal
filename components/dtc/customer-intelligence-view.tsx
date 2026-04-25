@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { format, parseISO } from 'date-fns'
+import { format, parseISO, subDays, subMonths } from 'date-fns'
 import { Download, Loader2, Pencil, Plus, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import * as XLSX from 'xlsx'
@@ -148,6 +148,33 @@ function todayLocalYmd(): string {
   return `${y}-${m}-${day}`
 }
 
+type RangePreset = 'all' | '7d' | '1m' | '3m' | '6m' | '12m' | 'custom'
+
+function computeRangeTs(preset: RangePreset, fromYmd: string, toYmd: string) {
+  const now = new Date()
+  if (preset === 'all') return { fromTs: null as number | null, toTs: null as number | null }
+  if (preset === 'custom') {
+    const fromTs = fromYmd ? new Date(`${fromYmd}T00:00:00.000Z`).getTime() : null
+    const toTs = toYmd ? new Date(`${toYmd}T23:59:59.999Z`).getTime() : null
+    return {
+      fromTs: Number.isFinite(fromTs as number) ? (fromTs as number) : null,
+      toTs: Number.isFinite(toTs as number) ? (toTs as number) : null,
+    }
+  }
+  const end = now.getTime()
+  const startDate =
+    preset === '7d'
+      ? subDays(now, 7)
+      : preset === '1m'
+        ? subMonths(now, 1)
+        : preset === '3m'
+          ? subMonths(now, 3)
+          : preset === '6m'
+            ? subMonths(now, 6)
+            : subMonths(now, 12)
+  return { fromTs: startDate.getTime(), toTs: end }
+}
+
 export function CustomerIntelligenceView({
   mode = 'customer-intelligence',
 }: {
@@ -218,8 +245,9 @@ export function CustomerIntelligenceView({
   const [newOrderOpen, setNewOrderOpen] = useState(false)
   const [newOrderSubmitting, setNewOrderSubmitting] = useState(false)
   const [sortBy, setSortBy] = useState<CustomerSortKey>('date')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [rangePreset, setRangePreset] = useState<RangePreset>('all')
+  const [rangeFrom, setRangeFrom] = useState('')
+  const [rangeTo, setRangeTo] = useState('')
   const [createForm, setCreateForm] = useState({
     date: '',
     orderNumber: '',
@@ -465,8 +493,7 @@ export function CustomerIntelligenceView({
 
   const displayRows = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const fromTs = dateFrom ? new Date(`${dateFrom}T00:00:00.000Z`).getTime() : null
-    const toTs = dateTo ? new Date(`${dateTo}T23:59:59.999Z`).getTime() : null
+    const { fromTs, toTs } = computeRangeTs(rangePreset, rangeFrom, rangeTo)
     const base = ledgerRows.filter((r) => {
       const okSearch = !q
         ? true
@@ -486,8 +513,6 @@ export function CustomerIntelligenceView({
             .includes(q)
       if (!okSearch) return false
 
-      // Orders Engine needs a date range filter; Customer Intelligence page does not.
-      if (mode !== 'orders-engine') return true
       if (!fromTs && !toTs) return true
       const t = r.orderedAt ? new Date(r.orderedAt).getTime() : NaN
       if (!Number.isFinite(t)) return false
@@ -514,7 +539,7 @@ export function CustomerIntelligenceView({
     })
 
     return base
-  }, [dateFrom, dateTo, ledgerRows, mode, query, sortBy])
+  }, [ledgerRows, query, rangeFrom, rangePreset, rangeTo, sortBy])
 
   const totals = useMemo(() => {
     const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
@@ -532,9 +557,62 @@ export function CustomerIntelligenceView({
     return { totalCustomers, totalOrders, totalBilled, avgTotalBilled }
   }, [customers, ledgerRows])
 
+  const displayCustomers = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const { fromTs, toTs } = computeRangeTs(rangePreset, rangeFrom, rangeTo)
+
+    const ymdToMs = (ymd: string) => {
+      const v = String(ymd ?? '').trim()
+      if (!v) return NaN
+      const d = new Date(`${v}T12:00:00.000Z`)
+      return Number.isNaN(d.getTime()) ? NaN : d.getTime()
+    }
+
+    const base = customers.filter((c) => {
+      const okSearch = !q
+        ? true
+        : [
+            c.customerName,
+            c.phoneNumber,
+            c.location,
+            c.segment,
+            c.computedSegment,
+          ]
+            .join(' ')
+            .toLowerCase()
+            .includes(q)
+      if (!okSearch) return false
+
+      if (!fromTs && !toTs) return true
+      const t = ymdToMs(c.lastOrderDate)
+      if (!Number.isFinite(t)) return false
+      if (fromTs != null && t < fromTs) return false
+      if (toTs != null && t > toTs) return false
+      return true
+    })
+
+    base.sort((a, b) => {
+      switch (sortBy) {
+        case 'name':
+          return a.customerName.localeCompare(b.customerName)
+        case 'amountToCollect':
+          return (b.totalBilled ?? 0) - (a.totalBilled ?? 0)
+        case 'totalCollected':
+          return (b.totalCollected ?? 0) - (a.totalCollected ?? 0)
+        case 'date':
+        default: {
+          const ta = ymdToMs(a.lastOrderDate)
+          const tb = ymdToMs(b.lastOrderDate)
+          return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0)
+        }
+      }
+    })
+
+    return base
+  }, [customers, query, rangeFrom, rangePreset, rangeTo, sortBy])
+
   const ordersEngineCards = useMemo(() => {
-    const fromTs = dateFrom ? new Date(`${dateFrom}T00:00:00.000Z`).getTime() : null
-    const toTs = dateTo ? new Date(`${dateTo}T23:59:59.999Z`).getTime() : null
+    const { fromTs, toTs } = computeRangeTs(rangePreset, rangeFrom, rangeTo)
     const rowsForCards =
       mode !== 'orders-engine' || (!fromTs && !toTs)
         ? ledgerRows
@@ -574,7 +652,7 @@ export function CustomerIntelligenceView({
       totalCollected,
       returnedCount,
     }
-  }, [dateFrom, dateTo, ledgerRows, mode])
+  }, [ledgerRows, mode, rangeFrom, rangePreset, rangeTo])
 
   function handleExport() {
     if (ledgerRows.length === 0) {
@@ -1298,31 +1376,60 @@ export function CustomerIntelligenceView({
             />
           </div>
           <div className="flex flex-wrap items-end gap-3 sm:justify-end">
-            {mode === 'orders-engine' ? (
-              <div className="flex w-full flex-col gap-2 sm:w-auto">
-                <Label className="text-muted-foreground">Date range</Label>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                    className="w-[10.5rem]"
-                  />
-                  <span className="text-xs text-muted-foreground">to</span>
-                  <Input
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                    className="w-[10.5rem]"
-                  />
-                  {(dateFrom || dateTo) && (
-                    <Button type="button" variant="ghost" size="sm" onClick={() => { setDateFrom(''); setDateTo('') }}>
-                      Clear dates
-                    </Button>
-                  )}
+            <div className="flex w-full flex-col gap-2 sm:w-auto">
+              <Label className="text-muted-foreground">Date range</Label>
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="w-full sm:w-[200px]">
+                  <Select value={rangePreset} onValueChange={(v) => setRangePreset(v as RangePreset)}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select range" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All time</SelectItem>
+                      <SelectItem value="7d">Last 7 days</SelectItem>
+                      <SelectItem value="1m">Last 1 month</SelectItem>
+                      <SelectItem value="3m">Last 3 months</SelectItem>
+                      <SelectItem value="6m">Last 6 months</SelectItem>
+                      <SelectItem value="12m">Last 12 months</SelectItem>
+                      <SelectItem value="custom">Custom…</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
+
+                {rangePreset === 'custom' ? (
+                  <>
+                    <Input
+                      type="date"
+                      value={rangeFrom}
+                      onChange={(e) => setRangeFrom(e.target.value)}
+                      className="w-[10.5rem]"
+                    />
+                    <span className="text-xs text-muted-foreground">to</span>
+                    <Input
+                      type="date"
+                      value={rangeTo}
+                      onChange={(e) => setRangeTo(e.target.value)}
+                      className="w-[10.5rem]"
+                    />
+                  </>
+                ) : null}
+
+                {(rangePreset !== 'all' || rangeFrom || rangeTo) && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setRangePreset('all')
+                      setRangeFrom('')
+                      setRangeTo('')
+                    }}
+                  >
+                    Clear
+                  </Button>
+                )}
               </div>
-            ) : null}
+            </div>
             <div className="w-full min-w-[10rem] space-y-2 sm:w-44">
               <Label htmlFor="customer-sort" className="text-muted-foreground">
                 Sort by
@@ -1372,7 +1479,7 @@ export function CustomerIntelligenceView({
               <Loader2 className="h-5 w-5 animate-spin" />
               Loading customers…
             </div>
-          ) : displayRows.length === 0 ? (
+          ) : (mode === 'orders-engine' ? displayRows.length === 0 : displayCustomers.length === 0) ? (
             <div className="p-6">
               <Empty className="border-0 p-0">
                 <EmptyHeader>
@@ -1392,41 +1499,123 @@ export function CustomerIntelligenceView({
             </div>
           ) : (
             <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-10 min-w-10 text-right tabular-nums text-muted-foreground">#</TableHead>
-                  <TableHead className="whitespace-nowrap">Date</TableHead>
-                  <TableHead className="whitespace-nowrap">Orders (count)</TableHead>
-                  <TableHead className="min-w-[10rem] whitespace-nowrap">Customer Name</TableHead>
-                  <TableHead className="min-w-[7rem] whitespace-nowrap">Phone Number</TableHead>
-                  <TableHead className="min-w-[8rem] whitespace-nowrap">Location</TableHead>
-                  <TableHead className="min-w-[8rem] whitespace-nowrap">Rider Assigned</TableHead>
-                  <TableHead className="min-w-[12rem] whitespace-nowrap">Items ordered</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Amount to Collect (GHC)</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Cash Collected (GHC)</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">MoMo Collected (GHC)</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Paystack Collected (GHC)</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">Total Collected (GHC)</TableHead>
-                  <TableHead className="whitespace-nowrap">Payment Method</TableHead>
-                  <TableHead className="whitespace-nowrap">Delivery Status</TableHead>
-                  <TableHead className="min-w-[12rem] whitespace-nowrap">Remarks</TableHead>
-                  <TableHead className="min-w-[12rem] whitespace-nowrap">Additional Remarks</TableHead>
-                  <TableHead className="w-[64px] text-right" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {displayRows.map((c, i) => {
-                  return (
+            {mode === 'orders-engine' ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10 min-w-10 text-right tabular-nums text-muted-foreground">#</TableHead>
+                    <TableHead className="whitespace-nowrap">Date</TableHead>
+                    <TableHead className="whitespace-nowrap">Orders (count)</TableHead>
+                    <TableHead className="min-w-[10rem] whitespace-nowrap">Customer Name</TableHead>
+                    <TableHead className="min-w-[7rem] whitespace-nowrap">Phone Number</TableHead>
+                    <TableHead className="min-w-[8rem] whitespace-nowrap">Location</TableHead>
+                    <TableHead className="min-w-[8rem] whitespace-nowrap">Rider Assigned</TableHead>
+                    <TableHead className="min-w-[12rem] whitespace-nowrap">Items ordered</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Amount to Collect (GHC)</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Cash Collected (GHC)</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">MoMo Collected (GHC)</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Paystack Collected (GHC)</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Total Collected (GHC)</TableHead>
+                    <TableHead className="whitespace-nowrap">Payment Method</TableHead>
+                    <TableHead className="whitespace-nowrap">Delivery Status</TableHead>
+                    <TableHead className="min-w-[12rem] whitespace-nowrap">Remarks</TableHead>
+                    <TableHead className="min-w-[12rem] whitespace-nowrap">Additional Remarks</TableHead>
+                    <TableHead className="w-[64px] text-right" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {displayRows.map((c, i) => {
+                    return (
+                      <TableRow key={c.id}>
+                        <TableCell className="text-right text-muted-foreground tabular-nums text-sm">
+                          {i + 1}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">
+                          {c.orderedAt ? fmtTableDate(c.orderedAt.slice(0, 10)) : '—'}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
+                          1
+                        </TableCell>
+                        <TableCell className="font-medium whitespace-nowrap">{c.customerName}</TableCell>
+                        <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
+                          {c.phoneNumber || '—'}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">
+                          {c.location || '—'}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">
+                          {c.riderAssigned || '—'}
+                        </TableCell>
+                        <TableCell className="max-w-[18rem] truncate text-muted-foreground" title={c.itemsOrdered}>
+                          {c.itemsOrdered || '—'}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">
+                          {formatGhs(c.amountToCollectGhs)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">
+                          {formatGhs(c.cashCollectedGhs)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">
+                          {formatGhs(c.momoCollectedGhs)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">
+                          {formatGhs(c.paystackCollectedGhs)}
+                        </TableCell>
+                        <TableCell className="text-right font-medium tabular-nums whitespace-nowrap">
+                          {formatGhs(c.totalCollectedGhs)}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground whitespace-nowrap">
+                          {c.paymentMethod || '—'}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">{deliveryStatusBadge(c.deliveryStatus)}</TableCell>
+                        <TableCell className="max-w-[18rem] truncate text-muted-foreground" title={c.remarks}>
+                          {c.remarks || '—'}
+                        </TableCell>
+                        <TableCell
+                          className="max-w-[18rem] truncate text-muted-foreground"
+                          title={c.additionalRemarks}
+                        >
+                          {c.additionalRemarks || '—'}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => openEditRow(c)}
+                            aria-label="Edit row"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10 min-w-10 text-right tabular-nums text-muted-foreground">#</TableHead>
+                    <TableHead className="min-w-[10rem] whitespace-nowrap">Customer Name</TableHead>
+                    <TableHead className="min-w-[7rem] whitespace-nowrap">Phone Number</TableHead>
+                    <TableHead className="min-w-[8rem] whitespace-nowrap">Location</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Orders</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Total billed</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Total collected</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Returned</TableHead>
+                    <TableHead className="whitespace-nowrap">First order</TableHead>
+                    <TableHead className="whitespace-nowrap">Last order</TableHead>
+                    <TableHead className="whitespace-nowrap">Segment</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {displayCustomers.map((c, i) => (
                     <TableRow key={c.id}>
                       <TableCell className="text-right text-muted-foreground tabular-nums text-sm">
                         {i + 1}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {c.orderedAt ? fmtTableDate(c.orderedAt.slice(0, 10)) : '—'}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
-                        1
                       </TableCell>
                       <TableCell className="font-medium whitespace-nowrap">{c.customerName}</TableCell>
                       <TableCell className="text-muted-foreground tabular-nums whitespace-nowrap">
@@ -1435,57 +1624,34 @@ export function CustomerIntelligenceView({
                       <TableCell className="text-muted-foreground whitespace-nowrap">
                         {c.location || '—'}
                       </TableCell>
-                      <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {c.riderAssigned || '—'}
-                      </TableCell>
-                      <TableCell className="max-w-[18rem] truncate text-muted-foreground" title={c.itemsOrdered}>
-                        {c.itemsOrdered || '—'}
+                      <TableCell className="text-right tabular-nums whitespace-nowrap">
+                        {Number(c.totalOrders ?? 0).toLocaleString()}
                       </TableCell>
                       <TableCell className="text-right tabular-nums whitespace-nowrap">
-                        {formatGhs(c.amountToCollectGhs)}
+                        {formatGhs(Number(c.totalBilled ?? 0))}
                       </TableCell>
                       <TableCell className="text-right tabular-nums whitespace-nowrap">
-                        {formatGhs(c.cashCollectedGhs)}
+                        {formatGhs(Number(c.totalCollected ?? 0))}
                       </TableCell>
                       <TableCell className="text-right tabular-nums whitespace-nowrap">
-                        {formatGhs(c.momoCollectedGhs)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums whitespace-nowrap">
-                        {formatGhs(c.paystackCollectedGhs)}
-                      </TableCell>
-                      <TableCell className="text-right font-medium tabular-nums whitespace-nowrap">
-                        {formatGhs(c.totalCollectedGhs)}
+                        {Number(c.returned ?? 0).toLocaleString()}
                       </TableCell>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
-                        {c.paymentMethod || '—'}
+                        {c.firstOrderDate ? fmtTableDate(c.firstOrderDate) : '—'}
                       </TableCell>
-                      <TableCell className="whitespace-nowrap">{deliveryStatusBadge(c.deliveryStatus)}</TableCell>
-                      <TableCell className="max-w-[18rem] truncate text-muted-foreground" title={c.remarks}>
-                        {c.remarks || '—'}
+                      <TableCell className="text-muted-foreground whitespace-nowrap">
+                        {c.lastOrderDate ? fmtTableDate(c.lastOrderDate) : '—'}
                       </TableCell>
-                      <TableCell
-                        className="max-w-[18rem] truncate text-muted-foreground"
-                        title={c.additionalRemarks}
-                      >
-                        {c.additionalRemarks || '—'}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => openEditRow(c)}
-                          aria-label="Edit row"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
+                      <TableCell className="whitespace-nowrap">
+                        <Badge variant="outline" className="font-normal">
+                          {c.segment || c.computedSegment}
+                        </Badge>
                       </TableCell>
                     </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
             </div>
           )}
         </Card>

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { format } from 'date-fns'
+import { format, subDays, subMonths } from 'date-fns'
 import { Download, Eye, Filter, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
@@ -193,6 +193,8 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
   const [importingCustomers, setImportingCustomers] = useState(false)
   const [filter, setFilter] = useState('')
   const [sortBy, setSortBy] = useState<OrdersSortKey>('newest')
+  type SheetRangePreset = 'all' | '7d' | '1m' | '3m' | '6m' | '12m' | 'custom'
+  const [sheetRangePreset, setSheetRangePreset] = useState<SheetRangePreset>('all')
   const [sheetRangeStart, setSheetRangeStart] = useState('')
   const [sheetRangeEnd, setSheetRangeEnd] = useState('')
   const [editSheetOpen, setEditSheetOpen] = useState(false)
@@ -561,8 +563,26 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
       const ms = d.getTime()
       return Number.isNaN(ms) ? null : ms
     }
-    const startMs = ymdToMs(sheetRangeStart)
-    const endMs = ymdToMs(sheetRangeEnd)
+
+    const now = new Date()
+    const presetToRange = () => {
+      if (sheetRangePreset === 'all') return { startMs: null as number | null, endMs: null as number | null }
+      if (sheetRangePreset === 'custom') return { startMs: ymdToMs(sheetRangeStart), endMs: ymdToMs(sheetRangeEnd) }
+      const endMs = now.getTime()
+      const start =
+        sheetRangePreset === '7d'
+          ? subDays(now, 7)
+          : sheetRangePreset === '1m'
+            ? subMonths(now, 1)
+            : sheetRangePreset === '3m'
+              ? subMonths(now, 3)
+              : sheetRangePreset === '6m'
+                ? subMonths(now, 6)
+                : subMonths(now, 12)
+      return { startMs: start.getTime(), endMs }
+    }
+
+    const { startMs, endMs } = presetToRange()
 
     const rows = (!q
       ? [...effectiveSheetCustomers]
@@ -626,7 +646,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
     })
 
     return rowsInRange
-  }, [effectiveSheetCustomers, filter, sheetRangeStart, sheetRangeEnd, sortBy]) as EffectiveSheetRow[]
+  }, [effectiveSheetCustomers, filter, sheetRangeEnd, sheetRangePreset, sheetRangeStart, sortBy]) as EffectiveSheetRow[]
 
   const sheetTotals = useMemo(() => {
     const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
@@ -1905,40 +1925,67 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
             ) : null}
 
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div className="space-y-2">
-                <Label htmlFor="oe-sheet-from" className="text-muted-foreground">
-                  Date range (from)
-                </Label>
-                <Input
-                  id="oe-sheet-from"
-                  type="date"
-                  value={sheetRangeStart}
-                  onChange={(e) => setSheetRangeStart(e.target.value)}
-                />
+              <div className="w-full space-y-2 sm:w-[220px]">
+                <Label className="text-muted-foreground">Date range</Label>
+                <Select
+                  value={sheetRangePreset}
+                  onValueChange={(v) => setSheetRangePreset(v as any)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select range" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All time</SelectItem>
+                    <SelectItem value="7d">Last 7 days</SelectItem>
+                    <SelectItem value="1m">Last 1 month</SelectItem>
+                    <SelectItem value="3m">Last 3 months</SelectItem>
+                    <SelectItem value="6m">Last 6 months</SelectItem>
+                    <SelectItem value="12m">Last 12 months</SelectItem>
+                    <SelectItem value="custom">Custom…</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="oe-sheet-to" className="text-muted-foreground">
-                  Date range (to)
-                </Label>
-                <Input
-                  id="oe-sheet-to"
-                  type="date"
-                  value={sheetRangeEnd}
-                  onChange={(e) => setSheetRangeEnd(e.target.value)}
-                />
-              </div>
-              {(sheetRangeStart || sheetRangeEnd) ? (
+
+              {sheetRangePreset === 'custom' ? (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="oe-sheet-from" className="text-muted-foreground">
+                      From
+                    </Label>
+                    <Input
+                      id="oe-sheet-from"
+                      type="date"
+                      value={sheetRangeStart}
+                      onChange={(e) => setSheetRangeStart(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="oe-sheet-to" className="text-muted-foreground">
+                      To
+                    </Label>
+                    <Input
+                      id="oe-sheet-to"
+                      type="date"
+                      value={sheetRangeEnd}
+                      onChange={(e) => setSheetRangeEnd(e.target.value)}
+                    />
+                  </div>
+                </>
+              ) : null}
+
+              {(sheetRangePreset !== 'all' || sheetRangeStart || sheetRangeEnd) ? (
                 <div className="sm:ml-auto">
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
                     onClick={() => {
+                      setSheetRangePreset('all')
                       setSheetRangeStart('')
                       setSheetRangeEnd('')
                     }}
                   >
-                    Clear dates
+                    Clear
                   </Button>
                 </div>
               ) : null}
