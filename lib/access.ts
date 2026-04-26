@@ -19,6 +19,7 @@ const EMAIL_SECTION_RULES: Record<string, AppSection[]> = {
   // Retail-only users
   'baaba@gelosglobal.com': ['retail'],
   'desmond@gelosglobal.com': ['retail'],
+  'innocent@gelosglobal.com': ['retail'],
 
   // DTC-only users
   'precious@gelosglobal.com': ['dtc'],
