@@ -43,10 +43,9 @@ const patchBodySchema = z
             .optional(),
           name: z.string().trim().min(1).max(200),
           qty: z.coerce.number().int().positive().max(1_000_000),
-          unitPrice: z.coerce.number().positive().max(10_000_000),
+          unitPrice: z.coerce.number().min(0).max(10_000_000),
         }),
       )
-      .min(1)
       .optional(),
     discountGhs: z.coerce.number().min(0).max(1_000_000_000).nullable().optional(),
     status: z.enum(['fulfilled', 'processing', 'pending_payment']).optional(),

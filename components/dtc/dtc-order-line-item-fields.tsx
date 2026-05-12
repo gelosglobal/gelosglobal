@@ -300,7 +300,6 @@ export function DtcOrderLineItemFields({
               id={`${idPrefix}-item-name-${idx}`}
               value={item.name}
               onChange={(e) => onItemPatch(idx, { name: e.target.value })}
-              required={idx === 0}
             />
           </div>
           <div className="space-y-2">
@@ -325,7 +324,6 @@ export function DtcOrderLineItemFields({
             step={1}
             value={item.qty}
             onChange={(e) => onItemPatch(idx, { qty: e.target.value })}
-            required={idx === 0}
           />
         </div>
         <div className="space-y-2">
@@ -338,7 +336,6 @@ export function DtcOrderLineItemFields({
             step="0.01"
             value={item.unitPrice}
             onChange={(e) => onItemPatch(idx, { unitPrice: e.target.value })}
-            required={idx === 0}
           />
         </div>
         <div className="flex items-end justify-between gap-2">

@@ -1217,53 +1217,63 @@ export function CustomerIntelligenceView({
         ? computedItemsOrdered || undefined
         : editForm.itemsOrdered.trim() || computedItemsOrdered || undefined
 
+      const orderPatchBody: Record<string, unknown> = {
+        customer: name,
+        customerPhone: editForm.phoneNumber.trim() || undefined,
+        customerLocation: editForm.location.trim() || undefined,
+        paymentMethod: (editForm.paymentMethod.trim() || undefined) as any,
+        orderedAt: editForm.date.trim()
+          ? new Date(`${editForm.date.trim()}T12:00:00.000Z`).toISOString()
+          : undefined,
+        status: (['fulfilled', 'processing', 'pending_payment'] as const).includes(
+          editForm.deliveryStatus.trim() as any,
+        )
+          ? (editForm.deliveryStatus.trim() as any)
+          : undefined,
+      }
+      if (hasStructuredItems) {
+        orderPatchBody.items = items
+      }
+
+      const ledgerPatchBody: Record<string, unknown> = {
+        date: editForm.date.trim() || undefined,
+        orderNumber: editForm.orderNumber.trim() || undefined,
+        itemsOrdered: itemsOrderedPayload,
+        customerName: name,
+        phoneNumber: editForm.phoneNumber.trim() || undefined,
+        location: editForm.location.trim() || undefined,
+        riderAssigned: editForm.riderAssigned.trim() || undefined,
+        amountToCollectGhs:
+          editForm.amountToCollectGhs.trim() === '' ? undefined : Number(editForm.amountToCollectGhs),
+        cashCollectedGhs:
+          editForm.cashCollectedGhs.trim() === '' ? undefined : Number(editForm.cashCollectedGhs),
+        momoCollectedGhs:
+          editForm.momoCollectedGhs.trim() === '' ? undefined : Number(editForm.momoCollectedGhs),
+        paystackCollectedGhs:
+          editForm.paystackCollectedGhs.trim() === '' ? undefined : Number(editForm.paystackCollectedGhs),
+        totalCollectedGhs:
+          editForm.totalCollectedGhs.trim() === '' ? undefined : Number(editForm.totalCollectedGhs),
+        paymentMethod: editForm.paymentMethod.trim() || undefined,
+        deliveryStatus: editForm.deliveryStatus.trim() || undefined,
+        remarks: editForm.remarks.trim() || undefined,
+        additionalRemarks: editForm.additionalRemarks.trim() || undefined,
+      }
+      if (hasStructuredItems) {
+        ledgerPatchBody.items = items
+      }
+
       const res = orderPatchId
         ? await fetch(`/api/dtc/orders/${orderPatchId}`, {
             method: 'PATCH',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              customer: name,
-              customerPhone: editForm.phoneNumber.trim() || undefined,
-              customerLocation: editForm.location.trim() || undefined,
-              paymentMethod: (editForm.paymentMethod.trim() || undefined) as any,
-              orderedAt: editForm.date.trim() ? new Date(`${editForm.date.trim()}T12:00:00.000Z`).toISOString() : undefined,
-              items,
-              status: (['fulfilled', 'processing', 'pending_payment'] as const).includes(editForm.deliveryStatus.trim() as any)
-                ? (editForm.deliveryStatus.trim() as any)
-                : undefined,
-            }),
+            body: JSON.stringify(orderPatchBody),
           })
         : await fetch(`/api/dtc/customer-intelligence/${editRow.id}`, {
             method: 'PATCH',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              date: editForm.date.trim() || undefined,
-              orderNumber: editForm.orderNumber.trim() || undefined,
-              itemsOrdered: itemsOrderedPayload,
-              items,
-              customerName: name,
-              phoneNumber: editForm.phoneNumber.trim() || undefined,
-              location: editForm.location.trim() || undefined,
-              riderAssigned: editForm.riderAssigned.trim() || undefined,
-              amountToCollectGhs:
-                editForm.amountToCollectGhs.trim() === '' ? undefined : Number(editForm.amountToCollectGhs),
-              cashCollectedGhs:
-                editForm.cashCollectedGhs.trim() === '' ? undefined : Number(editForm.cashCollectedGhs),
-              momoCollectedGhs:
-                editForm.momoCollectedGhs.trim() === '' ? undefined : Number(editForm.momoCollectedGhs),
-              paystackCollectedGhs:
-                editForm.paystackCollectedGhs.trim() === ''
-                  ? undefined
-                  : Number(editForm.paystackCollectedGhs),
-              totalCollectedGhs:
-                editForm.totalCollectedGhs.trim() === '' ? undefined : Number(editForm.totalCollectedGhs),
-              paymentMethod: editForm.paymentMethod.trim() || undefined,
-              deliveryStatus: editForm.deliveryStatus.trim() || undefined,
-              remarks: editForm.remarks.trim() || undefined,
-              additionalRemarks: editForm.additionalRemarks.trim() || undefined,
-            }),
+            body: JSON.stringify(ledgerPatchBody),
           })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
