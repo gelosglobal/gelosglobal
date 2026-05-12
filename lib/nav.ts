@@ -65,6 +65,7 @@ export const salesForceNavItems: NavItemConfig[] = [
   { label: 'Targets & Quotas', href: '/sf/targets', icon: Target },
   { label: 'Rep Leaderboard', href: '/sf/leaderboard', icon: BarChart3 },
   { label: 'Retail Reports', href: '/sf/reports', icon: BarChart3 },
+  { label: 'Product Performance', href: '/sf/product-performance', icon: TrendingUp },
   { label: 'Outlet Scout Map', href: '/sf/outlet-scout-map', icon: MapPin },
 ]
 
@@ -82,6 +83,7 @@ const pathTitleEntries: [string, string][] = [
   ['/sf/targets', 'Targets & Quotas'],
   ['/sf/leaderboard', 'Rep Leaderboard'],
   ['/sf/reports', 'Retail Reports'],
+  ['/sf/product-performance', 'Product Performance'],
   ['/sf/outlet-scout-map', 'Outlet Scout Map'],
   ['/sf', 'Retail'],
   ['/dtc/dashboard', 'DTC Dashboard'],

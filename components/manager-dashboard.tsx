@@ -25,6 +25,7 @@ import {
   ShoppingCart,
   Store,
   Target,
+  TrendingUp,
   Wallet,
   Warehouse,
 } from 'lucide-react'
@@ -137,6 +138,7 @@ const QUICK_LINKS: { href: string; label: string; icon: typeof Package }[] = [
   { href: '/sf/outlet-scout-map', label: 'Scout Map', icon: MapPin },
   { href: '/sf/posm-tracker', label: 'POSM Tracker', icon: Target },
   { href: '/sf/inventory', label: 'Retail Inventory', icon: Package },
+  { href: '/sf/product-performance', label: 'Retail Product Performance', icon: TrendingUp },
   { href: '/sf/b2b-payments', label: 'B2B Payments', icon: CreditCard },
   { href: '/sf/targets', label: 'Targets & Quotas', icon: Target },
   { href: '/sf/reports', label: 'Retail Reports', icon: BarChart3 },
