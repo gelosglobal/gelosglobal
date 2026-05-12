@@ -5,7 +5,14 @@ import {
   createSfB2bInvoice,
   listSfB2bInvoices,
   serializeSfB2bInvoice,
+  type SfB2bInvoiceItem,
 } from '@/lib/sf-b2b-invoices'
+import {
+  attachResolvedSfInvoiceLineIds,
+  inventoryDecrementOpsFromInvoiceItems,
+  isSfB2bInvoiceInventoryError,
+  withSfInventoryDecrementsForNewInvoice,
+} from '@/lib/sf-b2b-invoice-inventory'
 import { subDays } from 'date-fns'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
@@ -22,6 +29,11 @@ const itemSchema = z.object({
   qty: z.coerce.number().int().min(1).max(1_000_000),
   unitPriceGhs: z.coerce.number().min(0).max(1_000_000_000),
   unitCostGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  inventoryItemId: z
+    .string()
+    .trim()
+    .regex(/^[a-f\d]{24}$/i)
+    .optional(),
 })
 
 const postBodySchema = z.object({
@@ -111,21 +123,52 @@ export async function POST(request: Request) {
   const d = parsed.data
   const { db } = getMongo()
   const effectiveDate = d.dueAt ?? (d.invoiceAt ? new Date(d.invoiceAt) : undefined)
-  const doc = await createSfB2bInvoice(db, {
-    outletName: d.outletName,
-    invoiceNumber: d.invoiceNumber,
-    // Invoice date mirrors due date (keep them identical).
-    invoiceAt: effectiveDate,
-    amountGhs: d.amountGhs,
-    discountGhs: d.discountGhs,
-    paidGhs: d.paidGhs ?? 0,
-    paidAt: d.paidAt ? new Date(d.paidAt) : undefined,
-    paymentMethod: d.paymentMethod,
-    items: d.items,
-    dueAt: effectiveDate,
-    repName: d.repName,
-    notes: d.notes,
-  })
+
+  const rawLines = (d.items ?? []).map((it) => ({
+    name: it.name,
+    sku: it.sku,
+    qty: it.qty,
+    unitPriceGhs: it.unitPriceGhs,
+    unitCostGhs: it.unitCostGhs,
+    inventoryItemId: it.inventoryItemId,
+  }))
+
+  let preparedLines: SfB2bInvoiceItem[] = []
+  try {
+    preparedLines = await attachResolvedSfInvoiceLineIds(db, rawLines)
+  } catch (e) {
+    if (isSfB2bInvoiceInventoryError(e)) {
+      return NextResponse.json({ error: e.message }, { status: 400 })
+    }
+    throw e
+  }
+  const ops = inventoryDecrementOpsFromInvoiceItems(preparedLines)
+
+  let doc
+  try {
+    doc = await withSfInventoryDecrementsForNewInvoice(db, ops, () =>
+      createSfB2bInvoice(db, {
+        outletName: d.outletName,
+        invoiceNumber: d.invoiceNumber,
+        invoiceAt: effectiveDate,
+        amountGhs: d.amountGhs,
+        discountGhs: d.discountGhs,
+        paidGhs: d.paidGhs ?? 0,
+        paidAt: d.paidAt ? new Date(d.paidAt) : undefined,
+        paymentMethod: d.paymentMethod,
+        items: preparedLines.length > 0 ? preparedLines : undefined,
+        dueAt: effectiveDate,
+        repName: d.repName,
+        notes: d.notes,
+      }),
+    )
+  } catch (e) {
+    if (isSfB2bInvoiceInventoryError(e)) {
+      const status = e.code === 'INSUFFICIENT' ? 409 : 400
+      return NextResponse.json({ error: e.message }, { status })
+    }
+    throw e
+  }
 
   return NextResponse.json(
     { ok: true, invoice: serializeSfB2bInvoice(doc) },

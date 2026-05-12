@@ -1,5 +1,6 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
 import { getMongo } from '@/lib/mongodb'
+import { syncDtcCustomerTotalsFromIntelLedger } from '@/lib/dtc-customer-intelligence-ledger'
 import { ObjectId } from 'mongodb'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
@@ -107,10 +108,11 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       .map((it) => (it.qty > 1 ? `${it.name} x${it.qty}` : it.name))
       .filter(Boolean)
       .join(', ')
-    // If caller didn't supply a separate itemsOrdered string, keep it in sync.
-    if (d.itemsOrdered === undefined) $set.itemsOrdered = computedItemsOrdered || undefined
+    // Always keep the free-text summary in sync with structured lines when `items` is sent.
+    $set.itemsOrdered = computedItemsOrdered || undefined
+  } else if (d.itemsOrdered !== undefined) {
+    $set.itemsOrdered = d.itemsOrdered
   }
-  if (d.itemsOrdered !== undefined) $set.itemsOrdered = d.itemsOrdered
   if (d.customerName !== undefined) $set.customerName = d.customerName
   if (d.phoneNumber !== undefined) $set.phoneNumber = d.phoneNumber
   if (d.location !== undefined) $set.location = d.location
@@ -132,6 +134,19 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
 
   if (res.matchedCount === 0) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
+  const row = await db.collection(DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION).findOne({ _id: oid })
+  if (row && typeof (row as any).customerName === 'string') {
+    try {
+      await syncDtcCustomerTotalsFromIntelLedger(
+        db,
+        String((row as any).customerName),
+        (row as any).phoneNumber,
+      )
+    } catch {
+      // best-effort
+    }
   }
 
   return NextResponse.json({ ok: true }, { headers: noStore })

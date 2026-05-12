@@ -1,6 +1,9 @@
 import type { Db, WithoutId } from 'mongodb'
 import { ObjectId } from 'mongodb'
 
+import type { SfB2bInvoiceDoc } from './sf-b2b-invoices'
+import { listSfB2bInvoices } from './sf-b2b-invoices'
+
 export const SF_INVOICE_RECEIPTS_COLLECTION = 'sf_invoice_receipts'
 
 export type SfInvoiceReceiptItem = {
@@ -112,5 +115,59 @@ export async function listSfInvoiceReceipts(db: Db): Promise<SfInvoiceReceiptDoc
     .limit(1000)
     .toArray()
   return rows.map((r) => r as SfInvoiceReceiptDoc)
+}
+
+function receiptHistoryDedupeKey(outletName: string, invoiceNumber: string) {
+  return `${outletName.trim().toLowerCase()}|${invoiceNumber.trim().toUpperCase()}`
+}
+
+/** Same invoice date fallback as B2B list JSON (invoice → due → created). */
+function syntheticReceiptJsonFromB2b(doc: SfB2bInvoiceDoc): SfInvoiceReceiptJson {
+  const amountGhs = Math.max(0, Number(doc.amountGhs) || 0)
+  const discountGhs = Math.max(0, Math.min(amountGhs, Number(doc.discountGhs) || 0))
+  const taxGhs = 0
+  const totalGhs = Math.max(0, amountGhs - discountGhs + taxGhs)
+  const invoiceAtDate = doc.invoiceAt ?? doc.dueAt ?? doc.createdAt
+  const items: SfInvoiceReceiptItem[] = Array.isArray(doc.items)
+    ? doc.items.map((it) => ({
+        description: String(it.name ?? '').trim() || 'Item',
+        qty: Math.max(0, Math.floor(Number(it.qty) || 0)),
+        unitPriceGhs: Math.max(0, Number(it.unitPriceGhs) || 0),
+      }))
+    : []
+  return {
+    id: `b2b:${doc._id.toHexString()}`,
+    outletName: doc.outletName.trim(),
+    invoiceNumber: doc.invoiceNumber.trim(),
+    invoiceAt: invoiceAtDate ? invoiceAtDate.toISOString() : null,
+    billFrom: null,
+    dueAt: doc.dueAt ? doc.dueAt.toISOString() : null,
+    items,
+    amountGhs,
+    discountGhs,
+    taxGhs,
+    totalGhs,
+    createdAt: doc.createdAt.toISOString(),
+  }
+}
+
+/**
+ * Receipt rows saved from the invoice builder plus B2B Payments invoices that do not
+ * already have a receipt (same outlet + invoice number keeps the receipt row).
+ */
+export async function listInvoiceReceiptHistoryJson(db: Db): Promise<SfInvoiceReceiptJson[]> {
+  const [receiptRows, b2bRows] = await Promise.all([listSfInvoiceReceipts(db), listSfB2bInvoices(db)])
+  const fromReceipts = receiptRows.map(serializeSfInvoiceReceipt)
+  const covered = new Set(fromReceipts.map((r) => receiptHistoryDedupeKey(r.outletName, r.invoiceNumber)))
+  const fromB2bOnly: SfInvoiceReceiptJson[] = []
+  for (const doc of b2bRows) {
+    const k = receiptHistoryDedupeKey(doc.outletName, doc.invoiceNumber)
+    if (covered.has(k)) continue
+    covered.add(k)
+    fromB2bOnly.push(syntheticReceiptJsonFromB2b(doc))
+  }
+  return [...fromReceipts, ...fromB2bOnly].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  )
 }
 

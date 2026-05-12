@@ -1,5 +1,19 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
-import { deleteDtcOrder, serializeOrder, updateDtcOrder } from '@/lib/dtc-orders'
+import { mirrorDtcOrderToCustomerIntelLedger } from '@/lib/dtc-customer-intelligence-ledger'
+import {
+  attachResolvedInventoryIds,
+  applyInventoryDeltaForOrderItems,
+  isDtcOrderInventoryError,
+  orderItemsForInventoryAttach,
+  restoreInventoryForOrderItems,
+} from '@/lib/dtc-order-inventory'
+import {
+  deleteDtcOrder,
+  getDtcOrderById,
+  serializeOrder,
+  updateDtcOrder,
+  type DtcOrderItem,
+} from '@/lib/dtc-orders'
 import { getMongo } from '@/lib/mongodb'
 import { ObjectId } from 'mongodb'
 import { headers } from 'next/headers'
@@ -22,6 +36,11 @@ const patchBodySchema = z
       .array(
         z.object({
           sku: z.string().trim().min(1).max(64).optional(),
+          inventoryItemId: z
+            .string()
+            .trim()
+            .regex(/^[a-f\d]{24}$/i)
+            .optional(),
           name: z.string().trim().min(1).max(200),
           qty: z.coerce.number().int().positive().max(1_000_000),
           unitPrice: z.coerce.number().positive().max(10_000_000),
@@ -72,26 +91,67 @@ export async function PATCH(
   }
 
   const { db } = getMongo()
-  const updated = await updateDtcOrder(db, new ObjectId(id), {
+  const oid = new ObjectId(id)
+  const existing = await getDtcOrderById(db, oid)
+  if (!existing) {
+    return NextResponse.json({ error: 'Order not found' }, { status: 404 })
+  }
+
+  let nextItems = existing.items
+  let previousForDelta: DtcOrderItem[] | null = null
+  if (parsed.data.items !== undefined) {
+    try {
+      nextItems = await attachResolvedInventoryIds(db, parsed.data.items)
+    } catch (e) {
+      if (isDtcOrderInventoryError(e)) {
+        return NextResponse.json({ error: e.message }, { status: 400 })
+      }
+      throw e
+    }
+    try {
+      previousForDelta = await attachResolvedInventoryIds(
+        db,
+        orderItemsForInventoryAttach(existing.items),
+      )
+      await applyInventoryDeltaForOrderItems(db, previousForDelta, nextItems)
+    } catch (e) {
+      if (isDtcOrderInventoryError(e)) {
+        const status = e.code === 'INSUFFICIENT' ? 409 : 400
+        return NextResponse.json({ error: e.message }, { status })
+      }
+      throw e
+    }
+  }
+
+  const updated = await updateDtcOrder(db, oid, {
     customer: parsed.data.customer,
     customerPhone: parsed.data.customerPhone,
     customerEmail: parsed.data.customerEmail,
     customerLocation: parsed.data.customerLocation,
     channel: parsed.data.channel,
     paymentMethod: parsed.data.paymentMethod,
-    items: parsed.data.items?.map((i) => ({
-      sku: i.sku,
-      name: i.name,
-      qty: i.qty,
-      unitPrice: i.unitPrice,
-    })),
+    items: parsed.data.items !== undefined ? nextItems : undefined,
     discountGhs: parsed.data.discountGhs,
     status: parsed.data.status,
     orderedAt: parsed.data.orderedAt ? new Date(parsed.data.orderedAt) : undefined,
   })
 
   if (!updated) {
+    if (parsed.data.items !== undefined && previousForDelta) {
+      try {
+        await applyInventoryDeltaForOrderItems(db, nextItems, previousForDelta)
+      } catch {
+        // best-effort rollback — inventory may be inconsistent; log for ops
+        console.error('[PATCH /api/dtc/orders/:id] failed to rollback inventory after missing order update')
+      }
+    }
     return NextResponse.json({ error: 'Order not found' }, { status: 404 })
+  }
+
+  try {
+    await mirrorDtcOrderToCustomerIntelLedger(db, updated)
+  } catch {
+    // best-effort — PATCH response still returns the saved order
   }
 
   return NextResponse.json({ order: serializeOrder(updated) })
@@ -112,9 +172,25 @@ export async function DELETE(
   }
 
   const { db } = getMongo()
-  const ok = await deleteDtcOrder(db, new ObjectId(id))
+  const oid = new ObjectId(id)
+  const existing = await getDtcOrderById(db, oid)
+  if (!existing) {
+    return NextResponse.json({ error: 'Order not found' }, { status: 404 })
+  }
+
+  const snapshotItems = existing.items
+  const ok = await deleteDtcOrder(db, oid)
   if (!ok) {
     return NextResponse.json({ error: 'Order not found' }, { status: 404 })
+  }
+  try {
+    const linesToRestore = await attachResolvedInventoryIds(
+      db,
+      orderItemsForInventoryAttach(snapshotItems),
+    )
+    await restoreInventoryForOrderItems(db, linesToRestore)
+  } catch (err) {
+    console.error('[DELETE /api/dtc/orders/:id] inventory restore failed after delete', err)
   }
 
   return NextResponse.json({ ok: true })

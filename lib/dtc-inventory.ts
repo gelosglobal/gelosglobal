@@ -177,3 +177,45 @@ export function computeInventoryStats(rows: DtcInventoryDoc[]) {
     inTransitTotalGhs: inTransitTotal,
   }
 }
+
+/** Result of an atomic on-hand change (used by DTC orders ↔ inventory). */
+export type DtcInventoryQtyMutationResult = 'ok' | 'not_found' | 'insufficient'
+
+/**
+ * Decrease `onHand` by `qty` only if enough stock exists (atomic).
+ */
+export async function decrementDtcInventoryOnHandById(
+  db: Db,
+  id: ObjectId,
+  qty: number,
+): Promise<DtcInventoryQtyMutationResult> {
+  if (!Number.isFinite(qty) || qty <= 0) return 'ok'
+  const col = db.collection(DTC_INVENTORY_COLLECTION)
+  const res = await col.findOneAndUpdate(
+    { _id: id, onHand: { $gte: qty } },
+    { $inc: { onHand: -qty }, $set: { updatedAt: new Date() } },
+    { returnDocument: 'after' },
+  )
+  if (res) return 'ok'
+  const exists = await col.findOne({ _id: id }, { projection: { _id: 1 } })
+  if (!exists) return 'not_found'
+  return 'insufficient'
+}
+
+/**
+ * Increase `onHand` by `qty` (e.g. order cancelled or line removed).
+ */
+export async function incrementDtcInventoryOnHandById(
+  db: Db,
+  id: ObjectId,
+  qty: number,
+): Promise<boolean> {
+  if (!Number.isFinite(qty) || qty <= 0) return true
+  const col = db.collection(DTC_INVENTORY_COLLECTION)
+  const res = await col.findOneAndUpdate(
+    { _id: id },
+    { $inc: { onHand: qty }, $set: { updatedAt: new Date() } },
+    { returnDocument: 'after' },
+  )
+  return Boolean(res)
+}

@@ -14,6 +14,8 @@ export type PaymentMethod =
 
 export type DtcOrderItem = {
   sku?: string
+  /** `dtc_inventory` row id when the line is tied to DTC stock (picker or resolved SKU). */
+  inventoryItemId?: string
   name: string
   qty: number
   unitPrice: number
@@ -84,9 +86,14 @@ export async function listDtcOrders(db: Db): Promise<DtcOrderDoc[]> {
   const rows = await ordersCollection(db)
     .find({})
     .sort({ createdAt: -1 })
-    .limit(500)
+    .limit(5000)
     .toArray()
   return rows.map((r) => r as DtcOrderDoc)
+}
+
+export async function getDtcOrderById(db: Db, id: ObjectId): Promise<DtcOrderDoc | null> {
+  const doc = await ordersCollection(db).findOne({ _id: id })
+  return doc ? (doc as DtcOrderDoc) : null
 }
 
 function newOrderNumber(): string {

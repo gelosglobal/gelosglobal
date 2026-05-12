@@ -1,17 +1,15 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
+import { canMutateSfInventory } from '@/lib/access'
 import {
-  computeSfInventoryStats,
   createSfInventoryItem,
-  listSfInventory,
+  listSfInventoryWithOrderVelocity,
   serializeSfInventoryItem,
   SF_INVENTORY_COLLECTION,
   SF_INVENTORY_DEFAULT_OUTLET,
 } from '@/lib/sf-inventory'
-import { SF_ORDERS_COLLECTION } from '@/lib/sf-orders'
 import { getMongo } from '@/lib/mongodb'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
-import { subDays } from 'date-fns'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
@@ -42,53 +40,9 @@ export async function GET() {
   }
 
   const { db } = getMongo()
-  const now = new Date()
-  const velocityWindowDays = 30
-  const since = subDays(now, velocityWindowDays)
-
-  const rows = await listSfInventory(db)
-
-  const skuVelocity = new Map<string, number>()
-  const agg = await db
-    .collection(SF_ORDERS_COLLECTION)
-    .aggregate<{ sku: string; units: number }>([
-      { $match: { orderedAt: { $gte: since, $lte: now } } },
-      { $unwind: '$items' },
-      {
-        $match: {
-          'items.sku': { $type: 'string' },
-        },
-      },
-      {
-        $group: {
-          _id: { sku: { $toUpper: '$items.sku' } },
-          units: { $sum: { $ifNull: ['$items.qty', 0] } },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          sku: '$_id.sku',
-          units: 1,
-        },
-      },
-    ])
-    .toArray()
-
-  for (const r of agg) {
-    const units = Number(r.units) || 0
-    skuVelocity.set(String(r.sku).toUpperCase(), units / velocityWindowDays)
-  }
-
-  const stats = computeSfInventoryStats(rows)
+  const { items, stats } = await listSfInventoryWithOrderVelocity(db)
   return NextResponse.json({
-    items: rows.map((row) => {
-      const base = serializeSfInventoryItem(row)
-      const v = skuVelocity.get(base.sku.toUpperCase())
-      const dailyDemand = v ? Math.round(v * 10) / 10 : 0
-      const daysCover = dailyDemand > 0 ? Math.floor(base.onHand / dailyDemand) : null
-      return { ...base, dailyDemand, daysCover }
-    }),
+    items,
     stats,
   })
 }
@@ -97,6 +51,9 @@ export async function POST(request: Request) {
   const session = await requireSession()
   if (!session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!canMutateSfInventory(session as any)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
   let body: unknown

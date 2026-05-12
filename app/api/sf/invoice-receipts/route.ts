@@ -2,7 +2,7 @@ import { auth, ensureAuthMongo } from '@/lib/auth'
 import { getMongo } from '@/lib/mongodb'
 import {
   createSfInvoiceReceipt,
-  listSfInvoiceReceipts,
+  listInvoiceReceiptHistoryJson,
   serializeSfInvoiceReceipt,
 } from '@/lib/sf-invoice-receipts'
 import { headers } from 'next/headers'
@@ -42,8 +42,8 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { db } = getMongo()
-  const rows = await listSfInvoiceReceipts(db)
-  return NextResponse.json({ receipts: rows.map(serializeSfInvoiceReceipt) })
+  const receipts = await listInvoiceReceiptHistoryJson(db)
+  return NextResponse.json({ receipts })
 }
 
 export async function POST(request: Request) {

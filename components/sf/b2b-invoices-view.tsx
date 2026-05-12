@@ -731,7 +731,9 @@ export function B2bInvoicesView() {
           <div className="flex items-center justify-between gap-3 border-b p-4">
             <div>
               <p className="text-sm font-semibold">Invoice history</p>
-              <p className="text-xs text-muted-foreground">Receipts created from this invoice page</p>
+              <p className="text-xs text-muted-foreground">
+                Receipts saved here and invoices from B2B Payments; outlet plus invoice number appears once.
+              </p>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={() => void loadHistory()} disabled={historyLoading}>
               {historyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Refresh'}

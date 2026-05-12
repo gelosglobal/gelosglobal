@@ -1,6 +1,11 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
+import {
+  DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION,
+  dtcCustomerIntelLedgerPhoneKey,
+} from '@/lib/dtc-customer-intelligence-ledger'
 import { DTC_ORDERS_COLLECTION, formatGhs } from '@/lib/dtc-orders'
 import { getMongo } from '@/lib/mongodb'
+import { createHash } from 'crypto'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -41,6 +46,24 @@ function segmentFor(row: CustomerAgg): 'High LTV' | 'At risk' | 'New (30d)' | 'C
   if (daysSinceFirst <= 30) return 'New (30d)'
   if (row.ltv >= 2000 || row.orders >= 10) return 'High LTV'
   return 'Core'
+}
+
+function fmtDateYmd(d: Date) {
+  if (d.getTime() === 0 || Number.isNaN(d.getTime())) return ''
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/** Aligns with Customer Intelligence “unique by phone” (fallback to name when phone blank). */
+function customerListDedupeKey(customerName: string, phoneDisplay: string) {
+  return `${String(customerName ?? '').trim().toLowerCase()}|${dtcCustomerIntelLedgerPhoneKey(phoneDisplay)}`
+}
+
+function syntheticCustomerId(source: 'ord' | 'led', customerName: string, phoneRaw: string) {
+  const h = createHash('sha256').update(`${source}\n${customerName}\n${phoneRaw}`).digest('hex')
+  return `${source === 'ord' ? 'order' : 'ledger'}-customer:${h.slice(0, 24)}`
 }
 
 const createCustomerSchema = z.object({
@@ -220,14 +243,6 @@ export async function GET() {
       })
     }
 
-    const fmtDate = (d: Date) => {
-      if (d.getTime() === 0 || Number.isNaN(d.getTime())) return ''
-      const y = d.getFullYear()
-      const m = String(d.getMonth() + 1).padStart(2, '0')
-      const day = String(d.getDate()).padStart(2, '0')
-      return `${y}-${m}-${day}`
-    }
-
     return {
       id: String(x._id ?? ''),
       customerName: r.customer,
@@ -237,8 +252,8 @@ export async function GET() {
       totalCollected,
       location: String(x.location ?? ''),
       returned,
-      firstOrderDate: fmtDate(firstOrderAt),
-      lastOrderDate: fmtDate(lastOrderAt),
+      firstOrderDate: fmtDateYmd(firstOrderAt),
+      lastOrderDate: fmtDateYmd(lastOrderAt),
       totalBilledFormatted: formatGhs(totalBilled),
       totalCollectedFormatted: formatGhs(totalCollected),
       returnedFormatted: hasReturnCountForFmt ? returned.toLocaleString() : formatGhs(returned),
@@ -247,14 +262,174 @@ export async function GET() {
     }
   })
 
-  const segments = {
-    highLtv: customers.filter((c) => c.segment === 'High LTV').length,
-    atRisk: customers.filter((c) => c.segment === 'At risk').length,
-    new30d: customers.filter((c) => c.segment === 'New (30d)').length,
-    core: customers.filter((c) => c.segment === 'Core').length,
+  const seenKeys = new Set<string>()
+  for (const c of customers) {
+    seenKeys.add(customerListDedupeKey(c.customerName, c.phoneNumber))
   }
 
-  return NextResponse.json({ customers, segments }, { headers: noStore })
+  type OutCustomer = (typeof customers)[number]
+  const extras: OutCustomer[] = []
+
+  const orderGroups = await db
+    .collection(DTC_ORDERS_COLLECTION)
+    .aggregate([
+      { $match: { customer: { $type: 'string', $ne: '' } } },
+      {
+        $group: {
+          _id: {
+            customer: '$customer',
+            phone: { $ifNull: ['$customerPhone', ''] },
+          },
+          orderCount: { $sum: 1 },
+          ltv: { $sum: '$totalAmount' },
+          firstOrderedAt: { $min: '$orderedAt' },
+          lastOrderedAt: { $max: '$orderedAt' },
+          location: { $max: '$customerLocation' },
+        },
+      },
+      { $limit: 50_000 },
+    ])
+    .toArray()
+
+  for (const g of orderGroups as any[]) {
+    const name = String(g._id?.customer ?? '').trim()
+    if (!name) continue
+    const phoneRaw = String(g._id?.phone ?? '')
+    const k = customerListDedupeKey(name, phoneRaw)
+    if (seenKeys.has(k)) continue
+    seenKeys.add(k)
+
+    const totalOrders = Number(g.orderCount ?? 0) || 0
+    const totalBilled = Number(g.ltv ?? 0) || 0
+    const aggFirst = g.firstOrderedAt ? new Date(g.firstOrderedAt) : null
+    const aggLast = g.lastOrderedAt ? new Date(g.lastOrderedAt) : null
+    const firstOrderAt =
+      aggFirst && !Number.isNaN(aggFirst.getTime()) ? aggFirst : new Date(0)
+    const lastOrderAt = aggLast && !Number.isNaN(aggLast.getTime()) ? aggLast : new Date(0)
+    const lastD =
+      lastOrderAt.getTime() !== 0 && !Number.isNaN(lastOrderAt.getTime()) ? lastOrderAt : null
+    const firstD =
+      firstOrderAt.getTime() !== 0 && !Number.isNaN(firstOrderAt.getTime()) ? firstOrderAt : null
+
+    let computedSeg: 'High LTV' | 'At risk' | 'New (30d)' | 'Core' = 'Core'
+    if (lastD) {
+      const firstForSeg = firstD ?? lastD
+      computedSeg = segmentFor({
+        customer: name,
+        orders: totalOrders,
+        ltv: totalBilled,
+        firstOrderAt: firstForSeg,
+        lastOrderAt: lastD,
+      })
+    }
+
+    extras.push({
+      id: syntheticCustomerId('ord', name, phoneRaw),
+      customerName: name,
+      phoneNumber: phoneRaw.trim().slice(0, 40),
+      totalOrders,
+      totalBilled,
+      totalCollected: 0,
+      location: String(g.location ?? '').trim().slice(0, 200),
+      returned: 0,
+      firstOrderDate: fmtDateYmd(firstOrderAt),
+      lastOrderDate: fmtDateYmd(lastOrderAt),
+      totalBilledFormatted: formatGhs(totalBilled),
+      totalCollectedFormatted: formatGhs(0),
+      returnedFormatted: formatGhs(0),
+      segment: computedSeg,
+      computedSegment: computedSeg,
+    })
+  }
+
+  const ledgerGroups = await db
+    .collection(DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION)
+    .aggregate([
+      { $match: { customerName: { $type: 'string', $ne: '' } } },
+      {
+        $group: {
+          _id: {
+            customer: '$customerName',
+            phone: { $ifNull: ['$phoneNumber', ''] },
+          },
+          lineCount: { $sum: 1 },
+          billed: { $sum: { $ifNull: ['$amountToCollectGhs', 0] } },
+          collected: { $sum: { $ifNull: ['$totalCollectedGhs', 0] } },
+          firstOrderedAt: { $min: '$orderedAt' },
+          lastOrderedAt: { $max: '$orderedAt' },
+          location: { $max: '$location' },
+        },
+      },
+      { $limit: 25_000 },
+    ])
+    .toArray()
+
+  for (const g of ledgerGroups as any[]) {
+    const name = String(g._id?.customer ?? '').trim()
+    if (!name) continue
+    const phoneRaw = String(g._id?.phone ?? '')
+    const k = customerListDedupeKey(name, phoneRaw)
+    if (seenKeys.has(k)) continue
+    seenKeys.add(k)
+
+    const totalOrders = Number(g.lineCount ?? 0) || 0
+    const totalBilled = Number(g.billed ?? 0) || 0
+    const totalCollected = Number(g.collected ?? 0) || 0
+    const aggFirst = g.firstOrderedAt ? new Date(g.firstOrderedAt) : null
+    const aggLast = g.lastOrderedAt ? new Date(g.lastOrderedAt) : null
+    const firstOrderAt =
+      aggFirst && !Number.isNaN(aggFirst.getTime()) ? aggFirst : new Date(0)
+    const lastOrderAt = aggLast && !Number.isNaN(aggLast.getTime()) ? aggLast : new Date(0)
+    const lastD =
+      lastOrderAt.getTime() !== 0 && !Number.isNaN(lastOrderAt.getTime()) ? lastOrderAt : null
+    const firstD =
+      firstOrderAt.getTime() !== 0 && !Number.isNaN(firstOrderAt.getTime()) ? firstOrderAt : null
+
+    let computedSeg: 'High LTV' | 'At risk' | 'New (30d)' | 'Core' = 'Core'
+    if (lastD) {
+      const firstForSeg = firstD ?? lastD
+      computedSeg = segmentFor({
+        customer: name,
+        orders: totalOrders,
+        ltv: totalBilled,
+        firstOrderAt: firstForSeg,
+        lastOrderAt: lastD,
+      })
+    }
+
+    extras.push({
+      id: syntheticCustomerId('led', name, phoneRaw),
+      customerName: name,
+      phoneNumber: phoneRaw.trim().slice(0, 40),
+      totalOrders,
+      totalBilled,
+      totalCollected,
+      location: String(g.location ?? '').trim().slice(0, 200),
+      returned: 0,
+      firstOrderDate: fmtDateYmd(firstOrderAt),
+      lastOrderDate: fmtDateYmd(lastOrderAt),
+      totalBilledFormatted: formatGhs(totalBilled),
+      totalCollectedFormatted: formatGhs(totalCollected),
+      returnedFormatted: formatGhs(0),
+      segment: computedSeg,
+      computedSegment: computedSeg,
+    })
+  }
+
+  const merged = [...customers, ...extras].sort((a, b) => {
+    if (b.totalBilled !== a.totalBilled) return b.totalBilled - a.totalBilled
+    if (b.totalOrders !== a.totalOrders) return b.totalOrders - a.totalOrders
+    return a.customerName.localeCompare(b.customerName)
+  })
+
+  const segments = {
+    highLtv: merged.filter((c) => c.segment === 'High LTV').length,
+    atRisk: merged.filter((c) => c.segment === 'At risk').length,
+    new30d: merged.filter((c) => c.segment === 'New (30d)').length,
+    core: merged.filter((c) => c.segment === 'Core').length,
+  }
+
+  return NextResponse.json({ customers: merged, segments }, { headers: noStore })
 }
 
 export async function POST(request: Request) {

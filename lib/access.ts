@@ -54,6 +54,12 @@ export function getUserAccess(session: Session | null): UserAccess {
   return { email, sections, homePath }
 }
 
+/** DTC (or master) may create/update/delete shared `sf_inventory` rows; retail-only users are view-only on `/sf/inventory`. */
+export function canMutateSfInventory(session: Session | null): boolean {
+  const access = getUserAccess(session)
+  return access.sections.has('dtc') || access.sections.has('master')
+}
+
 export function canAccessPath(access: UserAccess, pathname: string): boolean {
   if (pathname === '/') return access.sections.has('master')
   if (pathname.startsWith('/dtc')) return access.sections.has('dtc')

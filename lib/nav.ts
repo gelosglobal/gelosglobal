@@ -15,6 +15,7 @@ import {
   TrendingUp,
   Wallet,
   Users,
+  Warehouse,
 } from 'lucide-react'
 
 export type NavItemConfig = {
@@ -34,6 +35,7 @@ export const dtcNavItems: NavItemConfig[] = [
     icon: Users,
   },
   { label: 'DTC Inventory', href: '/dtc/inventory', icon: Package },
+  { label: 'Wholesale Inventory', href: '/dtc/wholesale-inventory', icon: Warehouse },
   {
     label: 'Product Performance',
     href: '/dtc/product-performance',
@@ -86,6 +88,7 @@ const pathTitleEntries: [string, string][] = [
   ['/dtc/orders-engine', 'Orders Engine'],
   ['/dtc/customer-intelligence', 'Customer Intelligence'],
   ['/dtc/inventory', 'DTC Inventory'],
+  ['/dtc/wholesale-inventory', 'Wholesale Inventory'],
   ['/dtc/product-performance', 'Product Performance'],
   ['/dtc/marketing-attribution', 'Marketing Attribution'],
 ]

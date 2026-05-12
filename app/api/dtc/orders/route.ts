@@ -1,10 +1,21 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
 import {
+  mirrorDtcOrderToCustomerIntelLedger,
+  serializeDtcCustomerIntelLedgerRow,
+} from '@/lib/dtc-customer-intelligence-ledger'
+import {
+  attachResolvedInventoryIds,
+  inventoryDecrementOpsFromOrderItems,
+  isDtcOrderInventoryError,
+  withInventoryDecrementsForNewOrder,
+} from '@/lib/dtc-order-inventory'
+import {
   computeOrderStats,
   createDtcOrder,
   DTC_ORDERS_COLLECTION,
   listDtcOrders,
   serializeOrder,
+  type DtcOrderDoc,
 } from '@/lib/dtc-orders'
 import { getMongo } from '@/lib/mongodb'
 import { headers } from 'next/headers'
@@ -12,6 +23,9 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const noStore = { 'Cache-Control': 'private, no-store, max-age=0' } as const
 
 const createBodySchema = z.object({
   customer: z.string().min(1).max(200),
@@ -37,6 +51,11 @@ const createBodySchema = z.object({
     .array(
       z.object({
         sku: z.string().trim().min(1).max(64).optional(),
+        inventoryItemId: z
+          .string()
+          .trim()
+          .regex(/^[a-f\d]{24}$/i)
+          .optional(),
         name: z.string().trim().min(1).max(200),
         qty: z.coerce.number().int().positive().max(1_000_000),
         unitPrice: z.coerce.number().positive().max(10_000_000),
@@ -71,15 +90,18 @@ export async function GET() {
   const rows = await listDtcOrders(db)
   const totalCount = await db.collection(DTC_ORDERS_COLLECTION).countDocuments({})
   const stats = computeOrderStats(rows)
-  return NextResponse.json({
-    orders: rows.map(serializeOrder),
-    totalCount,
-    stats: {
-      ordersToday: stats.ordersToday,
-      avgOrderValue: stats.avgOrderValue,
-      awaitingFulfillment: stats.awaitingFulfillment,
+  return NextResponse.json(
+    {
+      orders: rows.map(serializeOrder),
+      totalCount,
+      stats: {
+        ordersToday: stats.ordersToday,
+        avgOrderValue: stats.avgOrderValue,
+        awaitingFulfillment: stats.awaitingFulfillment,
+      },
     },
-  })
+    { headers: noStore },
+  )
 }
 
 export async function POST(request: Request) {
@@ -104,22 +126,50 @@ export async function POST(request: Request) {
   }
 
   const { db } = getMongo()
-  const created = await createDtcOrder(db, {
-    customer: parsed.data.customer,
-    customerPhone: parsed.data.customerPhone,
-    customerEmail: parsed.data.customerEmail,
-    customerLocation: parsed.data.customerLocation,
-    channel: parsed.data.channel,
-    paymentMethod: parsed.data.paymentMethod,
-    items: parsed.data.items.map((i) => ({
-      sku: i.sku,
-      name: i.name,
-      qty: i.qty,
-      unitPrice: i.unitPrice,
-    })),
-    discountGhs: parsed.data.discountGhs,
-    status: parsed.data.status,
-    orderedAt: parsed.data.orderedAt,
-  })
-  return NextResponse.json({ order: serializeOrder(created) }, { status: 201 })
+  let preparedItems
+  try {
+    preparedItems = await attachResolvedInventoryIds(db, parsed.data.items)
+  } catch (e) {
+    if (isDtcOrderInventoryError(e)) {
+      return NextResponse.json({ error: e.message }, { status: 400 })
+    }
+    throw e
+  }
+  const ops = inventoryDecrementOpsFromOrderItems(preparedItems)
+
+  let created: DtcOrderDoc
+  try {
+    created = await withInventoryDecrementsForNewOrder(db, ops, () =>
+      createDtcOrder(db, {
+        customer: parsed.data.customer,
+        customerPhone: parsed.data.customerPhone,
+        customerEmail: parsed.data.customerEmail,
+        customerLocation: parsed.data.customerLocation,
+        channel: parsed.data.channel,
+        paymentMethod: parsed.data.paymentMethod,
+        items: preparedItems,
+        discountGhs: parsed.data.discountGhs,
+        status: parsed.data.status,
+        orderedAt: parsed.data.orderedAt,
+      }),
+    )
+  } catch (e) {
+    if (isDtcOrderInventoryError(e)) {
+      const status = e.code === 'INSUFFICIENT' ? 409 : 400
+      return NextResponse.json({ error: e.message }, { status })
+    }
+    throw e
+  }
+  let customerIntelligenceRow: ReturnType<typeof serializeDtcCustomerIntelLedgerRow> | null =
+    null
+  try {
+    const mirrored = await mirrorDtcOrderToCustomerIntelLedger(db, created)
+    if (mirrored) customerIntelligenceRow = serializeDtcCustomerIntelLedgerRow(mirrored)
+  } catch (err) {
+    console.error('[POST /api/dtc/orders] mirrorDtcOrderToCustomerIntelLedger failed', err)
+  }
+  return NextResponse.json(
+    { order: serializeOrder(created), customerIntelligenceRow },
+    { status: 201, headers: noStore },
+  )
 }

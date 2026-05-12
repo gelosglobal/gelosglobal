@@ -12,6 +12,8 @@ export type SfB2bInvoiceItem = {
   unitPriceGhs: number
   /** Optional unit cost (for margin calculations). */
   unitCostGhs?: number
+  /** `sf_inventory` row id when the line reduces retail stock. */
+  inventoryItemId?: string
 }
 
 export type SfB2bInvoiceDoc = {
@@ -109,6 +111,11 @@ export async function listSfB2bInvoices(db: Db): Promise<SfB2bInvoiceDoc[]> {
   return rows.map((r) => r as SfB2bInvoiceDoc)
 }
 
+export async function getSfB2bInvoiceById(db: Db, id: ObjectId): Promise<SfB2bInvoiceDoc | null> {
+  const doc = await invoicesCollection(db).findOne({ _id: id })
+  return doc ? (doc as SfB2bInvoiceDoc) : null
+}
+
 export type CreateSfB2bInvoiceInput = {
   outletName: string
   invoiceNumber: string
@@ -139,16 +146,20 @@ export async function createSfB2bInvoice(
     paidGhs: input.paidGhs,
     paidAt: input.paidAt,
     paymentMethod: input.paymentMethod,
-    items: input.items?.map((it) => ({
-      name: it.name.trim(),
-      sku: it.sku?.trim() ? it.sku.trim() : undefined,
-      qty: it.qty,
-      unitPriceGhs: it.unitPriceGhs,
-      unitCostGhs:
-        typeof it.unitCostGhs === 'number' && Number.isFinite(it.unitCostGhs)
-          ? it.unitCostGhs
-          : undefined,
-    })),
+    items: input.items?.map((it) => {
+      const inv = it.inventoryItemId?.trim()
+      return {
+        name: it.name.trim(),
+        sku: it.sku?.trim() ? it.sku.trim() : undefined,
+        qty: it.qty,
+        unitPriceGhs: it.unitPriceGhs,
+        unitCostGhs:
+          typeof it.unitCostGhs === 'number' && Number.isFinite(it.unitCostGhs)
+            ? it.unitCostGhs
+            : undefined,
+        ...(inv && ObjectId.isValid(inv) ? { inventoryItemId: inv } : {}),
+      }
+    }),
     dueAt: input.dueAt,
     repName: input.repName?.trim() || undefined,
     notes: input.notes?.trim() || undefined,
@@ -192,16 +203,20 @@ export async function updateSfB2bInvoice(
     $set.items =
       patch.items == null
         ? undefined
-        : patch.items.map((it) => ({
-            name: it.name.trim(),
-            sku: it.sku?.trim() ? it.sku.trim() : undefined,
-            qty: it.qty,
-            unitPriceGhs: it.unitPriceGhs,
-            unitCostGhs:
-              typeof it.unitCostGhs === 'number' && Number.isFinite(it.unitCostGhs)
-                ? it.unitCostGhs
-                : undefined,
-          }))
+        : patch.items.map((it) => {
+            const inv = it.inventoryItemId?.trim()
+            return {
+              name: it.name.trim(),
+              sku: it.sku?.trim() ? it.sku.trim() : undefined,
+              qty: it.qty,
+              unitPriceGhs: it.unitPriceGhs,
+              unitCostGhs:
+                typeof it.unitCostGhs === 'number' && Number.isFinite(it.unitCostGhs)
+                  ? it.unitCostGhs
+                  : undefined,
+              ...(inv && ObjectId.isValid(inv) ? { inventoryItemId: inv } : {}),
+            }
+          })
   }
   if (patch.dueAt !== undefined) $set.dueAt = patch.dueAt ?? undefined
   if (patch.repName !== undefined) $set.repName = patch.repName ? patch.repName.trim() : undefined

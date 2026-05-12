@@ -26,6 +26,7 @@ import {
   Store,
   Target,
   Wallet,
+  Warehouse,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -129,6 +130,7 @@ type RepTaskRow = {
 const QUICK_LINKS: { href: string; label: string; icon: typeof Package }[] = [
   { href: '/dtc/orders-engine', label: 'Orders Engine', icon: Package },
   { href: '/dtc/inventory', label: 'DTC Inventory', icon: Package },
+  { href: '/dtc/wholesale-inventory', label: 'Wholesale Inventory', icon: Warehouse },
   { href: '/sf/dashboard', label: 'Retail Dashboard', icon: Target },
   { href: '/sf/shop-visits', label: 'Shop Visits', icon: Store },
   { href: '/sf/outlet-scouting', label: 'Outlet Scouting', icon: Map },

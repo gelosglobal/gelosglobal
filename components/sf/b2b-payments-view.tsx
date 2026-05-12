@@ -51,6 +51,33 @@ import {
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import { formatGhs } from '@/lib/dtc-orders'
+import {
+  applyInventoryPick,
+  DtcOrderLineItemFields,
+  emptyDraftItem,
+  INV_PICK_CUSTOM,
+  inventoryItemIdForOrderPayload,
+  normalizeDtcInventoryPickerRows,
+  type DtcInventoryPickerRow,
+  type DtcOrderLineDraftItem,
+} from '@/components/dtc/dtc-order-line-item-fields'
+
+function sfInventoryJsonToPickerRaw(rows: unknown[]): unknown[] {
+  return rows.map((x) => {
+    if (!x || typeof x !== 'object') return x
+    const o = x as Record<string, unknown>
+    const rep = typeof o.repName === 'string' ? o.repName.trim() : ''
+    return { ...o, warehouse: rep || 'Retail' }
+  })
+}
+
+const B2B_LINE_PICKER_COPY = {
+  productPickerLabel: 'Product (retail inventory)',
+  triggerPlaceholder: 'Search or pick a retail stock line…',
+  emptyCatalogHint:
+    'No retail inventory loaded. Open Sales Force → Wholesale Inventory (or Retail Inventory), then try again.',
+  catalogGroupHeading: 'Retail / wholesale stock',
+} as const
 
 type CollectionRow = {
   id: string
@@ -63,7 +90,13 @@ type CollectionRow = {
   paidAt: string | null
   balanceGhs: number
   paymentMethod: 'momo' | 'cash' | 'bank_transfer' | 'cheque' | null
-  items: { name: string; sku?: string; qty: number; unitPriceGhs: number }[]
+  items: {
+    name: string
+    sku?: string
+    qty: number
+    unitPriceGhs: number
+    inventoryItemId?: string
+  }[]
   dueAt: string | null
   repName: string | null
   status: 'paid' | 'overdue' | 'open'
@@ -109,15 +142,8 @@ function emptyForm() {
     dueDate: '',
     repName: '',
     notes: '',
-    items: [] as DraftItem[],
+    items: [] as DtcOrderLineDraftItem[],
   }
-}
-
-type DraftItem = {
-  name: string
-  sku: string
-  qty: string
-  unitPriceGhs: string
 }
 
 export function B2bPaymentsView() {
@@ -140,6 +166,7 @@ export function B2bPaymentsView() {
   const [itemsOpen, setItemsOpen] = useState(false)
   const [itemsTitle, setItemsTitle] = useState<string>('')
   const [itemsForModal, setItemsForModal] = useState<CollectionRow['items']>([])
+  const [inventoryPickerRows, setInventoryPickerRows] = useState<DtcInventoryPickerRow[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -170,6 +197,27 @@ export function B2bPaymentsView() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    if (!createOpen && !editOpen) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch('/api/sf/inventory', { credentials: 'include', cache: 'no-store' })
+        if (cancelled || !res.ok) return
+        const j = (await res.json()) as { items?: unknown[] }
+        const raw = Array.isArray(j.items) ? j.items : []
+        if (!cancelled) {
+          setInventoryPickerRows(normalizeDtcInventoryPickerRows(sfInventoryJsonToPickerRaw(raw)))
+        }
+      } catch {
+        if (!cancelled) setInventoryPickerRows([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [createOpen, editOpen])
 
   const filtered = useMemo(() => {
     const raw = query.trim().toLowerCase()
@@ -223,15 +271,25 @@ export function B2bPaymentsView() {
       notes: c.notes ?? '',
       items:
         c.items && c.items.length > 0
-          ? c.items.map(
-              (it) =>
-                ({
-                  name: it.name,
-                  sku: it.sku ?? '',
-                  qty: String(it.qty),
-                  unitPriceGhs: String(it.unitPriceGhs),
-                }) satisfies DraftItem,
-            )
+          ? c.items.map((it) => {
+              const idFromOrder = String(it.inventoryItemId ?? '').trim()
+              const pickFromStored =
+                idFromOrder && /^[a-f\d]{24}$/i.test(idFromOrder) ? idFromOrder : undefined
+              const skuUp = String(it.sku ?? '').trim().toUpperCase()
+              const row = skuUp
+                ? inventoryPickerRows.find((r) => r.sku.toUpperCase() === skuUp)
+                : undefined
+              return {
+                pick: pickFromStored ?? row?.id ?? INV_PICK_CUSTOM,
+                sku: it.sku ?? '',
+                name: it.name ?? '',
+                qty: String(it.qty ?? 1),
+                unitPrice: String(it.unitPriceGhs ?? ''),
+                ...(idFromOrder && /^[a-f\d]{24}$/i.test(idFromOrder)
+                  ? { inventoryItemId: idFromOrder }
+                  : {}),
+              }
+            })
           : [],
     })
     setEditOpen(true)
@@ -272,12 +330,18 @@ export function B2bPaymentsView() {
       .map((it) => {
         const name = it.name.trim()
         const qty = Number.parseInt(it.qty, 10)
-        const unitPriceGhs = Number.parseFloat(it.unitPriceGhs)
-        const sku = it.sku.trim()
+        const unitPriceGhs = Number.parseFloat(it.unitPrice)
+        const invId = inventoryItemIdForOrderPayload(it)
         if (!name) return null
         if (!Number.isFinite(qty) || qty <= 0) return null
         if (!Number.isFinite(unitPriceGhs) || unitPriceGhs < 0) return null
-        return { name, qty, unitPriceGhs, sku: sku ? sku : undefined }
+        return {
+          name,
+          qty,
+          unitPriceGhs,
+          ...(it.sku.trim() ? { sku: it.sku.trim() } : {}),
+          ...(invId ? { inventoryItemId: invId } : {}),
+        }
       })
       .filter((x): x is NonNullable<typeof x> => Boolean(x))
     setCreating(true)
@@ -305,13 +369,16 @@ export function B2bPaymentsView() {
         toast.error('Session expired. Sign in again.')
         return
       }
-      if (!res.ok) throw new Error('Create failed')
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(data.error ?? 'Create failed')
+      }
       toast.success('Invoice saved')
       setCreateOpen(false)
       setForm(emptyForm())
       void load()
-    } catch {
-      toast.error('Could not save invoice')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save invoice')
     } finally {
       setCreating(false)
     }
@@ -347,12 +414,18 @@ export function B2bPaymentsView() {
       .map((it) => {
         const name = it.name.trim()
         const qty = Number.parseInt(it.qty, 10)
-        const unitPriceGhs = Number.parseFloat(it.unitPriceGhs)
-        const sku = it.sku.trim()
+        const unitPriceGhs = Number.parseFloat(it.unitPrice)
+        const invId = inventoryItemIdForOrderPayload(it)
         if (!name) return null
         if (!Number.isFinite(qty) || qty <= 0) return null
         if (!Number.isFinite(unitPriceGhs) || unitPriceGhs < 0) return null
-        return { name, qty, unitPriceGhs, sku: sku ? sku : undefined }
+        return {
+          name,
+          qty,
+          unitPriceGhs,
+          ...(it.sku.trim() ? { sku: it.sku.trim() } : {}),
+          ...(invId ? { inventoryItemId: invId } : {}),
+        }
       })
       .filter((x): x is NonNullable<typeof x> => Boolean(x))
     setEditing(true)
@@ -381,13 +454,16 @@ export function B2bPaymentsView() {
         toast.error('Session expired. Sign in again.')
         return
       }
-      if (!res.ok) throw new Error('Update failed')
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(data.error ?? 'Update failed')
+      }
       toast.success('Updated')
       setEditOpen(false)
       setEditId(null)
       void load()
-    } catch {
-      toast.error('Could not update')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update')
     } finally {
       setEditing(false)
     }
@@ -790,7 +866,7 @@ export function B2bPaymentsView() {
                           onClick={() =>
                             setForm((f) => ({
                               ...f,
-                              items: [...f.items, { name: '', sku: '', qty: '1', unitPriceGhs: '' }],
+                              items: [...f.items, emptyDraftItem()],
                             }))
                           }
                         >
@@ -799,99 +875,40 @@ export function B2bPaymentsView() {
                       </div>
                       <div className="space-y-3">
                         {form.items.map((it, idx) => (
-                          <div key={idx} className="rounded-lg border border-border p-3">
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <div className="space-y-2">
-                                <Label htmlFor={`b2b-item-name-${idx}`}>Product</Label>
-                                <Input
-                                  id={`b2b-item-name-${idx}`}
-                                  value={it.name}
-                                  onChange={(e) =>
-                                    setForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], name: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                  placeholder="Gelos Charcoal Toothpaste"
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor={`b2b-item-sku-${idx}`}>SKU (optional)</Label>
-                                <Input
-                                  id={`b2b-item-sku-${idx}`}
-                                  value={it.sku}
-                                  onChange={(e) =>
-                                    setForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], sku: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                  placeholder="GLO-CHAR-100"
-                                />
-                              </div>
-                            </div>
-                            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                              <div className="space-y-2">
-                                <Label htmlFor={`b2b-item-qty-${idx}`}>Qty</Label>
-                                <Input
-                                  id={`b2b-item-qty-${idx}`}
-                                  type="number"
-                                  inputMode="numeric"
-                                  min={1}
-                                  step={1}
-                                  value={it.qty}
-                                  onChange={(e) =>
-                                    setForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], qty: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor={`b2b-item-unit-${idx}`}>Unit price (GHS)</Label>
-                                <Input
-                                  id={`b2b-item-unit-${idx}`}
-                                  type="number"
-                                  inputMode="decimal"
-                                  min={0}
-                                  step="0.01"
-                                  value={it.unitPriceGhs}
-                                  onChange={(e) =>
-                                    setForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], unitPriceGhs: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                />
-                              </div>
-                              <div className="flex items-end justify-end">
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-8 w-8 text-destructive hover:text-destructive"
-                                  onClick={() =>
-                                    setForm((f) => ({
-                                      ...f,
-                                      items: f.items.filter((_, i) => i !== idx),
-                                    }))
-                                  }
-                                  aria-label="Remove item"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
+                          <DtcOrderLineItemFields
+                            key={idx}
+                            idx={idx}
+                            item={it}
+                            catalog={inventoryPickerRows}
+                            idPrefix="b2b-create"
+                            pickerCopy={B2B_LINE_PICKER_COPY}
+                            onPickChange={(i, value) =>
+                              setForm((f) => ({
+                                ...f,
+                                items: f.items.map((row, j) =>
+                                  j === i ? applyInventoryPick(row, value, inventoryPickerRows) : row,
+                                ),
+                              }))
+                            }
+                            onItemPatch={(i, patch) =>
+                              setForm((f) => ({
+                                ...f,
+                                items: f.items.map((row, j) => (j === i ? { ...row, ...patch } : row)),
+                              }))
+                            }
+                            onRemove={(i) =>
+                              setForm((f) => ({
+                                ...f,
+                                items: f.items.filter((_, j) => j !== i),
+                              }))
+                            }
+                            disableRemove={false}
+                          />
                         ))}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Items saved here will show via the eye icon in the table.
+                        Pick from retail / wholesale stock to reduce on-hand when the invoice is saved. Manual
+                        lines do not move inventory. Items also show via the eye icon in the table.
                       </p>
                     </div>
                   </div>
@@ -1281,7 +1298,7 @@ export function B2bPaymentsView() {
                     onClick={() =>
                       setEditForm((f) => ({
                         ...f,
-                        items: [...f.items, { name: '', sku: '', qty: '1', unitPriceGhs: '' }],
+                        items: [...f.items, emptyDraftItem()],
                       }))
                     }
                   >
@@ -1290,97 +1307,40 @@ export function B2bPaymentsView() {
                 </div>
                 <div className="space-y-3">
                   {editForm.items.map((it, idx) => (
-                    <div key={idx} className="rounded-lg border border-border p-3">
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <div className="space-y-2">
-                          <Label htmlFor={`edit-b2b-item-name-${idx}`}>Product</Label>
-                          <Input
-                            id={`edit-b2b-item-name-${idx}`}
-                            value={it.name}
-                            onChange={(e) =>
-                              setEditForm((f) => {
-                                const items = [...f.items]
-                                items[idx] = { ...items[idx], name: e.target.value }
-                                return { ...f, items }
-                              })
-                            }
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor={`edit-b2b-item-sku-${idx}`}>SKU (optional)</Label>
-                          <Input
-                            id={`edit-b2b-item-sku-${idx}`}
-                            value={it.sku}
-                            onChange={(e) =>
-                              setEditForm((f) => {
-                                const items = [...f.items]
-                                items[idx] = { ...items[idx], sku: e.target.value }
-                                return { ...f, items }
-                              })
-                            }
-                          />
-                        </div>
-                      </div>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                        <div className="space-y-2">
-                          <Label htmlFor={`edit-b2b-item-qty-${idx}`}>Qty</Label>
-                          <Input
-                            id={`edit-b2b-item-qty-${idx}`}
-                            type="number"
-                            inputMode="numeric"
-                            min={1}
-                            step={1}
-                            value={it.qty}
-                            onChange={(e) =>
-                              setEditForm((f) => {
-                                const items = [...f.items]
-                                items[idx] = { ...items[idx], qty: e.target.value }
-                                return { ...f, items }
-                              })
-                            }
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor={`edit-b2b-item-unit-${idx}`}>Unit price (GHS)</Label>
-                          <Input
-                            id={`edit-b2b-item-unit-${idx}`}
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            step="0.01"
-                            value={it.unitPriceGhs}
-                            onChange={(e) =>
-                              setEditForm((f) => {
-                                const items = [...f.items]
-                                items[idx] = { ...items[idx], unitPriceGhs: e.target.value }
-                                return { ...f, items }
-                              })
-                            }
-                          />
-                        </div>
-                        <div className="flex items-end justify-end">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-destructive hover:text-destructive"
-                            onClick={() =>
-                              setEditForm((f) => ({
-                                ...f,
-                                items: f.items.filter((_, i) => i !== idx),
-                              }))
-                            }
-                            aria-label="Remove item"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
+                    <DtcOrderLineItemFields
+                      key={idx}
+                      idx={idx}
+                      item={it}
+                      catalog={inventoryPickerRows}
+                      idPrefix="b2b-edit"
+                      pickerCopy={B2B_LINE_PICKER_COPY}
+                      onPickChange={(i, value) =>
+                        setEditForm((f) => ({
+                          ...f,
+                          items: f.items.map((row, j) =>
+                            j === i ? applyInventoryPick(row, value, inventoryPickerRows) : row,
+                          ),
+                        }))
+                      }
+                      onItemPatch={(i, patch) =>
+                        setEditForm((f) => ({
+                          ...f,
+                          items: f.items.map((row, j) => (j === i ? { ...row, ...patch } : row)),
+                        }))
+                      }
+                      onRemove={(i) =>
+                        setEditForm((f) => ({
+                          ...f,
+                          items: f.items.filter((_, j) => j !== i),
+                        }))
+                      }
+                      disableRemove={false}
+                    />
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Items saved here will show via the eye icon in the table.
+                  Pick from retail / wholesale stock to adjust on-hand when you save. Manual lines do not move
+                  inventory. Items also show via the eye icon in the table.
                 </p>
               </div>
             </div>

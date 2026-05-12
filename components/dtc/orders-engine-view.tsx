@@ -39,8 +39,22 @@ import {
   type DtcOrderCustomerSearchHit,
 } from '@/components/dtc/dtc-order-customer-field'
 import { formatGhs, type OrderStatus } from '@/lib/dtc-orders'
+import {
+  resolveDtcCustomerIntelLedgerOrderedAtIso,
+  type DtcCustomerIntelLedgerJson,
+} from '@/lib/dtc-customer-intelligence-ledger'
 import type { DtcOrdersEngineCustomerJson } from '@/lib/dtc-orders-engine-customer-sheet'
 import type { CustomerRow } from '@/components/dtc/customer-intelligence-view'
+import {
+  applyInventoryPick,
+  DtcOrderLineItemFields,
+  emptyDraftItem,
+  INV_PICK_CUSTOM,
+  inventoryItemIdForOrderPayload,
+  normalizeDtcInventoryPickerRows,
+  type DtcInventoryPickerRow,
+  type DtcOrderLineDraftItem,
+} from '@/components/dtc/dtc-order-line-item-fields'
 
 type OrderRow = {
   id: string
@@ -51,7 +65,13 @@ type OrderRow = {
   customerLocation: string
   channel: string
   paymentMethod: 'cash' | 'momo' | 'card' | 'bank_transfer' | 'pay_on_delivery'
-  items: { sku?: string; name: string; qty: number; unitPrice: number }[]
+  items: {
+    sku?: string
+    inventoryItemId?: string
+    name: string
+    qty: number
+    unitPrice: number
+  }[]
   discountGhs: number
   totalAmount: number
   currency: 'GHS'
@@ -69,6 +89,8 @@ const PAYMENT_METHODS = [
   { value: 'pay_on_delivery', label: 'Pay on delivery' },
 ] as const
 
+type PaymentMethod = (typeof PAYMENT_METHODS)[number]['value']
+
 type OrdersSortKey = 'newest' | 'oldest' | 'totalHigh' | 'customerAZ' | 'status' | 'channel'
 
 function normSortText(v: string | undefined | null) {
@@ -78,14 +100,57 @@ function normSortText(v: string | undefined | null) {
     .toLowerCase()
 }
 
-type PaymentMethod = (typeof PAYMENT_METHODS)[number]['value']
-
-type DraftItem = {
-  sku: string
-  name: string
-  qty: string
-  unitPrice: string
+function coerceLedgerPaymentMethod(raw: string): PaymentMethod {
+  const v = String(raw ?? '').toLowerCase().trim()
+  if (PAYMENT_METHODS.some((x) => x.value === v)) return v as PaymentMethod
+  if (v === 'mobile money') return 'momo'
+  return 'pay_on_delivery'
 }
+
+function ledgerDeliveryToOrderStatus(s: string): OrderStatus {
+  const t = String(s ?? '').toLowerCase()
+  if (t.includes('fulfill')) return 'fulfilled'
+  if (t.includes('pending')) return 'pending_payment'
+  return 'processing'
+}
+
+/** Channel from mirrored Orders Engine rows (`remarks` contains `Orders Engine · …`). */
+function channelFromLedgerRemarks(remarks: string): string {
+  const m = String(remarks ?? '').match(/Orders Engine ·\s*(.+)$/i)
+  if (m?.[1]) {
+    const c = m[1].trim()
+    if ((CHANNELS as readonly string[]).includes(c)) return c
+  }
+  return 'Other'
+}
+
+function ledgerRowToOrderRow(r: DtcCustomerIntelLedgerJson): OrderRow {
+  const ordAt = resolveDtcCustomerIntelLedgerOrderedAtIso(r)
+  return {
+    id: `ledger:${r.id}`,
+    orderNumber: String(r.orderNumber ?? ''),
+    customer: r.customerName ?? '',
+    customerPhone: String(r.phoneNumber ?? ''),
+    customerEmail: '',
+    customerLocation: String(r.location ?? ''),
+    channel: channelFromLedgerRemarks(r.remarks),
+    paymentMethod: coerceLedgerPaymentMethod(r.paymentMethod),
+    items: (r.items ?? []).map((it) => ({
+      ...(it.sku ? { sku: String(it.sku) } : {}),
+      name: it.name,
+      qty: it.qty,
+      unitPrice: it.unitPrice,
+    })),
+    discountGhs: 0,
+    totalAmount: Number(r.amountToCollectGhs ?? 0) || 0,
+    currency: 'GHS',
+    status: ledgerDeliveryToOrderStatus(r.deliveryStatus),
+    orderedAt: ordAt,
+    createdAt: ordAt,
+  }
+}
+
+type DraftItem = DtcOrderLineDraftItem
 
 type CiAddRowForm = {
   date: string
@@ -182,6 +247,7 @@ function orderStatusBadge(status: OrderStatus) {
 
 export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-engine' | 'customer-intelligence' } = {}) {
   const [orders, setOrders] = useState<OrderRow[]>([])
+  const [ciLedgerRows, setCiLedgerRows] = useState<DtcCustomerIntelLedgerJson[]>([])
   const [ordersTotalCount, setOrdersTotalCount] = useState<number | null>(null)
   const [intelAgg, setIntelAgg] = useState<CustomerIntelAgg | null>(null)
   const [ciSegments, setCiSegments] = useState<{
@@ -196,7 +262,6 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
   const [ciAtRisk, setCiAtRisk] = useState<number | null>(null)
   const [sheetCustomers, setSheetCustomers] = useState<DtcOrdersEngineCustomerJson[]>([])
   const [intelUniqueCustomers, setIntelUniqueCustomers] = useState<number | null>(null)
-  const [intelOrdersByKey, setIntelOrdersByKey] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [importingCustomers, setImportingCustomers] = useState(false)
   const [filter, setFilter] = useState('')
@@ -256,7 +321,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
     paymentMethod: 'momo' as PaymentMethod,
     status: 'processing' as OrderStatus,
     discountGhs: '',
-    items: [{ sku: '', name: '', qty: '1', unitPrice: '' } satisfies DraftItem],
+    items: [emptyDraftItem()],
   })
   const [form, setForm] = useState({
     customer: '',
@@ -268,22 +333,23 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
     paymentMethod: 'momo' as PaymentMethod,
     status: 'processing' as OrderStatus,
     discountGhs: '',
-    items: [
-      { sku: '', name: '', qty: '1', unitPrice: '' } satisfies DraftItem,
-    ],
+    items: [emptyDraftItem()],
   })
+  const [inventoryPickerRows, setInventoryPickerRows] = useState<DtcInventoryPickerRow[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [ordersRes, sheetRes, customersRes, ledgerRes] = await Promise.all([
-        fetch('/api/dtc/orders', { credentials: 'include' }),
+      const [ordersRes, sheetRes, customersRes, ledgerRes, invRes] = await Promise.all([
+        fetch('/api/dtc/orders', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/dtc/orders-engine/customers', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/dtc/customers', { credentials: 'include', cache: 'no-store' }),
         fetch('/api/dtc/customer-intelligence', { credentials: 'include', cache: 'no-store' }),
+        fetch('/api/dtc/inventory', { credentials: 'include', cache: 'no-store' }),
       ])
       if (ordersRes.status === 401 || sheetRes.status === 401 || customersRes.status === 401) {
         toast.error('Session expired. Sign in again.')
+        setCiLedgerRows([])
         return
       }
       if (!ordersRes.ok) {
@@ -301,6 +367,29 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
         setSheetCustomers(rows)
       } else {
         setSheetCustomers([])
+      }
+
+      let ledgerRows: DtcCustomerIntelLedgerJson[] = []
+      if (ledgerRes.ok) {
+        try {
+          const ledgerJson = (await ledgerRes.json()) as { rows?: DtcCustomerIntelLedgerJson[] }
+          ledgerRows = Array.isArray(ledgerJson.rows) ? ledgerJson.rows : []
+        } catch {
+          ledgerRows = []
+        }
+      }
+      setCiLedgerRows(ledgerRows)
+
+      if (invRes.ok) {
+        try {
+          const invJson = (await invRes.json()) as { items?: unknown[] }
+          const raw = Array.isArray(invJson.items) ? invJson.items : []
+          setInventoryPickerRows(normalizeDtcInventoryPickerRows(raw))
+        } catch {
+          setInventoryPickerRows([])
+        }
+      } else {
+        setInventoryPickerRows([])
       }
 
       if (customersRes.ok) {
@@ -358,66 +447,38 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
           })),
         )
 
-        // Total orders should represent "how many order rows exist" in Customer Intelligence ledger.
-        // (each ledger row = 1 order, including duplicates).
+        // Ledger: unique customers (by phone / name key) and returned-line count for the KPI strip.
         let ledgerOrders: number | null = null
         let uniqueCustomersByPhone: number | null = null
         let ledgerReturnedCount: number | null = null
-        if (ledgerRes.ok) {
-          try {
-            const ledgerJson = (await ledgerRes.json()) as {
-              rows?: Array<{
-                phoneNumber?: string
-                customerName?: string
-                deliveryStatus?: string
-                remarks?: string
-                additionalRemarks?: string
-              }>
-            }
-            if (Array.isArray(ledgerJson.rows)) {
-              ledgerOrders = ledgerJson.rows.length
-              const norm = (p: string) => p.replace(/[^\d+]/g, '').trim()
-              const orderCounts: Record<string, number> = {}
-              const keys = new Set(
-                ledgerJson.rows.map((r) => {
-                  const p = norm(String(r.phoneNumber ?? ''))
-                  const k = p ? `p:${p}` : `n:${String(r.customerName ?? '').trim().toLowerCase()}`
-                  orderCounts[k] = (orderCounts[k] ?? 0) + 1
-                  return k
-                }),
-              )
-              uniqueCustomersByPhone = keys.size
-              setIntelOrdersByKey(orderCounts)
+        if (ledgerRows.length > 0) {
+          ledgerOrders = ledgerRows.length
+          const norm = (p: string) => p.replace(/[^\d+]/g, '').trim()
+          const keys = new Set(
+            ledgerRows.map((r) => {
+              const p = norm(String(r.phoneNumber ?? ''))
+              return p ? `p:${p}` : `n:${String(r.customerName ?? '').trim().toLowerCase()}`
+            }),
+          )
+          uniqueCustomersByPhone = keys.size
 
-              const isReturnedish = (s: string) => {
-                const t = s.trim().toLowerCase()
-                return t.includes('returned') || t.includes('return')
-              }
-              ledgerReturnedCount = ledgerJson.rows.reduce((s, r) => {
-                const hit =
-                  isReturnedish(String(r.deliveryStatus ?? '')) ||
-                  isReturnedish(String(r.remarks ?? '')) ||
-                  isReturnedish(String(r.additionalRemarks ?? ''))
-                return s + (hit ? 1 : 0)
-              }, 0)
-            } else {
-              ledgerOrders = null
-              uniqueCustomersByPhone = null
-              ledgerReturnedCount = null
-              setIntelOrdersByKey({})
-            }
-          } catch {
-            ledgerOrders = null
-            uniqueCustomersByPhone = null
-            ledgerReturnedCount = null
-            setIntelOrdersByKey({})
+          const isReturnedish = (s: string) => {
+            const t = s.trim().toLowerCase()
+            return t.includes('returned') || t.includes('return')
           }
+          ledgerReturnedCount = ledgerRows.reduce((s, r) => {
+            const hit =
+              isReturnedish(String(r.deliveryStatus ?? '')) ||
+              isReturnedish(String(r.remarks ?? '')) ||
+              isReturnedish(String(r.additionalRemarks ?? ''))
+            return s + (hit ? 1 : 0)
+          }, 0)
         }
 
         setIntelAgg({
           ...baseAgg,
-          totalOrders:
-            (ledgerOrders ?? baseAgg.totalOrders) + (Number.isFinite(ordersCount) ? ordersCount : 0),
+          /** Canonical sell-out order count from `dtc_orders` (mirrored ledger rows are not added again). */
+          totalOrders: ordersCount,
           returnedFormatted:
             ledgerReturnedCount && ledgerReturnedCount > 0
               ? ledgerReturnedCount.toLocaleString()
@@ -427,7 +488,6 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
       } else {
         setIntelAgg(null)
         setIntelUniqueCustomers(null)
-        setIntelOrdersByKey({})
         setCiSegments(null)
         setCiCustomerCount(null)
         setCiAvgTotalBilled(null)
@@ -436,10 +496,11 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
       }
     } catch {
       toast.error('Could not load orders')
+      setInventoryPickerRows([])
+      setCiLedgerRows([])
       setSheetCustomers([])
       setIntelAgg(null)
       setIntelUniqueCustomers(null)
-      setIntelOrdersByKey({})
       setOrdersTotalCount(null)
       setCiSegments(null)
       setCiCustomerCount(null)
@@ -455,9 +516,40 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
     void load()
   }, [load])
 
+  useEffect(() => {
+    if (!dialogOpen && !editOpen) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch('/api/dtc/inventory', { credentials: 'include', cache: 'no-store' })
+        if (cancelled || !res.ok) return
+        const invJson = (await res.json()) as { items?: unknown[] }
+        const raw = Array.isArray(invJson.items) ? invJson.items : []
+        if (!cancelled) setInventoryPickerRows(normalizeDtcInventoryPickerRows(raw))
+      } catch {
+        if (!cancelled) setInventoryPickerRows([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [dialogOpen, editOpen])
+
+  const mergedEngineOrders = useMemo((): OrderRow[] => {
+    const ledgerOrderNumbers = new Set(
+      ciLedgerRows.map((r) => String(r.orderNumber ?? '').trim()).filter(Boolean),
+    )
+    const fromLedger = ciLedgerRows.map(ledgerRowToOrderRow)
+    const fromMongo = orders.filter((o) => {
+      const on = String(o.orderNumber ?? '').trim()
+      return !on || !ledgerOrderNumbers.has(on)
+    })
+    return [...fromLedger, ...fromMongo]
+  }, [orders, ciLedgerRows])
+
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase()
-    const rows = orders.filter((o) => {
+    const rows = mergedEngineOrders.filter((o) => {
       if (!q) return true
       return (
         o.orderNumber.toLowerCase().includes(q) ||
@@ -505,7 +597,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
     })
 
     return rows
-  }, [orders, filter, sortBy])
+  }, [mergedEngineOrders, filter, sortBy])
 
   type EffectiveSheetRow = DtcOrdersEngineCustomerJson & {
     lastOrderId?: string
@@ -533,14 +625,30 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
       map.set(keyFor(c.customerName ?? '', c.phoneNumber ?? ''), { ...c })
     }
 
-    // "Merge" means: new orders should update/insert into the customer sheet list.
-    // We treat each order as +1 totalOrders, and add the order total to billed/collected.
-    for (const o of orders) {
-      const k = keyFor(o.customer ?? '', o.customerPhone ?? '')
+    const ledgerOrderNumbers = new Set(
+      ciLedgerRows.map((r) => String(r.orderNumber ?? '').trim()).filter(Boolean),
+    )
+
+    const applyTxn = (
+      customerName: string,
+      phone: string,
+      location: string,
+      orderedAtStr: string,
+      billedDelta: number,
+      collectedDelta: number,
+      orderNumber: string,
+      channel: string,
+      paymentDisplay: string,
+      itemsCount: number,
+      lineTotal: number,
+      statusForBadge: OrderStatus,
+    ) => {
+      const k = keyFor(customerName, phone)
       const existing = map.get(k)
-      const orderDate = new Date(o.orderedAt)
+      const orderDate = new Date(orderedAtStr)
       const orderYmd = ymd(orderDate)
-      const delta = Number(o.totalAmount ?? 0)
+      const bd = Number.isFinite(billedDelta) ? billedDelta : 0
+      const cd = Number.isFinite(collectedDelta) ? collectedDelta : 0
       const orderAtMs = !Number.isNaN(orderDate.getTime()) ? orderDate.getTime() : 0
 
       if (existing) {
@@ -552,55 +660,100 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
           !last || (orderYmd && last < orderYmd) ? orderYmd : last
         const existingOrderMs = existing.lastOrderAt ? new Date(existing.lastOrderAt).getTime() : 0
         const shouldReplaceLastOrder =
-          !existing.lastOrderAt || (Number.isFinite(orderAtMs) && orderAtMs >= (Number.isFinite(existingOrderMs) ? existingOrderMs : 0))
+          !existing.lastOrderAt ||
+          (Number.isFinite(orderAtMs) &&
+            orderAtMs >= (Number.isFinite(existingOrderMs) ? existingOrderMs : 0))
 
         map.set(k, {
           ...existing,
-          customerName: existing.customerName || o.customer || '',
-          phoneNumber: existing.phoneNumber || o.customerPhone || '',
-          location: existing.location || o.customerLocation || '',
+          customerName: existing.customerName || customerName || '',
+          phoneNumber: existing.phoneNumber || phone || '',
+          location: existing.location || location || '',
           totalOrders: Number(existing.totalOrders ?? 0) + 1,
-          totalBilledGhs: Number(existing.totalBilledGhs ?? 0) + (Number.isFinite(delta) ? delta : 0),
-          totalCollectedGhs: Number(existing.totalCollectedGhs ?? 0) + (Number.isFinite(delta) ? delta : 0),
+          totalBilledGhs: Number(existing.totalBilledGhs ?? 0) + bd,
+          totalCollectedGhs: Number(existing.totalCollectedGhs ?? 0) + cd,
           firstOrderDate: nextFirst || '',
           lastOrderDate: nextLast || '',
           ...(shouldReplaceLastOrder
             ? {
-                lastOrderId: o.orderNumber,
-                lastOrderChannel: o.channel,
-                lastOrderPayment: o.paymentMethod,
-                lastOrderItems: o.items?.length ?? 0,
-                lastOrderTotal: Number.isFinite(delta) ? delta : 0,
-                lastOrderStatus: o.status,
-                lastOrderAt: o.orderedAt,
+                lastOrderId: orderNumber,
+                lastOrderChannel: channel,
+                lastOrderPayment: paymentDisplay,
+                lastOrderItems: itemsCount,
+                lastOrderTotal: Number.isFinite(lineTotal) ? lineTotal : bd,
+                lastOrderStatus: statusForBadge,
+                lastOrderAt: orderedAtStr,
               }
             : {}),
         })
       } else {
         map.set(k, {
           id: `order:${k}`,
-          customerName: o.customer ?? '',
-          phoneNumber: o.customerPhone ?? '',
+          customerName: customerName ?? '',
+          phoneNumber: phone ?? '',
           totalOrders: 1,
-          totalBilledGhs: Number.isFinite(delta) ? delta : 0,
-          totalCollectedGhs: Number.isFinite(delta) ? delta : 0,
-          location: o.customerLocation ?? '',
+          totalBilledGhs: bd,
+          totalCollectedGhs: cd,
+          location: location ?? '',
           returned: 0,
           firstOrderDate: orderYmd || '',
           lastOrderDate: orderYmd || '',
-          lastOrderId: o.orderNumber,
-          lastOrderChannel: o.channel,
-          lastOrderPayment: o.paymentMethod,
-          lastOrderItems: o.items?.length ?? 0,
-          lastOrderTotal: Number.isFinite(delta) ? delta : 0,
-          lastOrderStatus: o.status,
-          lastOrderAt: o.orderedAt,
+          lastOrderId: orderNumber,
+          lastOrderChannel: channel,
+          lastOrderPayment: paymentDisplay,
+          lastOrderItems: itemsCount,
+          lastOrderTotal: Number.isFinite(lineTotal) ? lineTotal : bd,
+          lastOrderStatus: statusForBadge,
+          lastOrderAt: orderedAtStr,
         })
       }
     }
 
+    // Customer Intelligence ledger (same source as /api/dtc/customer-intelligence); then dtc_orders not already mirrored.
+    for (const r of ciLedgerRows) {
+      const ordAt = resolveDtcCustomerIntelLedgerOrderedAtIso(r)
+      const billed = Number(r.amountToCollectGhs ?? 0) || 0
+      const collected = Number(r.totalCollectedGhs ?? 0) || 0
+      const itemsCount =
+        (r.items?.length ?? 0) || (String(r.itemsOrdered ?? '').trim() ? 1 : 0)
+      applyTxn(
+        r.customerName ?? '',
+        r.phoneNumber ?? '',
+        r.location ?? '',
+        ordAt,
+        billed,
+        collected,
+        String(r.orderNumber ?? ''),
+        channelFromLedgerRemarks(r.remarks),
+        coerceLedgerPaymentMethod(r.paymentMethod),
+        itemsCount,
+        billed,
+        ledgerDeliveryToOrderStatus(r.deliveryStatus),
+      )
+    }
+
+    for (const o of orders) {
+      const on = String(o.orderNumber ?? '').trim()
+      if (on && ledgerOrderNumbers.has(on)) continue
+      const delta = Number(o.totalAmount ?? 0)
+      applyTxn(
+        o.customer ?? '',
+        o.customerPhone ?? '',
+        o.customerLocation ?? '',
+        o.orderedAt,
+        delta,
+        delta,
+        o.orderNumber,
+        o.channel,
+        o.paymentMethod,
+        o.items?.length ?? 0,
+        delta,
+        o.status,
+      )
+    }
+
     return Array.from(map.values())
-  }, [orders, sheetCustomers])
+  }, [orders, sheetCustomers, ciLedgerRows])
 
   const filteredSheetCustomers = useMemo(() => {
     const q = filter.trim().toLowerCase()
@@ -754,13 +907,9 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
   }, [effectiveSheetCustomers, sheetTotals.totalBilledGhs, sheetTotals.totalCustomers])
 
   const ordersForSheetRow = useCallback(
-    (c: Pick<DtcOrdersEngineCustomerJson, 'phoneNumber' | 'customerName' | 'totalOrders'>) => {
-      const normalizePhone = (p: string) => p.replace(/[^\d+]/g, '').trim()
-      const p = normalizePhone(c.phoneNumber ?? '')
-      const k = p ? `p:${p}` : `n:${normSortText(c.customerName)}`
-      return intelOrdersByKey[k] ?? Number(c.totalOrders ?? 0) ?? 0
-    },
-    [intelOrdersByKey],
+    (c: Pick<DtcOrdersEngineCustomerJson, 'phoneNumber' | 'customerName' | 'totalOrders'>) =>
+      Number(c.totalOrders ?? 0) || 0,
+    [],
   )
 
   const computedSubtotal = useMemo(() => {
@@ -935,12 +1084,16 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
       return
     }
     const items = form.items
-      .map((i) => ({
-        sku: i.sku.trim() ? i.sku.trim() : undefined,
-        name: i.name.trim(),
-        qty: Number.parseInt(i.qty, 10),
-        unitPrice: Number.parseFloat(i.unitPrice),
-      }))
+      .map((i) => {
+        const invId = inventoryItemIdForOrderPayload(i)
+        return {
+          ...(i.sku.trim() ? { sku: i.sku.trim() } : {}),
+          ...(invId ? { inventoryItemId: invId } : {}),
+          name: i.name.trim(),
+          qty: Number.parseInt(i.qty, 10),
+          unitPrice: Number.parseFloat(i.unitPrice),
+        }
+      })
       .filter((i) => i.name)
     if (items.length === 0) {
       toast.error('Add at least one item name')
@@ -999,7 +1152,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
         paymentMethod: 'momo',
         status: 'processing',
         discountGhs: '',
-        items: [{ sku: '', name: '', qty: '1', unitPrice: '' }],
+        items: [emptyDraftItem()],
       })
       await load()
     } catch (err) {
@@ -1088,13 +1241,26 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
       status: o.status,
       discountGhs: o.discountGhs ? String(o.discountGhs) : '',
       items: (o.items ?? []).length
-        ? o.items.map((it) => ({
-            sku: it.sku ?? '',
-            name: it.name ?? '',
-            qty: String(it.qty ?? 1),
-            unitPrice: String(it.unitPrice ?? ''),
-          }))
-        : [{ sku: '', name: '', qty: '1', unitPrice: '' }],
+        ? o.items.map((it) => {
+            const idFromOrder = String(it.inventoryItemId ?? '').trim()
+            const pickFromStored =
+              idFromOrder && /^[a-f\d]{24}$/i.test(idFromOrder) ? idFromOrder : undefined
+            const skuUp = String(it.sku ?? '').trim().toUpperCase()
+            const row = skuUp
+              ? inventoryPickerRows.find((r) => r.sku.toUpperCase() === skuUp)
+              : undefined
+            return {
+              pick: pickFromStored ?? row?.id ?? INV_PICK_CUSTOM,
+              sku: it.sku ?? '',
+              name: it.name ?? '',
+              qty: String(it.qty ?? 1),
+              unitPrice: String(it.unitPrice ?? ''),
+              ...(idFromOrder && /^[a-f\d]{24}$/i.test(idFromOrder)
+                ? { inventoryItemId: idFromOrder }
+                : {}),
+            }
+          })
+        : [emptyDraftItem()],
     })
     setEditOpen(true)
   }
@@ -1121,12 +1287,16 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
     }
 
     const items = editForm.items
-      .map((i) => ({
-        sku: i.sku.trim() ? i.sku.trim() : undefined,
-        name: i.name.trim(),
-        qty: Number.parseInt(i.qty, 10),
-        unitPrice: Number.parseFloat(i.unitPrice),
-      }))
+      .map((i) => {
+        const invId = inventoryItemIdForOrderPayload(i)
+        return {
+          ...(i.sku.trim() ? { sku: i.sku.trim() } : {}),
+          ...(invId ? { inventoryItemId: invId } : {}),
+          name: i.name.trim(),
+          qty: Number.parseInt(i.qty, 10),
+          unitPrice: Number.parseFloat(i.unitPrice),
+        }
+      })
       .filter((i) => i.name)
     if (items.length === 0) {
       toast.error('Add at least one item name')
@@ -1192,7 +1362,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
   }
 
   function handleExport() {
-    if (orders.length === 0) {
+    if (mergedEngineOrders.length === 0) {
       toast.message('No orders to export yet')
       return
     }
@@ -1213,7 +1383,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
     ]
     const lines = [
       header.join(','),
-      ...orders.map((o) =>
+      ...mergedEngineOrders.map((o) =>
         [
           o.orderNumber,
           `"${o.customer.replace(/"/g, '""')}"`,
@@ -1267,7 +1437,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
               className="gap-1.5"
               type="button"
               onClick={handleExport}
-              disabled={loading || orders.length === 0}
+              disabled={loading || mergedEngineOrders.length === 0}
             >
               <Download className="h-4 w-4" />
               Export
@@ -1403,9 +1573,220 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                       </DialogDescription>
                     </DialogHeader>
                     <div className="min-h-0 min-w-0 flex-1 flex-basis-0 overflow-y-auto overflow-x-hidden px-6 py-4">
-                      {/* (dialog body unchanged) */}
                       <div className="grid gap-4">
-                        {/* existing New order content lives below in this file */}
+                        <div className="space-y-2">
+                          <Label htmlFor="new-customer">Customer</Label>
+                          <DtcOrderCustomerField
+                            id="new-customer"
+                            value={form.customer}
+                            onChange={(customer) => setForm((f) => ({ ...f, customer }))}
+                            onPickCustomer={(hit) =>
+                              setForm((f) => ({ ...f, ...customerSearchToFormFields(hit) }))
+                            }
+                            required
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Search by name, phone, email, or location from Customer Intelligence, or type a
+                            new name.
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label htmlFor="new-customer-phone">Phone</Label>
+                            <Input
+                              id="new-customer-phone"
+                              value={form.customerPhone}
+                              onChange={(e) =>
+                                setForm((f) => ({ ...f, customerPhone: e.target.value }))
+                              }
+                              placeholder="+233 …"
+                              autoComplete="tel"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="new-customer-email">Email</Label>
+                            <Input
+                              id="new-customer-email"
+                              type="email"
+                              value={form.customerEmail}
+                              onChange={(e) =>
+                                setForm((f) => ({ ...f, customerEmail: e.target.value }))
+                              }
+                              placeholder="name@example.com"
+                              autoComplete="email"
+                            />
+                          </div>
+                          <div className="space-y-2 sm:col-span-2">
+                            <Label htmlFor="new-customer-location">Location</Label>
+                            <Input
+                              id="new-customer-location"
+                              value={form.customerLocation}
+                              onChange={(e) =>
+                                setForm((f) => ({ ...f, customerLocation: e.target.value }))
+                              }
+                              placeholder="City or area"
+                              autoComplete="street-address"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label htmlFor="new-orderedAt">Order date</Label>
+                            <Input
+                              id="new-orderedAt"
+                              type="datetime-local"
+                              value={form.orderedAt}
+                              onChange={(e) => setForm((f) => ({ ...f, orderedAt: e.target.value }))}
+                              required
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Payment method</Label>
+                            <Select
+                              value={form.paymentMethod}
+                              onValueChange={(v) =>
+                                setForm((f) => ({ ...f, paymentMethod: v as PaymentMethod }))
+                              }
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent className="z-[300]">
+                                {PAYMENT_METHODS.map((m) => (
+                                  <SelectItem key={m.value} value={m.value}>
+                                    {m.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Channel</Label>
+                          <Select
+                            value={form.channel}
+                            onValueChange={(v) =>
+                              setForm((f) => ({ ...f, channel: v as (typeof CHANNELS)[number] }))
+                            }
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="z-[300]">
+                              {CHANNELS.map((c) => (
+                                <SelectItem key={c} value={c}>
+                                  {c}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <Label>Order items</Label>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                setForm((f) => ({
+                                  ...f,
+                                  items: [...f.items, emptyDraftItem()],
+                                }))
+                              }
+                            >
+                              Add item
+                            </Button>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            Open the product field, search by name or SKU, then pick from DTC Inventory (name,
+                            SKU, and price fill in). Use Other (manual entry) for items not listed.
+                          </p>
+                          <div className="space-y-3">
+                            {form.items.map((it, idx) => (
+                              <DtcOrderLineItemFields
+                                key={idx}
+                                idx={idx}
+                                item={it}
+                                catalog={inventoryPickerRows}
+                                idPrefix="new"
+                                onPickChange={(i, value) =>
+                                  setForm((f) => {
+                                    const items = [...f.items]
+                                    items[i] = applyInventoryPick(items[i], value, inventoryPickerRows)
+                                    return { ...f, items }
+                                  })
+                                }
+                                onItemPatch={(i, patch) =>
+                                  setForm((f) => {
+                                    const items = [...f.items]
+                                    items[i] = { ...items[i], ...patch }
+                                    return { ...f, items }
+                                  })
+                                }
+                                onRemove={(i) =>
+                                  setForm((f) => ({
+                                    ...f,
+                                    items: f.items.filter((_, j) => j !== i),
+                                  }))
+                                }
+                                disableRemove={form.items.length === 1}
+                              />
+                            ))}
+                          </div>
+                          <div className="grid gap-4 sm:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label htmlFor="new-order-discount">Discount (GHS)</Label>
+                              <Input
+                                id="new-order-discount"
+                                inputMode="decimal"
+                                value={form.discountGhs}
+                                onChange={(e) =>
+                                  setForm((f) => ({ ...f, discountGhs: e.target.value }))
+                                }
+                                placeholder="0.00"
+                              />
+                            </div>
+                            <div className="rounded-lg bg-muted/30 px-3 py-2">
+                              <div className="flex items-center justify-between">
+                                <p className="text-xs text-muted-foreground">Subtotal</p>
+                                <p className="text-xs font-medium tabular-nums text-foreground">
+                                  {formatGhs(computedSubtotal)}
+                                </p>
+                              </div>
+                              <div className="mt-1 flex items-center justify-between">
+                                <p className="text-xs text-muted-foreground">Discount</p>
+                                <p className="text-xs font-medium tabular-nums text-foreground">
+                                  {computedDiscount > 0 ? `−${formatGhs(computedDiscount)}` : '—'}
+                                </p>
+                              </div>
+                              <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
+                                <p className="text-sm font-medium text-foreground">Total</p>
+                                <p className="text-sm font-semibold tabular-nums text-foreground">
+                                  {formatGhs(computedTotal)}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Status</Label>
+                          <Select
+                            value={form.status}
+                            onValueChange={(v) =>
+                              setForm((f) => ({ ...f, status: v as OrderStatus }))
+                            }
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="z-[300]">
+                              <SelectItem value="processing">Processing</SelectItem>
+                              <SelectItem value="pending_payment">Pending payment</SelectItem>
+                              <SelectItem value="fulfilled">Fulfilled</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
                     </div>
                     <DialogFooter className="shrink-0 gap-2 border-t bg-background px-6 py-4">
@@ -1518,7 +1899,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                           <SelectTrigger className="w-full">
                             <SelectValue />
                           </SelectTrigger>
-                          <SelectContent>
+                          <SelectContent className="z-[300]">
                             {PAYMENT_METHODS.map((m) => (
                               <SelectItem key={m.value} value={m.value}>
                                 {m.label}
@@ -1539,7 +1920,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                         <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className="z-[300]">
                           {CHANNELS.map((c) => (
                             <SelectItem key={c} value={c}>
                               {c}
@@ -1558,116 +1939,47 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                           onClick={() =>
                             setEditForm((f) => ({
                               ...f,
-                              items: [...f.items, { sku: '', name: '', qty: '1', unitPrice: '' }],
+                              items: [...f.items, emptyDraftItem()],
                             }))
                           }
                         >
                           Add item
                         </Button>
                       </div>
+                      <p className="text-xs text-muted-foreground">
+                        Open the product field, search by name or SKU, then pick from DTC Inventory. Use Other
+                        (manual entry) for items not listed.
+                      </p>
                       <div className="space-y-3">
                         {editForm.items.map((it, idx) => (
-                          <div key={idx} className="rounded-lg border border-border p-3">
-                            <div className="grid gap-3 sm:grid-cols-2">
-                              <div className="space-y-2">
-                                <Label htmlFor={`edit-item-name-${idx}`}>Item name</Label>
-                                <Input
-                                  id={`edit-item-name-${idx}`}
-                                  value={it.name}
-                                  onChange={(e) =>
-                                    setEditForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], name: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                  required={idx === 0}
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor={`edit-item-sku-${idx}`}>SKU (optional)</Label>
-                                <Input
-                                  id={`edit-item-sku-${idx}`}
-                                  value={it.sku}
-                                  onChange={(e) =>
-                                    setEditForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], sku: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                />
-                              </div>
-                            </div>
-                            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                              <div className="space-y-2">
-                                <Label htmlFor={`edit-item-qty-${idx}`}>Qty</Label>
-                                <Input
-                                  id={`edit-item-qty-${idx}`}
-                                  type="number"
-                                  inputMode="numeric"
-                                  min={1}
-                                  step={1}
-                                  value={it.qty}
-                                  onChange={(e) =>
-                                    setEditForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], qty: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                  required={idx === 0}
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <Label htmlFor={`edit-item-unit-${idx}`}>Unit price (GHS)</Label>
-                                <Input
-                                  id={`edit-item-unit-${idx}`}
-                                  type="number"
-                                  inputMode="decimal"
-                                  min={0}
-                                  step="0.01"
-                                  value={it.unitPrice}
-                                  onChange={(e) =>
-                                    setEditForm((f) => {
-                                      const items = [...f.items]
-                                      items[idx] = { ...items[idx], unitPrice: e.target.value }
-                                      return { ...f, items }
-                                    })
-                                  }
-                                  required={idx === 0}
-                                />
-                              </div>
-                              <div className="flex items-end justify-between gap-2">
-                                <div className="text-sm text-muted-foreground">
-                                  <span className="block">Line total</span>
-                                  <span className="font-medium text-foreground">
-                                    {(() => {
-                                      const q = Number.parseInt(it.qty, 10)
-                                      const u = Number.parseFloat(it.unitPrice)
-                                      if (!Number.isFinite(q) || !Number.isFinite(u)) return '—'
-                                      return formatGhs(q * u)
-                                    })()}
-                                  </span>
-                                </div>
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="icon-sm"
-                                  onClick={() =>
-                                    setEditForm((f) => ({
-                                      ...f,
-                                      items: f.items.filter((_, i) => i !== idx),
-                                    }))
-                                  }
-                                  disabled={editForm.items.length === 1}
-                                  aria-label="Remove item"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
+                          <DtcOrderLineItemFields
+                            key={idx}
+                            idx={idx}
+                            item={it}
+                            catalog={inventoryPickerRows}
+                            idPrefix="edit"
+                            onPickChange={(i, value) =>
+                              setEditForm((f) => {
+                                const items = [...f.items]
+                                items[i] = applyInventoryPick(items[i], value, inventoryPickerRows)
+                                return { ...f, items }
+                              })
+                            }
+                            onItemPatch={(i, patch) =>
+                              setEditForm((f) => {
+                                const items = [...f.items]
+                                items[i] = { ...items[i], ...patch }
+                                return { ...f, items }
+                              })
+                            }
+                            onRemove={(i) =>
+                              setEditForm((f) => ({
+                                ...f,
+                                items: f.items.filter((_, j) => j !== i),
+                              }))
+                            }
+                            disableRemove={editForm.items.length === 1}
+                          />
                         ))}
                       </div>
                       <div className="grid gap-4 sm:grid-cols-2">
@@ -1716,7 +2028,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                         <SelectTrigger className="w-full">
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className="z-[300]">
                           <SelectItem value="processing">Processing</SelectItem>
                           <SelectItem value="pending_payment">Pending payment</SelectItem>
                           <SelectItem value="fulfilled">Fulfilled</SelectItem>
@@ -1878,7 +2190,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                 <SelectTrigger id="orders-sort" className="w-full">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className="z-[300]">
                   <SelectItem value="newest">Newest first</SelectItem>
                   <SelectItem value="oldest">Oldest first</SelectItem>
                   <SelectItem value="totalHigh">Total (high first)</SelectItem>
@@ -1957,9 +2269,10 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                   {loading || intelAgg === null ? '—' : intelAgg.totalOrders.toLocaleString()}
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {intelUniqueCustomers == null
-                    ? 'Across all customers'
-                    : `${intelUniqueCustomers.toLocaleString()} unique customers (by phone)`}
+                  Sell-out orders in <span className="font-medium">dtc_orders</span>
+                  {intelUniqueCustomers != null
+                    ? ` · ${intelUniqueCustomers.toLocaleString()} ledger customers (by phone)`
+                    : ''}
                 </p>
               </Card>
               <Card className="border-l-4 border-l-cyan-600 p-5">
@@ -1995,13 +2308,95 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
           </div>
         )}
 
+        {mode === 'customer-intelligence' ? (
+          <Card className="p-0">
+            <div className="border-b border-border px-4 py-3 sm:px-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
+                Orders Engine — sell-out orders
+              </h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Live list of every order stored in the engine. The customer table below rolls these up by
+                customer (sheet + orders).
+              </p>
+              {ordersTotalCount != null && ordersTotalCount > filtered.length ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {ordersTotalCount.toLocaleString()} orders in the database; showing the{' '}
+                  {filtered.length} most recent (search and sort apply here).
+                </p>
+              ) : null}
+            </div>
+            {loading ? (
+              <div className="flex items-center justify-center gap-2 py-10 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Loading orders…
+              </div>
+            ) : filtered.length === 0 ? (
+              <p className="py-10 text-center text-sm text-muted-foreground">No sell-out orders yet.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="whitespace-nowrap">Order #</TableHead>
+                      <TableHead className="whitespace-nowrap">Customer</TableHead>
+                      <TableHead className="hidden sm:table-cell whitespace-nowrap">Phone</TableHead>
+                      <TableHead className="hidden md:table-cell whitespace-nowrap">Ordered</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Total</TableHead>
+                      <TableHead className="whitespace-nowrap">Status</TableHead>
+                      <TableHead className="hidden lg:table-cell whitespace-nowrap">Channel</TableHead>
+                      <TableHead className="w-[72px] text-right" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filtered.map((o) => (
+                      <TableRow key={o.id}>
+                        <TableCell className="font-mono text-xs whitespace-nowrap">{o.orderNumber}</TableCell>
+                        <TableCell className="font-medium whitespace-nowrap">{o.customer}</TableCell>
+                        <TableCell className="hidden sm:table-cell text-muted-foreground whitespace-nowrap">
+                          {o.customerPhone || '—'}
+                        </TableCell>
+                        <TableCell className="hidden md:table-cell text-muted-foreground whitespace-nowrap">
+                          {format(new Date(o.orderedAt), 'dd MMM yyyy')}
+                        </TableCell>
+                        <TableCell className="text-right font-medium tabular-nums whitespace-nowrap">
+                          {formatGhs(o.totalAmount)}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">
+                          {orderStatusBadge(o.status as OrderStatus)}
+                        </TableCell>
+                        <TableCell className="hidden lg:table-cell text-muted-foreground whitespace-nowrap">
+                          {o.channel}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => openViewOrder(o)}
+                            aria-label="View order"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </Card>
+        ) : null}
+
         <Card className="p-0">
           <div className="border-b border-border px-4 py-3 sm:px-6">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground">
-             
+              {mode === 'customer-intelligence' ? 'Customer rollup' : 'Customer Intelligence totals'}
             </h2>
             <p className="mt-1 text-xs text-muted-foreground">
-            
+              {mode === 'customer-intelligence'
+                ? 'Imported sheet rows merged with sell-out orders, one row per customer (by phone when available).'
+                : 'Sums every tracked customer row (same numbers as Customer Intelligence — sheet values where set, otherwise from sell-out orders).'}
             </p>
             {!loading && effectiveSheetCustomers.length > 0 ? (
               <p className="mt-2 text-xs text-muted-foreground">
@@ -2024,7 +2419,7 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select range" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="z-[300]">
                     <SelectItem value="all">All time</SelectItem>
                     <SelectItem value="7d">Last 7 days</SelectItem>
                     <SelectItem value="1m">Last 1 month</SelectItem>
@@ -2206,7 +2601,6 @@ export function OrdersEngineView({ mode = 'orders-engine' }: { mode?: 'orders-en
           )}
         </Card>
 
-        {/* Orders list intentionally hidden for now (customer sheet only). */}
       </div>
 
       <Dialog

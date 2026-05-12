@@ -1,9 +1,19 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
 import { getMongo } from '@/lib/mongodb'
 import {
+  attachResolvedSfInvoiceLineIds,
+  applySfInventoryDeltaForInvoiceItems,
+  invoiceItemsForSfInventoryAttach,
+  isSfB2bInvoiceInventoryError,
+  restoreSfInventoryForInvoiceItems,
+} from '@/lib/sf-b2b-invoice-inventory'
+import type { SfB2bInvoiceItem } from '@/lib/sf-b2b-invoices'
+import {
   deleteSfB2bInvoice,
+  getSfB2bInvoiceById,
   serializeSfB2bInvoice,
   updateSfB2bInvoice,
+  type UpdateSfB2bInvoiceInput,
 } from '@/lib/sf-b2b-invoices'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
@@ -21,6 +31,11 @@ const itemSchema = z.object({
   qty: z.coerce.number().int().min(1).max(1_000_000),
   unitPriceGhs: z.coerce.number().min(0).max(1_000_000_000),
   unitCostGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+  inventoryItemId: z
+    .string()
+    .trim()
+    .regex(/^[a-f\d]{24}$/i)
+    .optional(),
 })
 
 const patchBodySchema = z
@@ -77,22 +92,80 @@ export async function PATCH(
   }
 
   const { db } = getMongo()
-  const updated = await updateSfB2bInvoice(db, new ObjectId(id), {
-    ...parsed.data,
-    invoiceAt:
-      parsed.data.invoiceAt === undefined
-        ? undefined
-        : parsed.data.invoiceAt === null
-          ? null
-          : new Date(parsed.data.invoiceAt),
-    paidAt:
-      parsed.data.paidAt === undefined
-        ? undefined
-        : parsed.data.paidAt === null
-          ? null
-          : new Date(parsed.data.paidAt),
-  })
+  const oid = new ObjectId(id)
+  const existing = await getSfB2bInvoiceById(db, oid)
+  if (!existing) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
+  let nextItems: SfB2bInvoiceItem[] | undefined
+  let previousForDelta: SfB2bInvoiceItem[] | null = null
+  if (parsed.data.items !== undefined) {
+    try {
+      const raw = parsed.data.items === null ? [] : parsed.data.items
+      nextItems = await attachResolvedSfInvoiceLineIds(
+        db,
+        raw.map((it) => ({
+          name: it.name,
+          sku: it.sku,
+          qty: it.qty,
+          unitPriceGhs: it.unitPriceGhs,
+          unitCostGhs: it.unitCostGhs,
+          inventoryItemId: it.inventoryItemId,
+        })),
+      )
+    } catch (e) {
+      if (isSfB2bInvoiceInventoryError(e)) {
+        return NextResponse.json({ error: e.message }, { status: 400 })
+      }
+      throw e
+    }
+    try {
+      previousForDelta = await attachResolvedSfInvoiceLineIds(
+        db,
+        invoiceItemsForSfInventoryAttach(existing.items ?? []),
+      )
+      await applySfInventoryDeltaForInvoiceItems(db, previousForDelta, nextItems)
+    } catch (e) {
+      if (isSfB2bInvoiceInventoryError(e)) {
+        const status = e.code === 'INSUFFICIENT' ? 409 : 400
+        return NextResponse.json({ error: e.message }, { status })
+      }
+      throw e
+    }
+  }
+
+  const patch: UpdateSfB2bInvoiceInput = {}
+  if (parsed.data.outletName !== undefined) patch.outletName = parsed.data.outletName
+  if (parsed.data.invoiceNumber !== undefined) patch.invoiceNumber = parsed.data.invoiceNumber
+  if (parsed.data.invoiceAt !== undefined) {
+    patch.invoiceAt =
+      parsed.data.invoiceAt === null ? null : new Date(parsed.data.invoiceAt)
+  }
+  if (parsed.data.amountGhs !== undefined) patch.amountGhs = parsed.data.amountGhs
+  if (parsed.data.discountGhs !== undefined) patch.discountGhs = parsed.data.discountGhs
+  if (parsed.data.paidGhs !== undefined) patch.paidGhs = parsed.data.paidGhs
+  if (parsed.data.paidAt !== undefined) {
+    patch.paidAt =
+      parsed.data.paidAt === null ? null : new Date(parsed.data.paidAt)
+  }
+  if (parsed.data.paymentMethod !== undefined) patch.paymentMethod = parsed.data.paymentMethod
+  if (parsed.data.items !== undefined) {
+    patch.items = parsed.data.items === null ? null : nextItems
+  }
+  if (parsed.data.dueAt !== undefined) patch.dueAt = parsed.data.dueAt
+  if (parsed.data.repName !== undefined) patch.repName = parsed.data.repName
+  if (parsed.data.notes !== undefined) patch.notes = parsed.data.notes
+
+  const updated = await updateSfB2bInvoice(db, oid, patch)
   if (!updated) {
+    if (parsed.data.items !== undefined && previousForDelta && nextItems !== undefined) {
+      try {
+        await applySfInventoryDeltaForInvoiceItems(db, nextItems, previousForDelta)
+      } catch {
+        console.error('[PATCH b2b-payments/:id] inventory rollback after failed update')
+      }
+    }
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
@@ -117,9 +190,25 @@ export async function DELETE(
   }
 
   const { db } = getMongo()
-  const ok = await deleteSfB2bInvoice(db, new ObjectId(id))
+  const oid = new ObjectId(id)
+  const existing = await getSfB2bInvoiceById(db, oid)
+  if (!existing) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
+  const snapshotItems = existing.items ?? []
+  const ok = await deleteSfB2bInvoice(db, oid)
   if (!ok) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+  try {
+    const lines = await attachResolvedSfInvoiceLineIds(
+      db,
+      invoiceItemsForSfInventoryAttach(snapshotItems),
+    )
+    await restoreSfInventoryForInvoiceItems(db, lines)
+  } catch (err) {
+    console.error('[DELETE b2b-payments/:id] inventory restore failed after delete', err)
   }
 
   return NextResponse.json({ ok: true })

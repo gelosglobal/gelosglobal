@@ -1,7 +1,15 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { format } from 'date-fns'
+import {
+  endOfMonth,
+  format,
+  min,
+  startOfDay,
+  startOfMonth,
+  subDays,
+  subMonths,
+} from 'date-fns'
 import { Download, Loader2, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { SfPageHeader } from '@/components/sf/sf-page-header'
@@ -46,8 +54,14 @@ type Snapshot = {
   }>
 }
 
+/** Local calendar date for `<input type="date">` (avoids UTC off-by-one from toISOString). */
 function dateToInput(d: Date): string {
-  return d.toISOString().slice(0, 10)
+  return format(startOfDay(d), 'yyyy-MM-dd')
+}
+
+function parseLocalDateOnly(ymd: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number)
+  return new Date(y, m - 1, d, 12, 0, 0)
 }
 
 function csvEscape(s: string): string {
@@ -70,6 +84,10 @@ export function SfReportsView() {
   const [outletQuery, setOutletQuery] = useState('')
 
   const load = useCallback(async () => {
+    if (from.trim() && to.trim() && from > to) {
+      toast.error('From date must be on or before To date')
+      return
+    }
     setLoading(true)
     try {
       const qs = new URLSearchParams()
@@ -170,6 +188,45 @@ export function SfReportsView() {
     return `Updated ${format(new Date(data.generatedAt), 'd MMM · HH:mm')}`
   }, [data])
 
+  const rangeSummary = useMemo(() => {
+    if (!from.trim() || !to.trim()) return null
+    try {
+      return `${format(parseLocalDateOnly(from), 'd MMM yyyy')} – ${format(parseLocalDateOnly(to), 'd MMM yyyy')}`
+    } catch {
+      return null
+    }
+  }, [from, to])
+
+  function applyPreset(key: '7d' | '30d' | 'month' | 'lastMonth') {
+    const now = new Date()
+    const today = startOfDay(now)
+    switch (key) {
+      case '7d':
+        setFrom(format(subDays(today, 6), 'yyyy-MM-dd'))
+        setTo(format(today, 'yyyy-MM-dd'))
+        break
+      case '30d':
+        setFrom(format(subDays(today, 29), 'yyyy-MM-dd'))
+        setTo(format(today, 'yyyy-MM-dd'))
+        break
+      case 'month': {
+        const start = startOfMonth(now)
+        const endCap = min([today, endOfMonth(now)])
+        setFrom(format(start, 'yyyy-MM-dd'))
+        setTo(format(endCap, 'yyyy-MM-dd'))
+        break
+      }
+      case 'lastMonth': {
+        const ref = subMonths(now, 1)
+        setFrom(format(startOfMonth(ref), 'yyyy-MM-dd'))
+        setTo(format(endOfMonth(ref), 'yyyy-MM-dd'))
+        break
+      }
+      default:
+        break
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-col">
       <SfPageHeader
@@ -193,23 +250,51 @@ export function SfReportsView() {
       />
 
       <div className="flex-1 space-y-6 p-4 sm:p-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div className="text-sm text-muted-foreground">{updatedLabel}</div>
-          <div className="flex flex-wrap gap-3">
-            <div className="space-y-2">
-              <Label htmlFor="sf-r-from" className="text-muted-foreground">
-                From
-              </Label>
-              <Input id="sf-r-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        <Card className="p-4 sm:p-5">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold">Time range</p>
+                <p className="text-xs text-muted-foreground">
+                  {rangeSummary
+                    ? `Reporting on completed visits from ${rangeSummary}.`
+                    : 'Pick a start and end date (inclusive).'}
+                </p>
+              </div>
+              {updatedLabel ? (
+                <p className="text-xs text-muted-foreground sm:text-right">{updatedLabel}</p>
+              ) : null}
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="sf-r-to" className="text-muted-foreground">
-                To
-              </Label>
-              <Input id="sf-r-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" size="sm" onClick={() => applyPreset('7d')}>
+                Last 7 days
+              </Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => applyPreset('30d')}>
+                Last 30 days
+              </Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => applyPreset('month')}>
+                This month
+              </Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => applyPreset('lastMonth')}>
+                Last month
+              </Button>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="sf-r-from" className="text-muted-foreground">
+                  From
+                </Label>
+                <Input id="sf-r-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="sf-r-to" className="text-muted-foreground">
+                  To
+                </Label>
+                <Input id="sf-r-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+              </div>
             </div>
           </div>
-        </div>
+        </Card>
 
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
           <Card className="p-5">

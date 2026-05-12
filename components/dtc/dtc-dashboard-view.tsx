@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   CircleDot,
   Loader2,
+  Package,
   RefreshCw,
   ShoppingCart,
   TriangleAlert,
@@ -288,6 +289,31 @@ export function DtcDashboardView() {
                 </div>
               </Card>
             </div>
+
+            <Card className="p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex min-w-0 gap-3">
+                  <div className="mt-0.5 rounded-md bg-muted p-2">
+                    <Package className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">Wholesale inventory</p>
+                    <p className="text-xs text-muted-foreground">
+                      Read-only view of the same retail stock (SKUs, on hand, safety, health, 30-day
+                      velocity). Edits stay in Retail Inventory.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <Button asChild variant="default" size="sm">
+                    <a href="/dtc/wholesale-inventory">Open wholesale inventory</a>
+                  </Button>
+                  <Button asChild variant="outline" size="sm">
+                    <a href="/sf/inventory">Retail Inventory</a>
+                  </Button>
+                </div>
+              </div>
+            </Card>
 
             <div>
               <div className="mb-3 flex items-center gap-2">

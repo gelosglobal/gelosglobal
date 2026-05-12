@@ -1,8 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Download, Loader2, Pencil, Plus, ScanBarcode, Trash2 } from 'lucide-react'
+import { Download, Loader2, Pencil, Plus, RefreshCw, ScanBarcode, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
 import { SfPageHeader } from '@/components/sf/sf-page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -82,7 +83,42 @@ function healthBadge(h: StockHealth) {
   return <Badge variant="destructive">Critical</Badge>
 }
 
-export function SfInventoryView() {
+export type SfInventoryViewProps = {
+  /** When true, hide add/edit/delete/reorder edits (retail-only users on `/sf/inventory`). */
+  readOnly?: boolean
+  /**
+   * When false, hides “Add SKU”. Retail (`headerKind: 'sf'`) defaults to false; wholesale
+   * (`dtc`) defaults to true. Override if a caller needs different behaviour.
+   */
+  allowAddSku?: boolean
+  headerKind?: 'sf' | 'dtc'
+  pageTitle?: string
+  pageDescription?: string
+  stockTableTitle?: string
+  exportFilePrefix?: string
+  loadErrorMessage?: string
+}
+
+const SF_INVENTORY_DEFAULTS: Required<Omit<SfInventoryViewProps, 'allowAddSku'>> = {
+  readOnly: false,
+  headerKind: 'sf',
+  pageTitle: 'Retail Inventory',
+  pageDescription:
+    'Outlet-level stock counts captured by the field team. Track on-hand, safety stock, and (optional) days of cover.',
+  stockTableTitle: 'Retail stock',
+  exportFilePrefix: 'sf-inventory',
+  loadErrorMessage: 'Could not load retail inventory',
+}
+
+export function SfInventoryView(props: SfInventoryViewProps = {}) {
+  const readOnly = props.readOnly ?? SF_INVENTORY_DEFAULTS.readOnly
+  const headerKind = props.headerKind ?? SF_INVENTORY_DEFAULTS.headerKind
+  const pageTitle = props.pageTitle ?? SF_INVENTORY_DEFAULTS.pageTitle
+  const pageDescription = props.pageDescription ?? SF_INVENTORY_DEFAULTS.pageDescription
+  const stockTableTitle = props.stockTableTitle ?? SF_INVENTORY_DEFAULTS.stockTableTitle
+  const exportFilePrefix = props.exportFilePrefix ?? SF_INVENTORY_DEFAULTS.exportFilePrefix
+  const loadErrorMessage = props.loadErrorMessage ?? SF_INVENTORY_DEFAULTS.loadErrorMessage
+  const allowAddSku = props.allowAddSku ?? headerKind === 'dtc'
   const [items, setItems] = useState<InventoryRow[]>([])
   const [stats, setStats] = useState<StatsPayload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -146,11 +182,11 @@ export function SfInventoryView() {
       setItems(data.items)
       setStats(data.stats)
     } catch {
-      toast.error('Could not load retail inventory')
+      toast.error(loadErrorMessage)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [loadErrorMessage])
 
   useEffect(() => {
     void load()
@@ -446,19 +482,31 @@ export function SfInventoryView() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `sf-inventory-${new Date().toISOString().slice(0, 10)}.csv`
+    a.download = `${exportFilePrefix}-${new Date().toISOString().slice(0, 10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
     toast.success('Download started')
   }
 
+  const PageHeader = headerKind === 'dtc' ? DtcPageHeader : SfPageHeader
+
   return (
     <div className="flex min-h-0 flex-col">
-      <SfPageHeader
-        title="Retail Inventory"
-        description="Outlet-level stock counts captured by the field team. Track on-hand, safety stock, and (optional) days of cover."
+      <PageHeader
+        title={pageTitle}
+        description={pageDescription}
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => void load()}
+              disabled={loading}
+            >
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -469,13 +517,14 @@ export function SfInventoryView() {
               <Download className="h-4 w-4" />
               Export CSV
             </Button>
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="gap-1.5">
-                  <Plus className="h-4 w-4" />
-                  Add SKU
-                </Button>
-              </DialogTrigger>
+            {!readOnly && allowAddSku ? (
+              <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" className="gap-1.5">
+                    <Plus className="h-4 w-4" />
+                    Add SKU
+                  </Button>
+                </DialogTrigger>
               <DialogContent className="sm:max-w-lg">
                 <form onSubmit={handleCreate}>
                   <DialogHeader>
@@ -624,11 +673,20 @@ export function SfInventoryView() {
                 </form>
               </DialogContent>
             </Dialog>
+            ) : null}
           </div>
         }
       />
 
       <div className="flex-1 space-y-6 p-4 sm:p-6">
+        {readOnly ? (
+          <Card className="border-dashed bg-muted/30 p-4">
+            <p className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">View only.</span> Stock levels are maintained
+              by the DTC team in <span className="font-medium text-foreground">DTC → Wholesale Inventory</span>.
+            </p>
+          </Card>
+        ) : null}
         <div className="grid gap-4 sm:grid-cols-3">
           <Card className="p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">SKUs tracked</p>
@@ -666,7 +724,7 @@ export function SfInventoryView() {
 
         <Card className="p-0">
           <div className="border-b border-border px-4 py-3 sm:px-6">
-            <h2 className="text-sm font-semibold uppercase tracking-wide">Retail stock</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-wide">{stockTableTitle}</h2>
           </div>
           {loading ? (
             <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -680,7 +738,9 @@ export function SfInventoryView() {
                 </EmptyMedia>
                 <EmptyTitle>No retail lines yet</EmptyTitle>
                 <EmptyDescription>
-                  Add retail stock lines to track on-hand levels and surface low / critical SKUs.
+                  {readOnly
+                    ? 'No stock lines yet. DTC will add SKUs from Wholesale inventory.'
+                    : 'Add retail stock lines to track on-hand levels and surface low / critical SKUs.'}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -697,7 +757,7 @@ export function SfInventoryView() {
               <TableHead className="text-right">Reorder</TableHead>
                   <TableHead className="hidden text-right sm:table-cell">Days cover</TableHead>
                   <TableHead>Health</TableHead>
-                  <TableHead className="w-[52px] text-right" />
+                  {!readOnly ? <TableHead className="w-[52px] text-right" /> : null}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -733,66 +793,74 @@ export function SfInventoryView() {
                       </div>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Input
-                        className="h-8 w-20 text-right tabular-nums"
-                        inputMode="numeric"
-                        value={
-                          reorderDrafts[row.id] ??
-                          (row.reorderQty == null ? '' : String(row.reorderQty))
-                        }
-                        placeholder="—"
-                        onChange={(e) =>
-                          setReorderDrafts((d) => ({ ...d, [row.id]: e.target.value }))
-                        }
-                        onBlur={() => {
-                          const raw = (reorderDrafts[row.id] ?? '').trim()
-                          if (raw === '') {
-                            void saveReorder(row, null)
-                            return
+                      {readOnly ? (
+                        <span className="tabular-nums text-muted-foreground">
+                          {row.reorderQty == null ? '—' : row.reorderQty.toLocaleString()}
+                        </span>
+                      ) : (
+                        <Input
+                          className="h-8 w-20 text-right tabular-nums"
+                          inputMode="numeric"
+                          value={
+                            reorderDrafts[row.id] ??
+                            (row.reorderQty == null ? '' : String(row.reorderQty))
                           }
-                          const n = Number(raw)
-                          if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
-                            toast.error('Reorder must be a whole number')
-                            setReorderDrafts((d) => {
-                              const copy = { ...d }
-                              delete copy[row.id]
-                              return copy
-                            })
-                            return
+                          placeholder="—"
+                          onChange={(e) =>
+                            setReorderDrafts((d) => ({ ...d, [row.id]: e.target.value }))
                           }
-                          void saveReorder(row, n)
-                        }}
-                        disabled={reorderSaving[row.id] === true}
-                      />
+                          onBlur={() => {
+                            const raw = (reorderDrafts[row.id] ?? '').trim()
+                            if (raw === '') {
+                              void saveReorder(row, null)
+                              return
+                            }
+                            const n = Number(raw)
+                            if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+                              toast.error('Reorder must be a whole number')
+                              setReorderDrafts((d) => {
+                                const copy = { ...d }
+                                delete copy[row.id]
+                                return copy
+                              })
+                              return
+                            }
+                            void saveReorder(row, n)
+                          }}
+                          disabled={reorderSaving[row.id] === true}
+                        />
+                      )}
                     </TableCell>
                     <TableCell className="hidden text-right tabular-nums sm:table-cell">
                       {row.daysCover === null ? '—' : `${row.daysCover}d`}
                     </TableCell>
                     <TableCell>{healthBadge(row.health)}</TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => openEdit(row)}
-                          aria-label={`Edit ${row.sku}`}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => setDeleteRow(row)}
-                          aria-label={`Delete ${row.sku}`}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
+                    {!readOnly ? (
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => openEdit(row)}
+                            aria-label={`Edit ${row.sku}`}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={() => setDeleteRow(row)}
+                            aria-label={`Delete ${row.sku}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    ) : null}
                   </TableRow>
                 ))}
               </TableBody>
@@ -807,7 +875,9 @@ export function SfInventoryView() {
         ) : null}
       </div>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+      {!readOnly ? (
+        <>
+          <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-lg">
           <form onSubmit={handleEditSubmit}>
             <DialogHeader>
@@ -953,6 +1023,8 @@ export function SfInventoryView() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+        </>
+      ) : null}
     </div>
   )
 }

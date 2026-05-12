@@ -1,6 +1,8 @@
 import type { Db, WithoutId } from 'mongodb'
 import { ObjectId } from 'mongodb'
+import { subDays } from 'date-fns'
 import { computeDaysCover, computeStockHealth, type StockHealth } from '@/lib/dtc-inventory'
+import { SF_ORDERS_COLLECTION } from '@/lib/sf-orders'
 
 export const SF_INVENTORY_COLLECTION = 'sf_inventory'
 export const SF_INVENTORY_DEFAULT_OUTLET = 'Retail'
@@ -78,6 +80,66 @@ export async function listSfInventory(db: Db): Promise<SfInventoryDoc[]> {
     .limit(4000)
     .toArray()
   return rows.map((r) => r as SfInventoryDoc)
+}
+
+const SF_INVENTORY_VELOCITY_WINDOW_DAYS = 30
+
+export type SfInventoryListPayload = {
+  items: SfInventoryJson[]
+  stats: ReturnType<typeof computeSfInventoryStats>
+}
+
+/**
+ * Same payload shape as `GET /api/sf/inventory`: retail stock lines with `dailyDemand` /
+ * `daysCover` derived from recent SF orders (30-day velocity), not only the stored doc field.
+ */
+export async function listSfInventoryWithOrderVelocity(db: Db): Promise<SfInventoryListPayload> {
+  const now = new Date()
+  const since = subDays(now, SF_INVENTORY_VELOCITY_WINDOW_DAYS)
+  const rows = await listSfInventory(db)
+
+  const skuVelocity = new Map<string, number>()
+  const agg = await db
+    .collection(SF_ORDERS_COLLECTION)
+    .aggregate<{ sku: string; units: number }>([
+      { $match: { orderedAt: { $gte: since, $lte: now } } },
+      { $unwind: '$items' },
+      {
+        $match: {
+          'items.sku': { $type: 'string' },
+        },
+      },
+      {
+        $group: {
+          _id: { sku: { $toUpper: '$items.sku' } },
+          units: { $sum: { $ifNull: ['$items.qty', 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          sku: '$_id.sku',
+          units: 1,
+        },
+      },
+    ])
+    .toArray()
+
+  for (const r of agg) {
+    const units = Number(r.units) || 0
+    skuVelocity.set(String(r.sku).toUpperCase(), units / SF_INVENTORY_VELOCITY_WINDOW_DAYS)
+  }
+
+  const stats = computeSfInventoryStats(rows)
+  const items = rows.map((row) => {
+    const base = serializeSfInventoryItem(row)
+    const v = skuVelocity.get(base.sku.toUpperCase())
+    const dailyDemand = v ? Math.round(v * 10) / 10 : 0
+    const daysCover = dailyDemand > 0 ? Math.floor(base.onHand / dailyDemand) : null
+    return { ...base, dailyDemand, daysCover }
+  })
+
+  return { items, stats }
 }
 
 export type CreateSfInventoryInput = {
@@ -171,5 +233,42 @@ export function computeSfInventoryStats(rows: SfInventoryDoc[]) {
     belowSafety,
     critical,
   }
+}
+
+export type SfInventoryQtyMutationResult = 'ok' | 'not_found' | 'insufficient'
+
+/** Decrease `onHand` on an `sf_inventory` row when qty ships (e.g. B2B invoice line). */
+export async function decrementSfInventoryOnHandById(
+  db: Db,
+  id: ObjectId,
+  qty: number,
+): Promise<SfInventoryQtyMutationResult> {
+  if (!Number.isFinite(qty) || qty <= 0) return 'ok'
+  const col = db.collection(SF_INVENTORY_COLLECTION)
+  const res = await col.findOneAndUpdate(
+    { _id: id, onHand: { $gte: qty } },
+    { $inc: { onHand: -qty }, $set: { updatedAt: new Date() } },
+    { returnDocument: 'after' },
+  )
+  if (res) return 'ok'
+  const exists = await col.findOne({ _id: id }, { projection: { _id: 1 } })
+  if (!exists) return 'not_found'
+  return 'insufficient'
+}
+
+/** Increase `onHand` (e.g. invoice deleted or line qty reduced). */
+export async function incrementSfInventoryOnHandById(
+  db: Db,
+  id: ObjectId,
+  qty: number,
+): Promise<boolean> {
+  if (!Number.isFinite(qty) || qty <= 0) return true
+  const col = db.collection(SF_INVENTORY_COLLECTION)
+  const res = await col.findOneAndUpdate(
+    { _id: id },
+    { $inc: { onHand: qty }, $set: { updatedAt: new Date() } },
+    { returnDocument: 'after' },
+  )
+  return Boolean(res)
 }
 

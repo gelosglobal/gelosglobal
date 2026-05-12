@@ -1,4 +1,5 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
+import { canMutateSfInventory } from '@/lib/access'
 import {
   SF_INVENTORY_COLLECTION,
   serializeSfInventoryItem,
@@ -37,6 +38,9 @@ export async function PATCH(
   const session = await requireSession()
   if (!session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!canMutateSfInventory(session as any)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
   const { id } = await context.params
@@ -87,6 +91,9 @@ export async function DELETE(
   const session = await requireSession()
   if (!session) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!canMutateSfInventory(session as any)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
   const { id } = await context.params
