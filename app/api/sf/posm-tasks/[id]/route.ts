@@ -20,6 +20,7 @@ const patchBodySchema = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
     outletName: z.string().trim().min(1).max(200).optional(),
+    assignedRep: z.string().trim().min(1).max(120).nullable().optional(),
     status: statusEnum.optional(),
     dueAt: z.coerce.date().nullable().optional(),
     notes: z.string().trim().max(5000).nullable().optional(),

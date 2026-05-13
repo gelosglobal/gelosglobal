@@ -52,6 +52,8 @@ export type SfPosmTaskDoc = {
   _id: ObjectId
   title: string
   outletName: string
+  /** Optional field rep for quota rollups; falls back to last visit on this outlet in the month. */
+  assignedRep?: string
   status: SfPosmTaskStatus
   dueAt?: Date
   notes?: string

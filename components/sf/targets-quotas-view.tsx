@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import { Loader2, Pencil, Plus, Target } from 'lucide-react'
+import Link from 'next/link'
 import { toast } from 'sonner'
 import { SfPageHeader } from '@/components/sf/sf-page-header'
 import { Badge } from '@/components/ui/badge'
@@ -45,14 +46,17 @@ type TargetRow = {
   region?: string
   targetVisits: number
   targetSellInGhs: number
+  targetPosmTasks: number
   notes?: string
   createdAt: string
   updatedAt: string
   actualVisitsMtd: number
   actualSellInMtdGhs: number
   newShopsAcquiredMtd: number
+  actualPosmDoneMtd: number
   visitsAttainmentPct: number | null
   sellInAttainmentPct: number | null
+  posmAttainmentPct: number | null
 }
 
 function monthKeyForDate(d: Date): string {
@@ -72,7 +76,12 @@ export function TargetsQuotasView() {
   const [month, setMonth] = useState(() => monthKeyForDate(new Date()))
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState<TargetRow[]>([])
-  const [mtd, setMtd] = useState<{ completedVisits: number; sellInGhs: number; shopsWon: number } | null>(null)
+  const [mtd, setMtd] = useState<{
+    completedVisits: number
+    sellInGhs: number
+    shopsWon: number
+    posmTasksDone: number
+  } | null>(null)
   const [query, setQuery] = useState('')
   const [regionFilter, setRegionFilter] = useState<string>('all')
 
@@ -83,6 +92,7 @@ export function TargetsQuotasView() {
     region: '',
     targetVisits: '',
     targetSellInGhs: '',
+    targetPosmTasks: '',
     notes: '',
   })
 
@@ -94,6 +104,7 @@ export function TargetsQuotasView() {
     region: '',
     targetVisits: '',
     targetSellInGhs: '',
+    targetPosmTasks: '',
     notes: '',
   })
 
@@ -111,10 +122,24 @@ export function TargetsQuotasView() {
       const data = (await res.json()) as {
         month: string
         items: TargetRow[]
-        mtd?: { completedVisits: number; sellInGhs: number; shopsWon: number }
+        mtd?: {
+          completedVisits: number
+          sellInGhs: number
+          shopsWon: number
+          posmTasksDone: number
+        }
       }
       setItems(Array.isArray(data.items) ? data.items : [])
-      setMtd(data.mtd ?? null)
+      setMtd(
+        data.mtd
+          ? {
+              completedVisits: data.mtd.completedVisits,
+              sellInGhs: data.mtd.sellInGhs,
+              shopsWon: data.mtd.shopsWon,
+              posmTasksDone: data.mtd.posmTasksDone ?? 0,
+            }
+          : null,
+      )
     } catch {
       toast.error('Could not load targets & quotas')
       setItems([])
@@ -153,27 +178,34 @@ export function TargetsQuotasView() {
     let reps = 0
     let above100Visits = 0
     let above100SellIn = 0
+    let above100Posm = 0
     let targetVisits = 0
     let targetSellIn = 0
+    let targetPosm = 0
     let actualVisits = 0
     let actualSellIn = 0
+    let actualPosm = 0
     let newShops = 0
     for (const r of items) {
       reps += 1
       targetVisits += r.targetVisits
       targetSellIn += r.targetSellInGhs
+      targetPosm += r.targetPosmTasks ?? 0
       actualVisits += r.actualVisitsMtd
       actualSellIn += r.actualSellInMtdGhs
+      actualPosm += r.actualPosmDoneMtd ?? 0
       newShops += r.newShopsAcquiredMtd ?? 0
       if ((r.visitsAttainmentPct ?? 0) >= 100) above100Visits += 1
       if ((r.sellInAttainmentPct ?? 0) >= 100) above100SellIn += 1
+      if ((r.posmAttainmentPct ?? 0) >= 100) above100Posm += 1
     }
 
-    // Cards should reflect the real Shop Visits / Outlet Scouting MTD totals (not only targeted reps).
+    // Cards should reflect the real Shop Visits / Outlet Scouting / POSM MTD totals (not only targeted reps).
     if (mtd) {
       actualVisits = mtd.completedVisits
       actualSellIn = mtd.sellInGhs
       newShops = mtd.shopsWon
+      actualPosm = mtd.posmTasksDone
     }
 
     const visitsPct =
@@ -182,17 +214,23 @@ export function TargetsQuotasView() {
       targetSellIn > 0
         ? Math.min(999, Math.round((actualSellIn / targetSellIn) * 1000) / 10)
         : null
+    const posmPct =
+      targetPosm > 0 ? Math.min(999, Math.round((actualPosm / targetPosm) * 1000) / 10) : null
     return {
       reps,
       above100Visits,
       above100SellIn,
+      above100Posm,
       targetVisits,
       targetSellIn,
+      targetPosm,
       actualVisits,
       actualSellIn,
+      actualPosm,
       newShops,
       visitsPct,
       sellInPct,
+      posmPct,
     }
   }, [items, mtd])
 
@@ -205,12 +243,18 @@ export function TargetsQuotasView() {
     }
     const targetVisits = Number(createForm.targetVisits)
     const targetSellInGhs = Number(createForm.targetSellInGhs)
+    const targetPosmTasksRaw = createForm.targetPosmTasks.trim()
+    const targetPosmTasks =
+      targetPosmTasksRaw === '' ? 0 : Number(targetPosmTasksRaw)
     if (
       !Number.isFinite(targetVisits) ||
       !Number.isInteger(targetVisits) ||
       targetVisits < 0 ||
       !Number.isFinite(targetSellInGhs) ||
-      targetSellInGhs < 0
+      targetSellInGhs < 0 ||
+      !Number.isFinite(targetPosmTasks) ||
+      !Number.isInteger(targetPosmTasks) ||
+      targetPosmTasks < 0
     ) {
       toast.error('Enter valid targets')
       return
@@ -228,6 +272,7 @@ export function TargetsQuotasView() {
           region: createForm.region.trim() || undefined,
           targetVisits,
           targetSellInGhs,
+          targetPosmTasks,
           notes: createForm.notes.trim() || undefined,
         }),
       })
@@ -247,6 +292,7 @@ export function TargetsQuotasView() {
         region: '',
         targetVisits: '',
         targetSellInGhs: '',
+        targetPosmTasks: '',
         notes: '',
       })
       void load()
@@ -264,6 +310,7 @@ export function TargetsQuotasView() {
       region: row.region ?? '',
       targetVisits: String(row.targetVisits),
       targetSellInGhs: String(row.targetSellInGhs),
+      targetPosmTasks: String(row.targetPosmTasks ?? 0),
       notes: row.notes ?? '',
     })
     setEditOpen(true)
@@ -279,12 +326,18 @@ export function TargetsQuotasView() {
     }
     const targetVisits = Number(editForm.targetVisits)
     const targetSellInGhs = Number(editForm.targetSellInGhs)
+    const targetPosmTasksRaw = editForm.targetPosmTasks.trim()
+    const targetPosmTasks =
+      targetPosmTasksRaw === '' ? 0 : Number(targetPosmTasksRaw)
     if (
       !Number.isFinite(targetVisits) ||
       !Number.isInteger(targetVisits) ||
       targetVisits < 0 ||
       !Number.isFinite(targetSellInGhs) ||
-      targetSellInGhs < 0
+      targetSellInGhs < 0 ||
+      !Number.isFinite(targetPosmTasks) ||
+      !Number.isInteger(targetPosmTasks) ||
+      targetPosmTasks < 0
     ) {
       toast.error('Enter valid targets')
       return
@@ -301,6 +354,7 @@ export function TargetsQuotasView() {
           region: editForm.region.trim() ? editForm.region.trim() : null,
           targetVisits,
           targetSellInGhs,
+          targetPosmTasks,
           notes: editForm.notes.trim() ? editForm.notes.trim() : null,
         }),
       })
@@ -322,16 +376,19 @@ export function TargetsQuotasView() {
 
   const pageSubtitle = useMemo(() => {
     const dt = new Date(`${month}-01T12:00:00.000Z`)
-    return `Month: ${format(dt, 'MMM yyyy')} · MTD actuals from completed shop visits (sf_visits)`
+    return `Month: ${format(dt, 'MMM yyyy')} · MTD actuals from completed shop visits (sf_visits), sell-in on visits, and POSM tasks marked done (sf_posm_tasks)`
   }, [month])
 
   return (
     <div className="flex min-h-0 flex-col">
       <SfPageHeader
         title="Targets & Quotas"
-        description="Set monthly rep quotas and track MTD attainment using completed shop visits and sell-in logged on visits."
+        description="Set monthly rep quotas and track MTD attainment from completed shop visits, sell-in on visits, and POSM tasks completed in the month (assign reps on the POSM Tracker for accurate roll-up)."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/sf/posm-tracker">POSM Tracker</Link>
+            </Button>
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5">
@@ -344,8 +401,9 @@ export function TargetsQuotasView() {
                   <DialogHeader>
                     <DialogTitle>Add rep target</DialogTitle>
                     <DialogDescription>
-                      Creates one target row per rep for this month ({month}). Actuals roll up from
-                      completed visits.
+                      Creates one target row per rep for this month ({month}). Visit and sell-in
+                      actuals roll up from completed visits; POSM counts tasks marked done this
+                      month.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4 py-4">
@@ -372,7 +430,7 @@ export function TargetsQuotasView() {
                         placeholder="Greater Accra"
                       />
                     </div>
-                    <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                       <div className="space-y-2">
                         <Label htmlFor="tq-visits">Target visits</Label>
                         <Input
@@ -396,6 +454,21 @@ export function TargetsQuotasView() {
                           }
                           placeholder="80000"
                         />
+                      </div>
+                      <div className="space-y-2 sm:col-span-2 lg:col-span-1">
+                        <Label htmlFor="tq-posm">Target POSM tasks</Label>
+                        <Input
+                          id="tq-posm"
+                          inputMode="numeric"
+                          value={createForm.targetPosmTasks}
+                          onChange={(e) =>
+                            setCreateForm((f) => ({ ...f, targetPosmTasks: e.target.value }))
+                          }
+                          placeholder="0"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Optional; leave blank or 0 if not tracking POSM for this rep.
+                        </p>
                       </div>
                     </div>
                     <div className="space-y-2">
@@ -452,7 +525,7 @@ export function TargetsQuotasView() {
           </div>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <Card className="p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">Reps targeted</p>
             <p className="mt-2 text-3xl font-bold tabular-nums">{loading ? '—' : summary.reps}</p>
@@ -478,16 +551,30 @@ export function TargetsQuotasView() {
             </p>
           </Card>
           <Card className="p-5">
+            <p className="text-xs font-medium uppercase text-muted-foreground">POSM tasks (MTD)</p>
+            <p className="mt-2 text-xl font-bold tabular-nums sm:text-3xl">
+              {loading ? '—' : `${summary.actualPosm} / ${summary.targetPosm}`}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Done this month vs sum of rep quotas ·{' '}
+              {summary.posmPct == null ? '—' : `${summary.posmPct}%`}
+            </p>
+          </Card>
+          <Card className="p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">New shops acquired</p>
             <p className="mt-2 text-3xl font-bold tabular-nums">{loading ? '—' : summary.newShops}</p>
             <p className="mt-1 text-xs text-muted-foreground">Outlet Scouting · status “won”</p>
           </Card>
           <Card className="border-l-4 border-l-emerald-600 p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">Above 100%</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums">
-              {loading ? '—' : `${summary.above100Visits}V / ${summary.above100SellIn}S`}
+            <p className="mt-2 text-2xl font-bold tabular-nums sm:text-3xl">
+              {loading
+                ? '—'
+                : `${summary.above100Visits}V / ${summary.above100SellIn}S / ${summary.above100Posm}P`}
             </p>
-            <p className="mt-1 text-xs text-muted-foreground">Reps above quota (Visits / Sell-in)</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Reps at or above quota (Visits / Sell-in / POSM)
+            </p>
           </Card>
         </div>
 
@@ -540,7 +627,8 @@ export function TargetsQuotasView() {
               <EmptyHeader>
                 <EmptyTitle>No targets for this month</EmptyTitle>
                 <EmptyDescription>
-                  Add rep targets to start tracking quota attainment for visits and sell-in.
+                  Add rep targets to track quota attainment for visits, sell-in, and POSM tasks
+                  (use the POSM Tracker to log work and assign reps).
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -552,6 +640,7 @@ export function TargetsQuotasView() {
                   <TableHead className="hidden md:table-cell">Region</TableHead>
                   <TableHead className="text-right">Visits</TableHead>
                   <TableHead className="text-right">Sell-in</TableHead>
+                  <TableHead className="hidden text-right xl:table-cell">POSM</TableHead>
                   <TableHead className="hidden lg:table-cell">Notes</TableHead>
                   <TableHead className="w-[52px] text-right" />
                 </TableRow>
@@ -577,6 +666,14 @@ export function TargetsQuotasView() {
                           {formatGhs(r.actualSellInMtdGhs)} / {formatGhs(r.targetSellInGhs)}
                         </div>
                         {attainmentBadge(r.sellInAttainmentPct)}
+                      </div>
+                    </TableCell>
+                    <TableCell className="hidden text-right tabular-nums xl:table-cell">
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="text-sm">
+                          {r.actualPosmDoneMtd ?? 0} / {r.targetPosmTasks ?? 0}
+                        </div>
+                        {attainmentBadge(r.posmAttainmentPct)}
                       </div>
                     </TableCell>
                     <TableCell className="hidden max-w-[320px] truncate text-sm text-muted-foreground lg:table-cell">
@@ -614,8 +711,8 @@ export function TargetsQuotasView() {
             <DialogHeader>
               <DialogTitle>Edit target</DialogTitle>
               <DialogDescription>
-                Update the rep name, region, or monthly quotas. Month cannot be changed; create a
-                new row for another month.
+                Update the rep name, region, or monthly quotas (visits, sell-in, POSM). Month cannot
+                be changed; create a new row for another month.
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
@@ -637,7 +734,7 @@ export function TargetsQuotasView() {
                   placeholder="Leave blank to clear"
                 />
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="space-y-2">
                   <Label htmlFor="edit-visits">Target visits</Label>
                   <Input
@@ -655,6 +752,17 @@ export function TargetsQuotasView() {
                     value={editForm.targetSellInGhs}
                     onChange={(e) =>
                       setEditForm((f) => ({ ...f, targetSellInGhs: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2 lg:col-span-1">
+                  <Label htmlFor="edit-posm">Target POSM tasks</Label>
+                  <Input
+                    id="edit-posm"
+                    inputMode="numeric"
+                    value={editForm.targetPosmTasks}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, targetPosmTasks: e.target.value }))
                     }
                   />
                 </div>

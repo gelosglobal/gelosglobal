@@ -57,6 +57,7 @@ type TaskRow = {
   id: string
   title: string
   outletName: string
+  assignedRep: string | null
   status: TaskStatus
   dueAt: string | null
   notes: string | null
@@ -111,6 +112,7 @@ function emptyForm() {
   return {
     title: '',
     outletName: '',
+    assignedRep: '',
     status: 'open' as TaskStatus,
     dueDate: '',
     notes: '',
@@ -241,6 +243,7 @@ export function PosmTrackerView() {
       (t) =>
         t.title.toLowerCase().includes(q) ||
         t.outletName.toLowerCase().includes(q) ||
+        (t.assignedRep?.toLowerCase().includes(q) ?? false) ||
         (t.notes?.toLowerCase().includes(q) ?? false),
     )
   }, [tasks, query])
@@ -250,6 +253,7 @@ export function PosmTrackerView() {
     setEditForm({
       title: t.title,
       outletName: t.outletName,
+      assignedRep: t.assignedRep ?? '',
       status: t.status,
       dueDate: isoToDateInput(t.dueAt),
       notes: t.notes ?? '',
@@ -296,6 +300,7 @@ export function PosmTrackerView() {
         body: JSON.stringify({
           title,
           outletName,
+          assignedRep: form.assignedRep.trim() || undefined,
           status: form.status,
           dueAt,
           notes: form.notes.trim() || undefined,
@@ -337,6 +342,7 @@ export function PosmTrackerView() {
         body: JSON.stringify({
           title,
           outletName,
+          assignedRep: editForm.assignedRep.trim() || null,
           status: editForm.status,
           dueAt: dueAt ?? null,
           notes: editForm.notes.trim() === '' ? null : editForm.notes.trim(),
@@ -383,7 +389,7 @@ export function PosmTrackerView() {
       toast.message('Nothing to export')
       return
     }
-    const header = ['title', 'outletName', 'status', 'dueAt', 'notes', 'createdAt']
+    const header = ['title', 'outletName', 'assignedRep', 'status', 'dueAt', 'notes', 'createdAt']
     const esc = (s: string) => `"${s.replace(/"/g, '""')}"`
     const lines = [
       header.join(','),
@@ -391,6 +397,7 @@ export function PosmTrackerView() {
         [
           esc(t.title),
           esc(t.outletName),
+          t.assignedRep ? esc(t.assignedRep) : '',
           t.status,
           t.dueAt ?? '',
           t.notes ? esc(t.notes) : '',
@@ -486,6 +493,20 @@ export function PosmTrackerView() {
                           </SelectContent>
                         </Select>
                       )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="posm-rep">Assigned rep (optional)</Label>
+                      <Input
+                        id="posm-rep"
+                        value={form.assignedRep}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, assignedRep: e.target.value }))
+                        }
+                        placeholder="Rep name — ties to Targets & Quotas"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Used for monthly POSM quota roll-up. Leave blank to infer from outlet visits.
+                      </p>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2">
@@ -595,7 +616,7 @@ export function PosmTrackerView() {
             </Label>
             <Input
               id="posm-search"
-              placeholder="Title, outlet, notes…"
+              placeholder="Title, outlet, rep, notes…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -640,8 +661,9 @@ export function PosmTrackerView() {
                 <TableRow>
                   <TableHead>Task</TableHead>
                   <TableHead className="hidden sm:table-cell">Outlet</TableHead>
+                  <TableHead className="hidden md:table-cell">Rep</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="hidden text-right md:table-cell">Due</TableHead>
+                  <TableHead className="hidden text-right lg:table-cell">Due</TableHead>
                   <TableHead className="w-[140px] text-right" />
                 </TableRow>
               </TableHeader>
@@ -661,9 +683,17 @@ export function PosmTrackerView() {
                           </p>
                         ) : null}
                         <div className="text-xs text-muted-foreground sm:hidden">{t.outletName}</div>
+                        {t.assignedRep ? (
+                          <div className="text-xs text-muted-foreground md:hidden">
+                            Rep: {t.assignedRep}
+                          </div>
+                        ) : null}
                       </TableCell>
                       <TableCell className="hidden text-muted-foreground sm:table-cell">
                         {t.outletName}
+                      </TableCell>
+                      <TableCell className="hidden text-sm text-muted-foreground md:table-cell">
+                        {t.assignedRep ?? '—'}
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap items-center gap-2">
@@ -675,7 +705,7 @@ export function PosmTrackerView() {
                           ) : null}
                         </div>
                       </TableCell>
-                      <TableCell className="hidden text-right text-sm tabular-nums text-muted-foreground md:table-cell">
+                      <TableCell className="hidden text-right text-sm tabular-nums text-muted-foreground lg:table-cell">
                         {t.dueAt ? format(new Date(t.dueAt), 'd MMM yyyy') : '—'}
                       </TableCell>
                       <TableCell className="text-right">
@@ -788,6 +818,17 @@ export function PosmTrackerView() {
                     </SelectContent>
                   </Select>
                 )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-posm-rep">Assigned rep (optional)</Label>
+                <Input
+                  id="edit-posm-rep"
+                  value={editForm.assignedRep}
+                  onChange={(e) =>
+                    setEditForm((f) => ({ ...f, assignedRep: e.target.value }))
+                  }
+                  placeholder="Clear to infer from outlet visits"
+                />
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">

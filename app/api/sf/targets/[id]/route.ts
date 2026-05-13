@@ -14,6 +14,7 @@ const patchBodySchema = z
     region: z.string().trim().min(1).max(120).nullable().optional(),
     targetVisits: z.coerce.number().int().min(0).max(10_000).optional(),
     targetSellInGhs: z.coerce.number().min(0).max(1_000_000_000).optional(),
+    targetPosmTasks: z.coerce.number().int().min(0).max(10_000).optional(),
     notes: z.string().trim().max(2000).nullable().optional(),
   })
   .refine((d) => Object.keys(d).length > 0, { message: 'No fields to update' })

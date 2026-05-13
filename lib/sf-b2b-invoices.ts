@@ -105,7 +105,8 @@ function invoicesCollection(db: Db) {
 export async function listSfB2bInvoices(db: Db): Promise<SfB2bInvoiceDoc[]> {
   const rows = await invoicesCollection(db)
     .find({})
-    .sort({ updatedAt: -1 })
+    /** `createdAt` keeps row order stable after edits; `updatedAt` would jump edited rows to the top. */
+    .sort({ createdAt: -1, _id: -1 })
     .limit(2000)
     .toArray()
   return rows.map((r) => r as SfB2bInvoiceDoc)

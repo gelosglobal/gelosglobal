@@ -18,6 +18,7 @@ const statusEnum = z.enum(['open', 'done'])
 const postBodySchema = z.object({
   title: z.string().trim().min(1).max(200),
   outletName: z.string().trim().min(1).max(200),
+  assignedRep: z.string().trim().min(1).max(120).optional(),
   status: statusEnum.default('open'),
   dueAt: z.coerce.date().optional(),
   notes: z.string().trim().max(5000).optional(),
@@ -80,6 +81,7 @@ export async function POST(request: Request) {
   const doc = await createPosmTask(db, {
     title: d.title,
     outletName: d.outletName,
+    assignedRep: d.assignedRep,
     status: d.status,
     dueAt: d.dueAt,
     notes: d.notes,

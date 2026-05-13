@@ -12,6 +12,7 @@ export type SfPosmTaskJson = {
   id: string
   title: string
   outletName: string
+  assignedRep: string | null
   status: SfPosmTaskStatus
   dueAt: string | null
   notes: string | null
@@ -29,6 +30,7 @@ export function serializePosmTask(doc: SfPosmTaskDoc): SfPosmTaskJson {
     id: doc._id.toHexString(),
     title: doc.title,
     outletName: doc.outletName,
+    assignedRep: doc.assignedRep?.trim() ? doc.assignedRep.trim() : null,
     status: doc.status,
     dueAt: doc.dueAt?.toISOString() ?? null,
     notes: doc.notes ?? null,
@@ -79,6 +81,7 @@ export function computePosmTaskStats(
 export type CreatePosmTaskInput = {
   title: string
   outletName: string
+  assignedRep?: string
   status: SfPosmTaskStatus
   dueAt?: Date
   notes?: string
@@ -92,6 +95,7 @@ export async function createPosmTask(
   const doc: WithoutId<SfPosmTaskDoc> = {
     title: input.title.trim(),
     outletName: input.outletName.trim(),
+    ...(input.assignedRep?.trim() ? { assignedRep: input.assignedRep.trim() } : {}),
     status: input.status,
     dueAt: input.dueAt,
     notes: input.notes?.trim() || undefined,
@@ -105,6 +109,7 @@ export async function createPosmTask(
 export type UpdatePosmTaskInput = Partial<{
   title: string
   outletName: string
+  assignedRep: string | null
   status: SfPosmTaskStatus
   dueAt: Date | null
   notes: string | null
@@ -116,8 +121,17 @@ export async function updatePosmTask(
   patch: UpdatePosmTaskInput,
 ): Promise<SfPosmTaskDoc | null> {
   const $set: Record<string, unknown> = { updatedAt: new Date() }
+  const $unset: Record<string, string> = {}
   if (patch.title !== undefined) $set.title = patch.title.trim()
   if (patch.outletName !== undefined) $set.outletName = patch.outletName.trim()
+  if (patch.assignedRep !== undefined) {
+    const t = patch.assignedRep?.trim() ?? ''
+    if (!t) {
+      $unset.assignedRep = ''
+    } else {
+      $set.assignedRep = t
+    }
+  }
   if (patch.status !== undefined) $set.status = patch.status
   if (patch.dueAt !== undefined) {
     $set.dueAt = patch.dueAt ?? null
@@ -127,9 +141,12 @@ export async function updatePosmTask(
       patch.notes === null || patch.notes === '' ? null : patch.notes.trim()
   }
 
+  const update: Record<string, unknown> = { $set }
+  if (Object.keys($unset).length) update.$unset = $unset
+
   const res = await tasksCollection(db).findOneAndUpdate(
     { _id: id },
-    { $set },
+    update,
     { returnDocument: 'after' },
   )
   return res as SfPosmTaskDoc | null

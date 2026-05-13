@@ -6,7 +6,7 @@ export default function DtcWholesaleInventoryPage() {
       readOnly={false}
       headerKind="dtc"
       pageTitle="Wholesale Inventory"
-      pageDescription="Edit shared retail stock (same database as Sales Force → Retail Inventory). The retail team currently has view-only access there."
+      pageDescription="Outlet-level stock counts captured by the field team. Track on-hand, safety stock, and (optional) days of cover."
       stockTableTitle="Wholesale stock (shared with retail)"
       exportFilePrefix="dtc-wholesale-inventory"
       loadErrorMessage="Could not load wholesale inventory"

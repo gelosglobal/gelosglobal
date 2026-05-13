@@ -21,6 +21,7 @@ const createBodySchema = z.object({
   region: z.string().trim().min(1).max(120).optional(),
   targetVisits: z.coerce.number().int().min(0).max(10_000),
   targetSellInGhs: z.coerce.number().min(0).max(1_000_000_000),
+  targetPosmTasks: z.coerce.number().int().min(0).max(10_000).optional().default(0),
   notes: z.string().trim().max(2000).optional(),
 })
 
