@@ -14,6 +14,7 @@ import { z } from 'zod'
 export const runtime = 'nodejs'
 
 const patchBodySchema = z.object({
+  sku: z.string().trim().min(1).max(64).optional(),
   name: z.string().trim().min(1).max(200).optional(),
   repName: z.string().trim().min(1).max(120).nullable().optional(),
   costGhs: z.coerce.number().min(0).max(1_000_000_000).nullable().optional(),
@@ -68,7 +69,7 @@ export async function PATCH(
   }
 
   const { db } = getMongo()
-  const updated = await updateSfInventoryItem(db, new ObjectId(id), {
+  const result = await updateSfInventoryItem(db, new ObjectId(id), {
     ...parsed.data,
     lastCountedAt:
       parsed.data.lastCountedAt === undefined
@@ -77,11 +78,17 @@ export async function PATCH(
           ? null
           : new Date(parsed.data.lastCountedAt),
   })
-  if (!updated) {
+  if (!result.ok) {
+    if (result.reason === 'duplicate_sku') {
+      return NextResponse.json(
+        { error: 'That SKU already exists in retail inventory.' },
+        { status: 409 },
+      )
+    }
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  return NextResponse.json({ item: serializeSfInventoryItem(updated) })
+  return NextResponse.json({ item: serializeSfInventoryItem(result.doc) })
 }
 
 export async function DELETE(

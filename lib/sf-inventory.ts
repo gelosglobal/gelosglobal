@@ -180,6 +180,7 @@ export async function createSfInventoryItem(
 }
 
 export type UpdateSfInventoryInput = Partial<{
+  sku: string
   name: string
   repName: string | null
   costGhs: number | null
@@ -191,12 +192,30 @@ export type UpdateSfInventoryInput = Partial<{
   lastCountedAt: Date | null
 }>
 
+export type UpdateSfInventoryItemResult =
+  | { ok: true; doc: SfInventoryDoc }
+  | { ok: false; reason: 'not_found' | 'duplicate_sku' }
+
 export async function updateSfInventoryItem(
   db: Db,
   id: ObjectId,
   patch: UpdateSfInventoryInput,
-): Promise<SfInventoryDoc | null> {
+): Promise<UpdateSfInventoryItemResult> {
   const $set: Record<string, unknown> = { updatedAt: new Date() }
+  if (patch.sku !== undefined) {
+    const skuNorm = patch.sku.trim().toUpperCase()
+    const dup = await inventoryCollection(db).findOne({
+      _id: { $ne: id },
+      $expr: {
+        $eq: [
+          { $toUpper: { $trim: { input: { $ifNull: ['$sku', ''] } } } },
+          skuNorm,
+        ],
+      },
+    })
+    if (dup) return { ok: false, reason: 'duplicate_sku' }
+    $set.sku = skuNorm
+  }
   if (patch.name !== undefined) $set.name = patch.name.trim()
   if (patch.repName !== undefined) $set.repName = patch.repName ? patch.repName.trim() : undefined
   if (patch.costGhs !== undefined) $set.costGhs = patch.costGhs ?? undefined
@@ -213,7 +232,8 @@ export async function updateSfInventoryItem(
     { $set },
     { returnDocument: 'after' },
   )
-  return res as SfInventoryDoc | null
+  if (!res) return { ok: false, reason: 'not_found' }
+  return { ok: true, doc: res as SfInventoryDoc }
 }
 
 export function computeSfInventoryStats(rows: SfInventoryDoc[]) {

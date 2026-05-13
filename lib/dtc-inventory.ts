@@ -130,6 +130,7 @@ export async function createDtcInventoryItem(
 }
 
 export type UpdateDtcInventoryInput = Partial<{
+  sku: string
   name: string
   warehouse: string
   costGhs: number | null
@@ -140,12 +141,30 @@ export type UpdateDtcInventoryInput = Partial<{
   inTransitValue: number
 }>
 
+export type UpdateDtcInventoryItemResult =
+  | { ok: true; doc: DtcInventoryDoc }
+  | { ok: false; reason: 'not_found' | 'duplicate_sku' }
+
 export async function updateDtcInventoryItem(
   db: Db,
   id: ObjectId,
   patch: UpdateDtcInventoryInput,
-): Promise<DtcInventoryDoc | null> {
+): Promise<UpdateDtcInventoryItemResult> {
   const $set: Record<string, unknown> = { updatedAt: new Date() }
+  if (patch.sku !== undefined) {
+    const skuNorm = patch.sku.trim().toUpperCase()
+    const dup = await inventoryCollection(db).findOne({
+      _id: { $ne: id },
+      $expr: {
+        $eq: [
+          { $toUpper: { $trim: { input: { $ifNull: ['$sku', ''] } } } },
+          skuNorm,
+        ],
+      },
+    })
+    if (dup) return { ok: false, reason: 'duplicate_sku' }
+    $set.sku = skuNorm
+  }
   if (patch.name !== undefined) $set.name = patch.name.trim()
   if (patch.warehouse !== undefined) $set.warehouse = patch.warehouse.trim()
   if (patch.costGhs !== undefined) $set.costGhs = patch.costGhs ?? undefined
@@ -161,7 +180,8 @@ export async function updateDtcInventoryItem(
     { $set },
     { returnDocument: 'after' },
   )
-  return res as DtcInventoryDoc | null
+  if (!res) return { ok: false, reason: 'not_found' }
+  return { ok: true, doc: res as DtcInventoryDoc }
 }
 
 export function computeInventoryStats(rows: DtcInventoryDoc[]) {

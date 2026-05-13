@@ -47,6 +47,8 @@ type InventoryRow = {
   onHand: number
   safetyStock: number
   dailyDemand: number
+  /** Stored manual units/day when shown separately from order-derived velocity (GET). */
+  dailyDemandStored?: number
   daysCover: number | null
   health: StockHealth
   inTransitValue: number
@@ -68,15 +70,7 @@ const WAREHOUSE_PRESETS = [
   'Tema DC',
 ] as const
 
-function healthBadge(h: StockHealth) {
-  if (h === 'ok') {
-    return <Badge className="bg-emerald-600 hover:bg-emerald-600">Healthy</Badge>
-  }
-  if (h === 'low') {
-    return <Badge variant="secondary">Low</Badge>
-  }
-  return <Badge variant="destructive">Critical</Badge>
-}
+const DTC_EDIT_WH_CUSTOM = '__dtc_inv_wh_custom__'
 
 export function DtcInventoryView() {
   const [items, setItems] = useState<InventoryRow[]>([])
@@ -110,7 +104,9 @@ export function DtcInventoryView() {
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editRow, setEditRow] = useState<InventoryRow | null>(null)
+  const [editWarehouseMode, setEditWarehouseMode] = useState<'select' | 'custom'>('select')
   const [editForm, setEditForm] = useState({
+    sku: '',
     name: '',
     warehouse: '',
     costGhs: '',
@@ -118,6 +114,7 @@ export function DtcInventoryView() {
     onHand: '',
     safetyStock: '',
     inTransitValue: '',
+    dailyDemand: '',
   })
 
   const load = useCallback(async () => {
@@ -170,9 +167,22 @@ export function DtcInventoryView() {
     })
   }, [items, query, warehouseFilter])
 
+  const editSkuDuplicate = useMemo(() => {
+    if (!editOpen || !editRow) return false
+    const key = editForm.sku.trim().toUpperCase()
+    if (!key) return false
+    return items.some(
+      (r) => r.id !== editRow.id && r.sku.trim().toUpperCase() === key,
+    )
+  }, [editOpen, editRow, editForm.sku, items])
+
   function openEdit(row: InventoryRow) {
     setEditRow(row)
+    setEditWarehouseMode(
+      warehouseOptions.includes(row.warehouse) ? 'select' : 'custom',
+    )
     setEditForm({
+      sku: row.sku,
       name: row.name,
       warehouse: row.warehouse,
       costGhs: row.costGhs == null ? '' : String(row.costGhs),
@@ -180,6 +190,10 @@ export function DtcInventoryView() {
       onHand: String(row.onHand),
       safetyStock: String(row.safetyStock),
       inTransitValue: String(row.inTransitValue),
+      dailyDemand:
+        row.dailyDemandStored != null && row.dailyDemandStored > 0
+          ? String(row.dailyDemandStored)
+          : '',
     })
     setEditOpen(true)
   }
@@ -187,30 +201,44 @@ export function DtcInventoryView() {
   async function handleEditSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!editRow) return
-    const costGhs = editForm.costGhs.trim() === '' ? null : Number(editForm.costGhs)
-    const priceGhs = editForm.priceGhs.trim() === '' ? null : Number(editForm.priceGhs)
-    const onHand = Number(editForm.onHand)
-    const safetyStock = Number(editForm.safetyStock)
-    const inTransitValue = Number(editForm.inTransitValue)
+
+    const sku = editForm.sku.trim()
+    if (!sku) {
+      toast.error('SKU is required')
+      return
+    }
+    if (editSkuDuplicate) return
+
     const name = editForm.name.trim()
     const warehouse = editForm.warehouse.trim()
     if (!name || !warehouse) {
       toast.error('Name and warehouse are required')
       return
     }
+
+    const costGhs = editForm.costGhs.trim() === '' ? null : Number(editForm.costGhs)
+    const priceGhs = editForm.priceGhs.trim() === '' ? null : Number(editForm.priceGhs)
+    const onHand = Number(editForm.onHand)
+    const safetyStock = Number(editForm.safetyStock)
+    const inTransitValue = Number(editForm.inTransitValue)
+    const dailyDemandRaw = editForm.dailyDemand.trim()
+    const dailyDemand = dailyDemandRaw === '' ? 0 : Number(dailyDemandRaw)
     if (
       (costGhs !== null && (!Number.isFinite(costGhs) || costGhs < 0)) ||
       (priceGhs !== null && (!Number.isFinite(priceGhs) || priceGhs < 0)) ||
       !Number.isFinite(onHand) ||
       !Number.isFinite(safetyStock) ||
       !Number.isFinite(inTransitValue) ||
+      !Number.isFinite(dailyDemand) ||
       onHand < 0 ||
       safetyStock < 0 ||
-      inTransitValue < 0
+      inTransitValue < 0 ||
+      dailyDemand < 0
     ) {
       toast.error('Enter valid numbers for stock fields')
       return
     }
+
     setEditing(true)
     try {
       const res = await fetch(`/api/dtc/inventory/${editRow.id}`, {
@@ -218,6 +246,7 @@ export function DtcInventoryView() {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          sku,
           name,
           warehouse,
           costGhs,
@@ -225,6 +254,7 @@ export function DtcInventoryView() {
           onHand,
           safetyStock,
           inTransitValue,
+          dailyDemand,
         }),
       })
       if (res.status === 401) {
@@ -233,11 +263,16 @@ export function DtcInventoryView() {
       }
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string }
+        if (res.status === 409) {
+          toast.error(err.error ?? 'That SKU is already in use.')
+          return
+        }
         throw new Error(err.error ?? 'Update failed')
       }
       toast.success('Stock updated')
       setEditOpen(false)
       setEditRow(null)
+      setEditWarehouseMode('select')
       void load()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not update')
@@ -750,21 +785,85 @@ export function DtcInventoryView() {
         ) : null}
       </div>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="sm:max-w-lg">
+      <Dialog
+        open={editOpen}
+        onOpenChange={(open) => {
+          setEditOpen(open)
+          if (!open) setEditWarehouseMode('select')
+        }}
+      >
+        <DialogContent className="max-h-[min(90vh,44rem)] overflow-y-auto sm:max-w-lg">
           <form onSubmit={handleEditSubmit}>
             <DialogHeader>
-              <DialogTitle>Update stock</DialogTitle>
+              <DialogTitle>Edit inventory line</DialogTitle>
               <DialogDescription>
-                {editRow ? (
-                  <>
-                    Adjust levels for <span className="font-mono font-medium">{editRow.sku}</span>.
-                  </>
-                ) : null}
+                Update SKU, product, warehouse, pricing, stock levels, in-transit value, and manual
+                daily demand. Margin, days left, and status are recalculated after save.
               </DialogDescription>
             </DialogHeader>
             {editRow ? (
               <div className="grid gap-4 py-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-sku">SKU</Label>
+                    <Input
+                      id="edit-sku"
+                      className="font-mono text-sm"
+                      value={editForm.sku}
+                      onChange={(e) => setEditForm((f) => ({ ...f, sku: e.target.value }))}
+                      autoComplete="off"
+                    />
+                    {editSkuDuplicate ? (
+                      <p className="text-xs text-amber-700 dark:text-amber-300">
+                        Another line already uses this SKU (case-insensitive). Change it before
+                        saving.
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Saved in uppercase.</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-wh">Warehouse</Label>
+                    {editWarehouseMode === 'custom' ? (
+                      <Input
+                        id="edit-wh"
+                        value={editForm.warehouse}
+                        onChange={(e) =>
+                          setEditForm((f) => ({ ...f, warehouse: e.target.value }))
+                        }
+                        placeholder="Warehouse name"
+                      />
+                    ) : (
+                      <Select
+                        value={
+                          warehouseOptions.includes(editForm.warehouse)
+                            ? editForm.warehouse
+                            : undefined
+                        }
+                        onValueChange={(v) => {
+                          if (v === DTC_EDIT_WH_CUSTOM) {
+                            setEditWarehouseMode('custom')
+                            setEditForm((f) => ({ ...f, warehouse: '' }))
+                            return
+                          }
+                          setEditForm((f) => ({ ...f, warehouse: v }))
+                        }}
+                      >
+                        <SelectTrigger id="edit-wh">
+                          <SelectValue placeholder="Select warehouse" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={DTC_EDIT_WH_CUSTOM}>Other (type name)…</SelectItem>
+                          {warehouseOptions.map((w) => (
+                            <SelectItem key={w} value={w}>
+                              {w}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="edit-name">Product name</Label>
                   <Input
@@ -772,16 +871,6 @@ export function DtcInventoryView() {
                     value={editForm.name}
                     onChange={(e) =>
                       setEditForm((f) => ({ ...f, name: e.target.value }))
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-wh">Warehouse</Label>
-                  <Input
-                    id="edit-wh"
-                    value={editForm.warehouse}
-                    onChange={(e) =>
-                      setEditForm((f) => ({ ...f, warehouse: e.target.value }))
                     }
                   />
                 </div>
@@ -813,7 +902,7 @@ export function DtcInventoryView() {
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label htmlFor="edit-on">On hand</Label>
+                    <Label htmlFor="edit-on">On hand (units)</Label>
                     <Input
                       id="edit-on"
                       inputMode="numeric"
@@ -824,7 +913,7 @@ export function DtcInventoryView() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="edit-safe">Safety stock</Label>
+                    <Label htmlFor="edit-safe">Safety stock (reorder threshold)</Label>
                     <Input
                       id="edit-safe"
                       inputMode="numeric"
@@ -849,13 +938,33 @@ export function DtcInventoryView() {
                     }
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-velocity">Manual daily demand (units/day)</Label>
+                  <Input
+                    id="edit-velocity"
+                    inputMode="decimal"
+                    value={editForm.dailyDemand}
+                    onChange={(e) =>
+                      setEditForm((f) => ({ ...f, dailyDemand: e.target.value }))
+                    }
+                    placeholder="0 = use order history only when available"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    When recent DTC orders exist for this SKU, velocity on the grid prefers order data;
+                    otherwise this value drives &quot;Days left&quot;. Leave blank or 0 to clear the
+                    manual override.
+                  </p>
+                </div>
               </div>
             ) : null}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={editing || !editRow}>
+              <Button
+                type="submit"
+                disabled={editing || !editRow || editSkuDuplicate}
+              >
                 {editing ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />

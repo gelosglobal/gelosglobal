@@ -79,6 +79,15 @@ const B2B_LINE_PICKER_COPY = {
   catalogGroupHeading: 'Retail / wholesale stock',
 } as const
 
+const B2B_OUTLET_CUSTOM = '__b2b_outlet_custom__'
+
+type OutletOption = {
+  id: string
+  name: string
+  isActive: boolean
+  region: string | null
+}
+
 type CollectionRow = {
   id: string
   outletName: string
@@ -157,6 +166,10 @@ export function B2bPaymentsView() {
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState(emptyForm)
+  const [outletsLoading, setOutletsLoading] = useState(true)
+  const [outlets, setOutlets] = useState<OutletOption[]>([])
+  const [createOutletMode, setCreateOutletMode] = useState<'select' | 'custom'>('select')
+  const [editOutletMode, setEditOutletMode] = useState<'select' | 'custom'>('select')
 
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -197,6 +210,57 @@ export function B2bPaymentsView() {
   useEffect(() => {
     void load()
   }, [load])
+
+  const loadOutlets = useCallback(async () => {
+    setOutletsLoading(true)
+    try {
+      const res = await fetch('/api/sf/outlets', { credentials: 'include' })
+      if (res.status === 401) return
+      if (!res.ok) throw new Error('Failed')
+      const data = (await res.json()) as { outlets: OutletOption[] }
+      const primary = Array.isArray(data.outlets) ? data.outlets : []
+      if (primary.length > 0) {
+        setOutlets(primary)
+        return
+      }
+
+      const alt = await fetch('/api/sf/b2b-payments/outlets', { credentials: 'include' })
+      if (!alt.ok) {
+        setOutlets([])
+        return
+      }
+      const altJson = (await alt.json()) as {
+        outlets?: Array<{ outletName: string }>
+      }
+      const suggested =
+        altJson.outlets
+          ?.map((o, idx) => ({
+            id: `b2b-${idx}-${o.outletName}`,
+            name: String(o.outletName ?? '').trim(),
+            isActive: true,
+            region: null,
+          }))
+          .filter((o) => o.name.length > 0) ?? []
+      setOutlets(suggested)
+    } catch {
+      setOutlets([])
+    } finally {
+      setOutletsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadOutlets()
+  }, [loadOutlets])
+
+  useEffect(() => {
+    if (!createOpen) return
+    if (createOutletMode !== 'select') return
+    if (outletsLoading) return
+    if (outlets.length === 0) return
+    if (form.outletName.trim()) return
+    setForm((f) => ({ ...f, outletName: outlets[0]!.name }))
+  }, [createOpen, createOutletMode, outletsLoading, outlets, form.outletName])
 
   useEffect(() => {
     if (!createOpen && !editOpen) return
@@ -257,6 +321,9 @@ export function B2bPaymentsView() {
 
   function openEdit(c: CollectionRow) {
     setEditId(c.id)
+    setEditOutletMode(
+      outlets.some((o) => o.name.trim() === c.outletName.trim()) ? 'select' : 'custom',
+    )
     setEditForm({
       outletName: c.outletName,
       invoiceNumber: c.invoiceNumber,
@@ -701,7 +768,13 @@ export function B2bPaymentsView() {
                 if (f) void handleImportExcel(f)
               }}
             />
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+            <Dialog
+              open={createOpen}
+              onOpenChange={(open) => {
+                setCreateOpen(open)
+                if (!open) setCreateOutletMode('select')
+              }}
+            >
               <DialogTrigger asChild>
                 <Button size="sm" className="gap-1.5">
                   <Plus className="h-4 w-4" />
@@ -758,13 +831,51 @@ export function B2bPaymentsView() {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="b2b-outlet">Outlet</Label>
-                      <Input
-                        id="b2b-outlet"
-                        value={form.outletName}
-                        onChange={(e) => setForm((f) => ({ ...f, outletName: e.target.value }))}
-                        placeholder="Customer / store name"
-                        required
-                      />
+                      {createOutletMode === 'custom' ? (
+                        <Input
+                          id="b2b-outlet"
+                          value={form.outletName}
+                          onChange={(e) => setForm((f) => ({ ...f, outletName: e.target.value }))}
+                          placeholder="Customer / store name"
+                          required
+                        />
+                      ) : (
+                        <Select
+                          value={
+                            outlets.some((o) => o.name === form.outletName)
+                              ? form.outletName
+                              : undefined
+                          }
+                          onValueChange={(v) => {
+                            if (v === B2B_OUTLET_CUSTOM) {
+                              setCreateOutletMode('custom')
+                              setForm((f) => ({ ...f, outletName: '' }))
+                              return
+                            }
+                            setForm((f) => ({ ...f, outletName: v }))
+                          }}
+                        >
+                          <SelectTrigger id="b2b-outlet">
+                            <SelectValue
+                              placeholder={outletsLoading ? 'Loading outlets…' : 'Select outlet'}
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={B2B_OUTLET_CUSTOM}>Other (type name)…</SelectItem>
+                            {outlets.map((o) => (
+                              <SelectItem key={o.id} value={o.name}>
+                                {o.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      {outlets.length === 0 && !outletsLoading && createOutletMode === 'select' ? (
+                        <p className="text-xs text-muted-foreground">
+                          No outlets in the registry yet. Choose “Other” or add outlets under Sales
+                          Force.
+                        </p>
+                      ) : null}
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="b2b-invoice">Invoice</Label>
@@ -1141,7 +1252,13 @@ export function B2bPaymentsView() {
         ) : null}
       </div>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+      <Dialog
+        open={editOpen}
+        onOpenChange={(open) => {
+          setEditOpen(open)
+          if (!open) setEditOutletMode('select')
+        }}
+      >
         <DialogContent className="max-h-[min(90vh,40rem)] overflow-y-auto sm:max-w-lg">
           <form onSubmit={submitEdit}>
             <DialogHeader>
@@ -1189,12 +1306,44 @@ export function B2bPaymentsView() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-b2b-outlet">Outlet</Label>
-                <Input
-                  id="edit-b2b-outlet"
-                  value={editForm.outletName}
-                  onChange={(e) => setEditForm((f) => ({ ...f, outletName: e.target.value }))}
-                  required
-                />
+                {editOutletMode === 'custom' ? (
+                  <Input
+                    id="edit-b2b-outlet"
+                    value={editForm.outletName}
+                    onChange={(e) => setEditForm((f) => ({ ...f, outletName: e.target.value }))}
+                    required
+                  />
+                ) : (
+                  <Select
+                    value={
+                      outlets.some((o) => o.name === editForm.outletName)
+                        ? editForm.outletName
+                        : undefined
+                    }
+                    onValueChange={(v) => {
+                      if (v === B2B_OUTLET_CUSTOM) {
+                        setEditOutletMode('custom')
+                        setEditForm((f) => ({ ...f, outletName: '' }))
+                        return
+                      }
+                      setEditForm((f) => ({ ...f, outletName: v }))
+                    }}
+                  >
+                    <SelectTrigger id="edit-b2b-outlet">
+                      <SelectValue
+                        placeholder={outletsLoading ? 'Loading outlets…' : 'Select outlet'}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={B2B_OUTLET_CUSTOM}>Other (type name)…</SelectItem>
+                      {outlets.map((o) => (
+                        <SelectItem key={o.id} value={o.name}>
+                          {o.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="edit-b2b-invoice">Invoice</Label>

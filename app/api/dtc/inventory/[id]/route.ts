@@ -12,12 +12,14 @@ import { z } from 'zod'
 export const runtime = 'nodejs'
 
 const patchBodySchema = z.object({
+  sku: z.string().trim().min(1).max(64).optional(),
   name: z.string().trim().min(1).max(200).optional(),
   warehouse: z.string().trim().min(1).max(120).optional(),
   costGhs: z.union([z.coerce.number().min(0).max(1_000_000_000), z.null()]).optional(),
   priceGhs: z.union([z.coerce.number().min(0).max(1_000_000_000), z.null()]).optional(),
   onHand: z.coerce.number().int().min(0).max(100_000_000).optional(),
   safetyStock: z.coerce.number().int().min(0).max(100_000_000).optional(),
+  dailyDemand: z.coerce.number().min(0).max(100_000).optional(),
   inTransitValue: z.coerce.number().min(0).max(1_000_000_000).optional(),
 })
 
@@ -62,14 +64,16 @@ export async function PATCH(
   }
 
   const { db } = getMongo()
-  const updated = await updateDtcInventoryItem(
-    db,
-    new ObjectId(id),
-    parsed.data,
-  )
-  if (!updated) {
+  const result = await updateDtcInventoryItem(db, new ObjectId(id), parsed.data)
+  if (!result.ok) {
+    if (result.reason === 'duplicate_sku') {
+      return NextResponse.json(
+        { error: 'A SKU with this code already exists.' },
+        { status: 409 },
+      )
+    }
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
-  return NextResponse.json({ item: serializeInventoryItem(updated) })
+  return NextResponse.json({ item: serializeInventoryItem(result.doc) })
 }

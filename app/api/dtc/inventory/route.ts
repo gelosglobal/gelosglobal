@@ -82,10 +82,17 @@ export async function GET() {
   return NextResponse.json({
     items: rows.map((row) => {
       const base = serializeInventoryItem(row)
-      const v = skuVelocity.get(base.sku.toUpperCase())
-      const dailyDemand = v ? Math.round(v * 10) / 10 : 0
+      const vOrder = skuVelocity.get(base.sku.toUpperCase())
+      const orderDemand =
+        vOrder != null && Number(vOrder) > 0 ? Math.round(Number(vOrder) * 10) / 10 : 0
+      const storedRaw = row.dailyDemand
+      const storedDemand =
+        typeof storedRaw === 'number' && Number.isFinite(storedRaw) && storedRaw > 0
+          ? Math.round(storedRaw * 10) / 10
+          : 0
+      const dailyDemand = orderDemand > 0 ? orderDemand : storedDemand
       const daysCover = dailyDemand > 0 ? Math.floor(base.onHand / dailyDemand) : null
-      return { ...base, dailyDemand, daysCover }
+      return { ...base, dailyDemand, daysCover, dailyDemandStored: storedDemand }
     }),
     stats: {
       skusTracked: stats.skusTracked,

@@ -156,6 +156,7 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
   const [deleteRow, setDeleteRow] = useState<InventoryRow | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [editForm, setEditForm] = useState({
+    sku: '',
     name: '',
     repName: '',
     costGhs: '',
@@ -204,6 +205,15 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
     })
   }, [items, query])
 
+  const wholesaleEditSkuDuplicate = useMemo(() => {
+    if (headerKind !== 'dtc' || !editOpen || !editRow) return false
+    const key = editForm.sku.trim().toUpperCase()
+    if (!key) return false
+    return items.some(
+      (r) => r.id !== editRow.id && r.sku.trim().toUpperCase() === key,
+    )
+  }, [headerKind, editOpen, editRow, editForm.sku, items])
+
   function stockPct(row: InventoryRow): number {
     const safety = Math.max(0, row.safetyStock)
     if (safety <= 0) return 100
@@ -242,6 +252,7 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
   function openEdit(row: InventoryRow) {
     setEditRow(row)
     setEditForm({
+      sku: row.sku,
       name: row.name,
       repName: row.repName ?? '',
       costGhs: row.costGhs != null ? String(row.costGhs) : '',
@@ -262,6 +273,15 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
     if (!name) {
       toast.error('Product name is required')
       return
+    }
+
+    const skuTrim = editForm.sku.trim()
+    if (headerKind === 'dtc') {
+      if (!skuTrim) {
+        toast.error('SKU is required')
+        return
+      }
+      if (wholesaleEditSkuDuplicate) return
     }
 
     const onHand = Number(editForm.onHand)
@@ -295,6 +315,7 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          ...(headerKind === 'dtc' ? { sku: skuTrim } : {}),
           name,
           repName: editForm.repName.trim() ? editForm.repName.trim() : null,
           costGhs,
@@ -313,6 +334,10 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
       }
       if (!res.ok) {
         const err = (await res.json().catch(() => ({}))) as { error?: string }
+        if (res.status === 409) {
+          toast.error(err.error ?? 'That SKU is already in use.')
+          return
+        }
         throw new Error(err.error ?? 'Update failed')
       }
       toast.success('SF stock updated')
@@ -883,16 +908,48 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
             <DialogHeader>
               <DialogTitle>Update retail stock</DialogTitle>
               <DialogDescription>
-                {editRow ? (
-                  <>
-                    Adjust levels for{' '}
-                    <span className="font-mono font-medium">{editRow.sku}</span>.
-                  </>
-                ) : null}
+                {editRow ? 'Adjust stock, pricing, and metadata for this line.' : null}
               </DialogDescription>
             </DialogHeader>
             {editRow ? (
               <div className="grid gap-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="sf-edit-sku">SKU</Label>
+                  {headerKind === 'dtc' ? (
+                    <>
+                      <Input
+                        id="sf-edit-sku"
+                        className="font-mono text-sm"
+                        value={editForm.sku}
+                        onChange={(e) => setEditForm((f) => ({ ...f, sku: e.target.value }))}
+                        autoComplete="off"
+                      />
+                      {wholesaleEditSkuDuplicate ? (
+                        <p className="text-xs text-amber-700 dark:text-amber-300">
+                          Another line already uses this SKU (matches are case-insensitive). Change
+                          the code before saving.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Saved in uppercase. Must stay unique across wholesale / retail stock lines.
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <Input
+                        id="sf-edit-sku"
+                        readOnly
+                        className="font-mono text-sm"
+                        value={editForm.sku}
+                        aria-readonly="true"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        SKU is fixed for this row. Add a new line if you need a different code.
+                      </p>
+                    </>
+                  )}
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="sf-edit-rep">Rep (optional)</Label>
@@ -987,7 +1044,14 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
               <Button type="button" variant="outline" onClick={() => setEditOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={editing || !editRow}>
+              <Button
+                type="submit"
+                disabled={
+                  editing ||
+                  !editRow ||
+                  (headerKind === 'dtc' && wholesaleEditSkuDuplicate)
+                }
+              >
                 {editing ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
