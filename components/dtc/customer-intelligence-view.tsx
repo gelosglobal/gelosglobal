@@ -125,10 +125,36 @@ const DELIVERY_STATUS_OPTIONS = [
   { value: DELIVERY_STATUS_NONE, label: 'Not set' },
   { value: 'Fulfilled', label: 'Fulfilled' },
   { value: 'Processing', label: 'Processing' },
+  { value: 'Pending payment', label: 'Pending payment' },
   { value: 'Out for delivery', label: 'Out for delivery' },
   { value: 'Cancelled', label: 'Cancelled' },
   { value: 'Returned', label: 'Returned' },
 ] as const
+
+function deliveryStatusToSelectValue(raw: string): string {
+  const v = String(raw ?? '').trim()
+  if (!v) return DELIVERY_STATUS_NONE
+  const direct = DELIVERY_STATUS_OPTIONS.find(
+    (o) => o.value !== DELIVERY_STATUS_NONE && o.value.toLowerCase() === v.toLowerCase(),
+  )
+  if (direct) return direct.value
+  const lower = v.toLowerCase().replace(/_/g, ' ')
+  if (lower === 'fulfilled') return 'Fulfilled'
+  if (lower === 'processing') return 'Processing'
+  if (lower.includes('pending')) return 'Pending payment'
+  return DELIVERY_STATUS_NONE
+}
+
+function mapDeliveryLabelToOrderStatus(
+  label: string,
+): 'fulfilled' | 'processing' | 'pending_payment' | undefined {
+  if (!label.trim() || label === DELIVERY_STATUS_NONE) return undefined
+  const t = label.trim().toLowerCase()
+  if (t.includes('fulfill')) return 'fulfilled'
+  if (t.includes('pending')) return 'pending_payment'
+  if (t.includes('process')) return 'processing'
+  return undefined
+}
 
 function deliveryStatusBadge(value: string) {
   const v = String(value ?? '').trim()
@@ -1146,7 +1172,7 @@ export function CustomerIntelligenceView({
       paystackCollectedGhs: String(r.paystackCollectedGhs ?? 0),
       totalCollectedGhs: String(r.totalCollectedGhs ?? 0),
       paymentMethod: r.paymentMethod ?? '',
-      deliveryStatus: r.deliveryStatus ?? '',
+      deliveryStatus: deliveryStatusToSelectValue(r.deliveryStatus ?? ''),
       remarks: r.remarks ?? '',
       additionalRemarks: r.additionalRemarks ?? '',
       items:
@@ -1221,15 +1247,16 @@ export function CustomerIntelligenceView({
         customer: name,
         customerPhone: editForm.phoneNumber.trim() || undefined,
         customerLocation: editForm.location.trim() || undefined,
-        paymentMethod: (editForm.paymentMethod.trim() || undefined) as any,
+        paymentMethod: editForm.paymentMethod.trim()
+          ? mapCiPaymentLabelToDtcOrderPaymentMethod(editForm.paymentMethod)
+          : undefined,
         orderedAt: editForm.date.trim()
           ? new Date(`${editForm.date.trim()}T12:00:00.000Z`).toISOString()
           : undefined,
-        status: (['fulfilled', 'processing', 'pending_payment'] as const).includes(
-          editForm.deliveryStatus.trim() as any,
-        )
-          ? (editForm.deliveryStatus.trim() as any)
-          : undefined,
+      }
+      const mappedOrderStatus = mapDeliveryLabelToOrderStatus(editForm.deliveryStatus)
+      if (mappedOrderStatus) {
+        orderPatchBody.status = mappedOrderStatus
       }
       if (hasStructuredItems) {
         orderPatchBody.items = items
@@ -1254,7 +1281,10 @@ export function CustomerIntelligenceView({
         totalCollectedGhs:
           editForm.totalCollectedGhs.trim() === '' ? undefined : Number(editForm.totalCollectedGhs),
         paymentMethod: editForm.paymentMethod.trim() || undefined,
-        deliveryStatus: editForm.deliveryStatus.trim() || undefined,
+        deliveryStatus:
+          editForm.deliveryStatus.trim() && editForm.deliveryStatus !== DELIVERY_STATUS_NONE
+            ? editForm.deliveryStatus.trim()
+            : undefined,
         remarks: editForm.remarks.trim() || undefined,
         additionalRemarks: editForm.additionalRemarks.trim() || undefined,
       }
@@ -1262,25 +1292,54 @@ export function CustomerIntelligenceView({
         ledgerPatchBody.items = items
       }
 
-      const res = orderPatchId
-        ? await fetch(`/api/dtc/orders/${orderPatchId}`, {
-            method: 'PATCH',
-            credentials: 'include',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(orderPatchBody),
-          })
-        : await fetch(`/api/dtc/customer-intelligence/${editRow.id}`, {
+      const ledgerPatchId =
+        !editRow.id.startsWith('order:') && /^[a-f\d]{24}$/i.test(editRow.id) ? editRow.id : ''
+
+      let res: Response
+      if (orderPatchId) {
+        res = await fetch(`/api/dtc/orders/${orderPatchId}`, {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(orderPatchBody),
+        })
+        if (res.status === 401) {
+          toast.error('Session expired. Sign in again.')
+          return
+        }
+        const orderData = (await res.json().catch(() => ({}))) as { error?: string }
+        if (!res.ok) throw new Error(orderData.error ?? 'Could not save row')
+
+        if (ledgerPatchId) {
+          const ledgerRes = await fetch(`/api/dtc/customer-intelligence/${ledgerPatchId}`, {
             method: 'PATCH',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(ledgerPatchBody),
           })
-      if (res.status === 401) {
-        toast.error('Session expired. Sign in again.')
-        return
+          if (ledgerRes.status === 401) {
+            toast.error('Session expired. Sign in again.')
+            return
+          }
+          if (!ledgerRes.ok) {
+            const ledgerErr = (await ledgerRes.json().catch(() => ({}))) as { error?: string }
+            console.warn('[submitEditRow] ledger PATCH', ledgerErr.error ?? ledgerRes.status)
+          }
+        }
+      } else {
+        res = await fetch(`/api/dtc/customer-intelligence/${editRow.id}`, {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(ledgerPatchBody),
+        })
+        if (res.status === 401) {
+          toast.error('Session expired. Sign in again.')
+          return
+        }
+        const data = (await res.json().catch(() => ({}))) as { error?: string }
+        if (!res.ok) throw new Error(data.error ?? 'Could not save row')
       }
-      const data = (await res.json().catch(() => ({}))) as { error?: string }
-      if (!res.ok) throw new Error(data.error ?? 'Could not save row')
       toast.success('Row updated')
       setEditOpen(false)
       setEditRow(null)
@@ -2089,22 +2148,6 @@ export function CustomerIntelligenceView({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="ci-edit-paymethod">Payment Method</Label>
-                  <Input
-                    id="ci-edit-paymethod"
-                    value={editForm.paymentMethod}
-                    onChange={(e) => setEditForm((f) => ({ ...f, paymentMethod: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="ci-edit-status">Delivery Status</Label>
-                  <Input
-                    id="ci-edit-status"
-                    value={editForm.deliveryStatus}
-                    onChange={(e) => setEditForm((f) => ({ ...f, deliveryStatus: e.target.value }))}
-                  />
-                </div>
-                <div className="space-y-2">
                   <Label htmlFor="ci-edit-amt">Amount to Collect (GHC)</Label>
                   <Input
                     id="ci-edit-amt"
@@ -2164,6 +2207,35 @@ export function CustomerIntelligenceView({
                       setEditForm((f) => ({ ...f, totalCollectedGhs: e.target.value }))
                     }
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-paymethod">Payment Method</Label>
+                  <Input
+                    id="ci-edit-paymethod"
+                    value={editForm.paymentMethod}
+                    onChange={(e) => setEditForm((f) => ({ ...f, paymentMethod: e.target.value }))}
+                    placeholder="e.g. MoMo, Cash, Pay on delivery"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="ci-edit-status">Delivery Status</Label>
+                  <Select
+                    value={editForm.deliveryStatus || DELIVERY_STATUS_NONE}
+                    onValueChange={(v) => setEditForm((f) => ({ ...f, deliveryStatus: v }))}
+                  >
+                    <SelectTrigger id="ci-edit-status" className="w-full justify-between">
+                      <SelectValue placeholder="Not set" />
+                    </SelectTrigger>
+                    <SelectContent className="z-[300]">
+                      {DELIVERY_STATUS_OPTIONS.map((o) => (
+                        <SelectItem key={o.value || 'blank'} value={o.value}>
+                          <span className="flex items-center gap-2">
+                            {deliveryStatusBadge(o.value)}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2 sm:col-span-2">
                   <Label htmlFor="ci-edit-remarks">Remarks</Label>
