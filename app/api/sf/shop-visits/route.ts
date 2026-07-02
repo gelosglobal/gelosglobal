@@ -1,12 +1,14 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
 import { getMongo } from '@/lib/mongodb'
 import {
-  computeShopVisitStats,
+  computeShopVisitStatsForRange,
   createShopVisit,
+  filterShopVisitsByRange,
   listShopVisits,
   serializeShopVisit,
   type SfVisitStatus,
 } from '@/lib/sf-shop-visits'
+import { endOfDay, startOfDay, subDays } from 'date-fns'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -52,6 +54,28 @@ async function requireSession() {
   })
 }
 
+const ymdSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+
+function parseVisitDateRange(searchParams: URLSearchParams) {
+  const now = new Date()
+  const defaultFrom = startOfDay(subDays(now, 6))
+  const defaultTo = endOfDay(now)
+
+  const fromRaw = searchParams.get('from')
+  const toRaw = searchParams.get('to')
+  const fromOk = fromRaw && ymdSchema.safeParse(fromRaw).success
+  const toOk = toRaw && ymdSchema.safeParse(toRaw).success
+
+  let start = fromOk ? startOfDay(new Date(`${fromRaw}T12:00:00`)) : defaultFrom
+  let end = toOk ? endOfDay(new Date(`${toRaw}T12:00:00`)) : defaultTo
+  if (start.getTime() > end.getTime()) {
+    const tmp = start
+    start = startOfDay(end)
+    end = endOfDay(tmp)
+  }
+  return { start, end }
+}
+
 export async function GET(request: Request) {
   const session = await requireSession()
   if (!session) {
@@ -67,9 +91,10 @@ export async function GET(request: Request) {
 
   const { db } = getMongo()
   const allRows = await listShopVisits(db)
-  const now = new Date()
-  const stats = computeShopVisitStats(allRows, now)
-  const rows = status ? allRows.filter((r) => r.status === status) : allRows
+  const range = parseVisitDateRange(searchParams)
+  let rows = filterShopVisitsByRange(allRows, range)
+  if (status) rows = rows.filter((r) => r.status === status)
+  const stats = computeShopVisitStatsForRange(allRows, range)
   return NextResponse.json({
     visits: rows.map(serializeShopVisit),
     stats,
@@ -116,7 +141,10 @@ export async function POST(request: Request) {
   })
 
   const all = await listShopVisits(db)
-  const stats = computeShopVisitStats(all, new Date())
+  const stats = computeShopVisitStatsForRange(all, {
+    start: startOfDay(subDays(new Date(), 6)),
+    end: endOfDay(new Date()),
+  })
   return NextResponse.json(
     { visit: serializeShopVisit(doc), stats },
     { status: 201 },

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { format } from 'date-fns'
+import { endOfMonth, format, min, parseISO, startOfDay, startOfMonth, subDays, subMonths } from 'date-fns'
 import {
   CalendarClock,
   Download,
@@ -80,8 +80,9 @@ type Stats = {
   scheduled: number
   completed: number
   cancelled: number
-  completed7d: number
-  sellIn7dGhs: number
+  sellInGhs: number
+  rangeFrom: string | null
+  rangeTo: string | null
 }
 
 type OutletOption = {
@@ -153,12 +154,18 @@ function emptyForm() {
   }
 }
 
+function todayYmd(): string {
+  return format(new Date(), 'yyyy-MM-dd')
+}
+
 export function ShopVisitsView() {
   const [loading, setLoading] = useState(true)
   const [visits, setVisits] = useState<VisitRow[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [rangeFrom, setRangeFrom] = useState(() => format(subDays(new Date(), 6), 'yyyy-MM-dd'))
+  const [rangeTo, setRangeTo] = useState(todayYmd)
 
   const [outletsLoading, setOutletsLoading] = useState(true)
   const [outlets, setOutlets] = useState<OutletOption[]>([])
@@ -216,11 +223,12 @@ export function ShopVisitsView() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const q =
-        statusFilter !== 'all'
-          ? `?status=${encodeURIComponent(statusFilter)}`
-          : ''
-      const res = await fetch(`/api/sf/shop-visits${q}`, {
+      const q = new URLSearchParams()
+      if (statusFilter !== 'all') q.set('status', statusFilter)
+      if (rangeFrom.trim()) q.set('from', rangeFrom.trim())
+      if (rangeTo.trim()) q.set('to', rangeTo.trim())
+      const qs = q.toString()
+      const res = await fetch(`/api/sf/shop-visits${qs ? `?${qs}` : ''}`, {
         credentials: 'include',
       })
       if (res.status === 401) {
@@ -236,7 +244,7 @@ export function ShopVisitsView() {
     } finally {
       setLoading(false)
     }
-  }, [statusFilter])
+  }, [statusFilter, rangeFrom, rangeTo])
 
   useEffect(() => {
     void load()
@@ -275,6 +283,48 @@ export function ShopVisitsView() {
         (v.notes?.toLowerCase().includes(q) ?? false),
     )
   }, [visits, query])
+
+  const rangeLabel = useMemo(() => {
+    if (!rangeFrom.trim() || !rangeTo.trim()) return 'selected range'
+    try {
+      const fromD = parseISO(`${rangeFrom.trim()}T12:00:00`)
+      const toD = parseISO(`${rangeTo.trim()}T12:00:00`)
+      if (Number.isNaN(fromD.getTime()) || Number.isNaN(toD.getTime())) return 'selected range'
+      return `${format(fromD, 'd MMM yyyy')} – ${format(toD, 'd MMM yyyy')}`
+    } catch {
+      return 'selected range'
+    }
+  }, [rangeFrom, rangeTo])
+
+  function applyRangePreset(key: '7d' | '30d' | 'month' | 'lastMonth') {
+    const now = new Date()
+    const today = startOfDay(now)
+    switch (key) {
+      case '7d':
+        setRangeFrom(format(subDays(today, 6), 'yyyy-MM-dd'))
+        setRangeTo(format(today, 'yyyy-MM-dd'))
+        break
+      case '30d':
+        setRangeFrom(format(subDays(today, 29), 'yyyy-MM-dd'))
+        setRangeTo(format(today, 'yyyy-MM-dd'))
+        break
+      case 'month': {
+        const start = startOfMonth(now)
+        const endCap = min([today, endOfMonth(now)])
+        setRangeFrom(format(start, 'yyyy-MM-dd'))
+        setRangeTo(format(endCap, 'yyyy-MM-dd'))
+        break
+      }
+      case 'lastMonth': {
+        const ref = subMonths(now, 1)
+        setRangeFrom(format(startOfMonth(ref), 'yyyy-MM-dd'))
+        setRangeTo(format(endOfMonth(ref), 'yyyy-MM-dd'))
+        break
+      }
+      default:
+        break
+    }
+  }
 
   function openEdit(v: VisitRow) {
     setEditId(v.id)
@@ -501,7 +551,7 @@ export function ShopVisitsView() {
     <div className="flex min-h-0 flex-col">
       <SfPageHeader
         title="Shop Visits"
-        description="Plan and log field visits. Records feed the same pipeline as the SF dashboard (upcoming visits, 7-day visit counts, and rep sell-in)."
+        description=""
         actions={
           <div className="flex flex-wrap gap-2">
             <Button
@@ -527,7 +577,7 @@ export function ShopVisitsView() {
                     <DialogTitle>Log shop visit</DialogTitle>
                     <DialogDescription>
                       Scheduled rows appear on the SF dashboard “upcoming” list; completed visits
-                      roll into 7-day KPIs when a visit date is set.
+                      with a visit date roll into sell-in for the date range on this page.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4 py-4">
@@ -725,6 +775,64 @@ export function ShopVisitsView() {
       />
 
       <div className="flex-1 space-y-6 p-4 sm:p-6">
+        <Card className="p-4 sm:p-5">
+          <div className="flex flex-col gap-4">
+            <div>
+              <p className="text-sm font-semibold">Date range</p>
+              <p className="text-xs text-muted-foreground">
+          
+                (inclusive).{' '}
+                {rangeLabel !== 'selected range' ? `Showing ${rangeLabel}.` : null}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" size="sm" onClick={() => applyRangePreset('7d')}>
+                Last 7 days
+              </Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => applyRangePreset('30d')}>
+                Last 30 days
+              </Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => applyRangePreset('month')}>
+                This month
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => applyRangePreset('lastMonth')}
+              >
+                Last month
+              </Button>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="sv-range-from" className="text-muted-foreground">
+                  From
+                </Label>
+                <Input
+                  id="sv-range-from"
+                  type="date"
+                  value={rangeFrom}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                  className="w-44"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="sv-range-to" className="text-muted-foreground">
+                  To
+                </Label>
+                <Input
+                  id="sv-range-to"
+                  type="date"
+                  value={rangeTo}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                  className="w-44"
+                />
+              </div>
+            </div>
+          </div>
+        </Card>
+
         {stats ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <Card className="p-4">
@@ -734,16 +842,17 @@ export function ShopVisitsView() {
               </p>
             </Card>
             <Card className="p-4">
-              <p className="text-xs font-medium uppercase text-muted-foreground">Completed (7d)</p>
+              <p className="text-xs font-medium uppercase text-muted-foreground">Completed</p>
               <p className="mt-1 text-2xl font-bold tabular-nums text-emerald-600">
-                {stats.completed7d}
+                {stats.completed}
               </p>
             </Card>
             <Card className="p-4">
-              <p className="text-xs font-medium uppercase text-muted-foreground">Sell-in 7d</p>
+              <p className="text-xs font-medium uppercase text-muted-foreground">Sell-in</p>
               <p className="mt-1 text-lg font-bold tabular-nums sm:text-2xl">
-                {formatGhs(stats.sellIn7dGhs)}
+                {formatGhs(stats.sellInGhs)}
               </p>
+              <p className="mt-1 text-xs text-muted-foreground">{rangeLabel}</p>
             </Card>
             <Card className="p-4">
               <p className="text-xs font-medium uppercase text-muted-foreground">Cancelled</p>
@@ -899,8 +1008,8 @@ export function ShopVisitsView() {
             <DialogHeader>
               <DialogTitle>Edit visit</DialogTitle>
               <DialogDescription>
-                Adjust status, dates, or sell-in. Dashboard KPIs use completed visits with a visit
-                date in the last 7 days.
+                Adjust status, dates, or sell-in. Completed visits count toward sell-in when the
+                visit date falls in the range above.
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">

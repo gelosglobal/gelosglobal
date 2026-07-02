@@ -1,12 +1,13 @@
 import { auth, ensureAuthMongo } from '@/lib/auth'
 import { getMongo } from '@/lib/mongodb'
 import {
-  computeShopVisitStats,
+  computeShopVisitStatsForRange,
   deleteShopVisit,
   listShopVisits,
   serializeShopVisit,
   updateShopVisit,
 } from '@/lib/sf-shop-visits'
+import { endOfDay, startOfDay, subDays } from 'date-fns'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
 import { ObjectId } from 'mongodb'
@@ -91,8 +92,13 @@ export async function PATCH(
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
+  const defaultRange = {
+    start: startOfDay(subDays(new Date(), 6)),
+    end: endOfDay(new Date()),
+  }
+
   const all = await listShopVisits(db)
-  const stats = computeShopVisitStats(all, new Date())
+  const stats = computeShopVisitStatsForRange(all, defaultRange)
   return NextResponse.json({
     visit: serializeShopVisit(updated),
     stats,
@@ -119,7 +125,12 @@ export async function DELETE(
     return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
+  const defaultRange = {
+    start: startOfDay(subDays(new Date(), 6)),
+    end: endOfDay(new Date()),
+  }
+
   const all = await listShopVisits(db)
-  const stats = computeShopVisitStats(all, new Date())
+  const stats = computeShopVisitStatsForRange(all, defaultRange)
   return NextResponse.json({ ok: true, stats })
 }

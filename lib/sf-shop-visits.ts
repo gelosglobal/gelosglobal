@@ -1,6 +1,6 @@
 import type { Db, WithoutId } from 'mongodb'
 import { ObjectId } from 'mongodb'
-import { subDays } from 'date-fns'
+import { endOfDay, startOfDay } from 'date-fns'
 import {
   SF_VISITS_COLLECTION,
   type SfVisitDoc,
@@ -71,28 +71,50 @@ export type ShopVisitStats = {
   scheduled: number
   completed: number
   cancelled: number
-  completed7d: number
-  sellIn7dGhs: number
+  sellInGhs: number
+  rangeFrom: string | null
+  rangeTo: string | null
 }
 
-export function computeShopVisitStats(
+export type ShopVisitStatsRange = {
+  start: Date
+  end: Date
+}
+
+/** Date used to include a visit in the page date range (inclusive). */
+export function visitDateForRangeFilter(doc: SfVisitDoc): Date | null {
+  if (doc.status === 'completed') {
+    return doc.visitedAt ?? doc.scheduledAt ?? doc.updatedAt ?? doc.createdAt
+  }
+  if (doc.status === 'scheduled') {
+    return doc.scheduledAt ?? doc.createdAt
+  }
+  return doc.visitedAt ?? doc.scheduledAt ?? doc.updatedAt ?? doc.createdAt
+}
+
+export function filterShopVisitsByRange(
   rows: SfVisitDoc[],
-  now: Date,
-): ShopVisitStats {
-  const since7 = subDays(now, 7)
+  range: ShopVisitStatsRange,
+): SfVisitDoc[] {
+  const rangeStart = startOfDay(range.start)
+  const rangeEnd = endOfDay(range.end)
+  return rows.filter((r) => {
+    const d = visitDateForRangeFilter(r)
+    if (!d) return false
+    return d >= rangeStart && d <= rangeEnd
+  })
+}
+
+export function computeShopVisitStats(rows: SfVisitDoc[]): ShopVisitStats {
   let scheduled = 0
   let completed = 0
   let cancelled = 0
-  let completed7d = 0
-  let sellIn7dGhs = 0
+  let sellInGhs = 0
   for (const r of rows) {
     if (r.status === 'scheduled') scheduled += 1
     else if (r.status === 'completed') {
       completed += 1
-      if (r.visitedAt && r.visitedAt >= since7 && r.visitedAt <= now) {
-        completed7d += 1
-        sellIn7dGhs += r.sellInGhs ?? 0
-      }
+      sellInGhs += r.sellInGhs ?? 0
     } else if (r.status === 'cancelled') cancelled += 1
   }
   return {
@@ -100,8 +122,24 @@ export function computeShopVisitStats(
     scheduled,
     completed,
     cancelled,
-    completed7d,
-    sellIn7dGhs,
+    sellInGhs,
+    rangeFrom: null,
+    rangeTo: null,
+  }
+}
+
+export function computeShopVisitStatsForRange(
+  rows: SfVisitDoc[],
+  range: ShopVisitStatsRange,
+): ShopVisitStats {
+  const inRange = filterShopVisitsByRange(rows, range)
+  const stats = computeShopVisitStats(inRange)
+  const rangeStart = startOfDay(range.start)
+  const rangeEnd = endOfDay(range.end)
+  return {
+    ...stats,
+    rangeFrom: rangeStart.toISOString(),
+    rangeTo: rangeEnd.toISOString(),
   }
 }
 
