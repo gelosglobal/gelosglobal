@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowUpRight, Download, Loader2, TrendingUp } from 'lucide-react'
+import { ArrowUpRight, Download, Loader2, TrendingDown, TrendingUp } from 'lucide-react'
 import { toast } from 'sonner'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
 import { Badge } from '@/components/ui/badge'
@@ -75,6 +75,7 @@ function formatWow(p: number | null, isNew: boolean) {
 }
 
 type RangePreset = '7d' | '1m' | '3m' | '6m' | '12m' | 'custom'
+type SortKey = 'revenue_desc' | 'units_desc' | 'wow_desc' | 'name_asc'
 
 export function ProductPerformanceView() {
   const [rows, setRows] = useState<ProductRow[]>([])
@@ -85,6 +86,7 @@ export function ProductPerformanceView() {
   const [rangePreset, setRangePreset] = useState<RangePreset>('7d')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
+  const [sortKey, setSortKey] = useState<SortKey>('revenue_desc')
 
   const unitHighlights = useMemo(() => {
     const sold = rows.filter((r) => (Number(r.units7d ?? 0) || 0) > 0)
@@ -145,6 +147,69 @@ export function ProductPerformanceView() {
         (r.sku?.toLowerCase().includes(q) ?? false),
     )
   }, [rows, query])
+
+  const displayedRows = useMemo(() => {
+    const list = [...filtered]
+    switch (sortKey) {
+      case 'units_desc':
+        list.sort((a, b) => b.units7d - a.units7d)
+        break
+      case 'wow_desc':
+        list.sort((a, b) => (b.wowRevenuePercent ?? -Infinity) - (a.wowRevenuePercent ?? -Infinity))
+        break
+      case 'name_asc':
+        list.sort((a, b) => a.name.localeCompare(b.name))
+        break
+      case 'revenue_desc':
+      default:
+        list.sort((a, b) => b.revenue7d - a.revenue7d)
+    }
+    return list
+  }, [filtered, sortKey])
+
+  const infographic = useMemo(() => {
+    const totalRevenueCurrent = rows.reduce((sum, r) => sum + (r.revenue7d || 0), 0)
+    const totalRevenuePrior = rows.reduce((sum, r) => sum + (r.revenuePrev7d || 0), 0)
+    const totalUnitsCurrent = rows.reduce((sum, r) => sum + (r.units7d || 0), 0)
+    const totalUnitsPrior = rows.reduce((sum, r) => sum + (r.unitsPrev7d || 0), 0)
+    const revenueDeltaPct =
+      totalRevenuePrior > 0 ? ((totalRevenueCurrent - totalRevenuePrior) / totalRevenuePrior) * 100 : null
+    const unitsDeltaPct =
+      totalUnitsPrior > 0 ? ((totalUnitsCurrent - totalUnitsPrior) / totalUnitsPrior) * 100 : null
+
+    const sortedByRevenue = [...rows].sort((a, b) => b.revenue7d - a.revenue7d)
+    const topFive = sortedByRevenue.slice(0, 5)
+    const topFiveRevenue = topFive.reduce((sum, r) => sum + r.revenue7d, 0)
+    const topFiveSharePct = totalRevenueCurrent > 0 ? (topFiveRevenue / totalRevenueCurrent) * 100 : 0
+
+    let growing = 0
+    let declining = 0
+    let stable = 0
+    let newlyActive = 0
+    for (const row of rows) {
+      if (row.isNew) {
+        newlyActive += 1
+        continue
+      }
+      if (row.wowRevenuePercent == null) {
+        stable += 1
+        continue
+      }
+      if (row.wowRevenuePercent > 2) growing += 1
+      else if (row.wowRevenuePercent < -2) declining += 1
+      else stable += 1
+    }
+
+    return {
+      totalRevenueCurrent,
+      totalUnitsCurrent,
+      revenueDeltaPct,
+      unitsDeltaPct,
+      topFive,
+      topFiveSharePct,
+      mix: { growing, declining, stable, newlyActive },
+    }
+  }, [rows])
 
   function handleExport() {
     if (rows.length === 0) {
@@ -209,26 +274,74 @@ export function ProductPerformanceView() {
           <p className="text-xs text-muted-foreground">{periodLabel}</p>
         ) : null}
 
-        <div className="flex flex-wrap items-end gap-4">
-          <div className="space-y-2">
-            <Label className="text-muted-foreground">Date range</Label>
-            <Select value={rangePreset} onValueChange={(v) => setRangePreset(v as RangePreset)}>
-              <SelectTrigger className="w-[220px]">
-                <SelectValue placeholder="Select range" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="7d">Last 7 days</SelectItem>
-                <SelectItem value="1m">Last 1 month</SelectItem>
-                <SelectItem value="3m">Last 3 months</SelectItem>
-                <SelectItem value="6m">Last 6 months</SelectItem>
-                <SelectItem value="12m">Last 12 months</SelectItem>
-                <SelectItem value="custom">Custom…</SelectItem>
-              </SelectContent>
-            </Select>
+        <Card className="p-4 sm:p-5">
+          <div className="grid gap-4 lg:grid-cols-4">
+            <div className="space-y-2">
+              <Label className="text-muted-foreground">Date range</Label>
+              <Select value={rangePreset} onValueChange={(v) => setRangePreset(v as RangePreset)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select range" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="7d">Last 7 days</SelectItem>
+                  <SelectItem value="1m">Last 1 month</SelectItem>
+                  <SelectItem value="3m">Last 3 months</SelectItem>
+                  <SelectItem value="6m">Last 6 months</SelectItem>
+                  <SelectItem value="12m">Last 12 months</SelectItem>
+                  <SelectItem value="custom">Custom…</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="pp-search" className="text-muted-foreground">
+                Search products
+              </Label>
+              <Input
+                id="pp-search"
+                placeholder="Name or SKU…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                disabled={loading || rows.length === 0}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-muted-foreground">Sort by</Label>
+              <Select value={sortKey} onValueChange={(v) => setSortKey(v as SortKey)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Sort rows" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="revenue_desc">Revenue (highest first)</SelectItem>
+                  <SelectItem value="units_desc">Units (highest first)</SelectItem>
+                  <SelectItem value="wow_desc">Growth % (highest first)</SelectItem>
+                  <SelectItem value="name_asc">Name (A-Z)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                disabled={loading}
+                onClick={() => {
+                  setQuery('')
+                  setSortKey('revenue_desc')
+                  setRangePreset('7d')
+                  setFrom('')
+                  setTo('')
+                }}
+              >
+                Reset filters
+              </Button>
+            </div>
           </div>
 
           {rangePreset === 'custom' ? (
-            <>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="pp-from" className="text-muted-foreground">
                   From
@@ -253,9 +366,9 @@ export function ProductPerformanceView() {
                   disabled={loading}
                 />
               </div>
-            </>
+            </div>
           ) : null}
-        </div>
+        </Card>
 
         <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
           <Card className="p-5">
@@ -374,18 +487,105 @@ export function ProductPerformanceView() {
           </Card>
         </div>
 
-        <div className="max-w-md space-y-2">
-          <Label htmlFor="pp-search" className="text-muted-foreground">
-            Search products
-          </Label>
-          <Input
-            id="pp-search"
-            placeholder="Name or SKU…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            disabled={loading || rows.length === 0}
-          />
-        </div>
+        {!loading && rows.length > 0 ? (
+          <div className="grid gap-4 xl:grid-cols-3">
+            <Card className="p-5">
+              <p className="text-xs font-medium uppercase text-muted-foreground">Revenue snapshot</p>
+              <p className="mt-2 text-3xl font-bold tabular-nums">{formatGhs(infographic.totalRevenueCurrent)}</p>
+              <div className="mt-3 flex items-center gap-2 text-xs">
+                {infographic.revenueDeltaPct == null ? (
+                  <Badge variant="outline">No prior baseline</Badge>
+                ) : infographic.revenueDeltaPct >= 0 ? (
+                  <Badge className="bg-emerald-600 hover:bg-emerald-600">
+                    <TrendingUp className="mr-1 h-3.5 w-3.5" />+
+                    {Math.abs(infographic.revenueDeltaPct).toFixed(1)}% vs prior
+                  </Badge>
+                ) : (
+                  <Badge variant="destructive">
+                    <TrendingDown className="mr-1 h-3.5 w-3.5" />-
+                    {Math.abs(infographic.revenueDeltaPct).toFixed(1)}% vs prior
+                  </Badge>
+                )}
+              </div>
+            </Card>
+
+            <Card className="p-5">
+              <p className="text-xs font-medium uppercase text-muted-foreground">Units snapshot</p>
+              <p className="mt-2 text-3xl font-bold tabular-nums">
+                {infographic.totalUnitsCurrent.toLocaleString()}
+              </p>
+              <div className="mt-3 flex items-center gap-2 text-xs">
+                {infographic.unitsDeltaPct == null ? (
+                  <Badge variant="outline">No prior baseline</Badge>
+                ) : infographic.unitsDeltaPct >= 0 ? (
+                  <Badge className="bg-emerald-600 hover:bg-emerald-600">
+                    <TrendingUp className="mr-1 h-3.5 w-3.5" />+
+                    {Math.abs(infographic.unitsDeltaPct).toFixed(1)}% vs prior
+                  </Badge>
+                ) : (
+                  <Badge variant="destructive">
+                    <TrendingDown className="mr-1 h-3.5 w-3.5" />-
+                    {Math.abs(infographic.unitsDeltaPct).toFixed(1)}% vs prior
+                  </Badge>
+                )}
+              </div>
+            </Card>
+
+            <Card className="p-5">
+              <p className="text-xs font-medium uppercase text-muted-foreground">Momentum mix</p>
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <Badge variant="outline" className="justify-center py-1">
+                  Growing: {infographic.mix.growing}
+                </Badge>
+                <Badge variant="outline" className="justify-center py-1">
+                  Stable: {infographic.mix.stable}
+                </Badge>
+                <Badge variant="outline" className="justify-center py-1">
+                  Declining: {infographic.mix.declining}
+                </Badge>
+                <Badge variant="outline" className="justify-center py-1">
+                  New: {infographic.mix.newlyActive}
+                </Badge>
+              </div>
+            </Card>
+          </div>
+        ) : null}
+
+        {!loading && rows.length > 0 ? (
+          <Card className="p-5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium uppercase text-muted-foreground">
+                Revenue concentration (Top 5 SKUs)
+              </p>
+              <p className="text-sm font-semibold tabular-nums">{infographic.topFiveSharePct.toFixed(1)}%</p>
+            </div>
+            <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-indigo-600"
+                style={{ width: `${Math.min(100, Math.max(0, infographic.topFiveSharePct))}%` }}
+              />
+            </div>
+            <div className="mt-4 space-y-2">
+              {infographic.topFive.map((row) => {
+                const share = infographic.totalRevenueCurrent > 0 ? (row.revenue7d / infographic.totalRevenueCurrent) * 100 : 0
+                return (
+                  <div key={row.key}>
+                    <div className="mb-1 flex items-center justify-between gap-3 text-xs">
+                      <p className="truncate text-foreground">{row.name}</p>
+                      <p className="shrink-0 tabular-nums text-muted-foreground">{share.toFixed(1)}%</p>
+                    </div>
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-violet-500"
+                        style={{ width: `${Math.min(100, Math.max(0, share))}%` }}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </Card>
+        ) : null}
 
         <Card className="p-0">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3 sm:px-6">
@@ -428,7 +628,7 @@ export function ProductPerformanceView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((p) => (
+                {displayedRows.map((p) => (
                   <TableRow key={p.key}>
                     <TableCell className="font-medium">{p.name}</TableCell>
                     <TableCell className="hidden font-mono text-xs text-muted-foreground sm:table-cell">
