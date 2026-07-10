@@ -61,7 +61,8 @@ export async function POST(request: Request) {
     const amount = r.amountGhs
     const discount = Math.max(0, Math.min(amount, r.discountGhs ?? 0))
     const paid = Math.max(0, Math.min(Math.max(0, amount - discount), r.paidGhs ?? 0))
-    const effectiveDate = r.dueAt ? new Date(r.dueAt) : r.invoiceAt ? new Date(r.invoiceAt) : undefined
+    const invoiceAt = r.invoiceAt ? new Date(r.invoiceAt) : undefined
+    const dueAt = r.dueAt ? new Date(r.dueAt) : invoiceAt
     return {
       updateOne: {
         filter: { outletName: r.outletName, invoiceNumber: r.invoiceNumber },
@@ -69,13 +70,13 @@ export async function POST(request: Request) {
           $setOnInsert: {
             outletName: r.outletName,
             invoiceNumber: r.invoiceNumber,
-            invoiceAt: effectiveDate,
+            invoiceAt,
             amountGhs: amount,
             discountGhs: discount > 0 ? discount : undefined,
             paidGhs: paid,
             paidAt: r.paidAt ? new Date(r.paidAt) : undefined,
             paymentMethod: r.paymentMethod,
-            dueAt: effectiveDate,
+            dueAt,
             repName: r.repName,
             notes: r.notes,
             createdAt: now,

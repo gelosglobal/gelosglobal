@@ -138,7 +138,8 @@ export async function POST(request: Request) {
 
   const d = parsed.data
   const { db } = getMongo()
-  const effectiveDate = d.dueAt ?? (d.invoiceAt ? new Date(d.invoiceAt) : undefined)
+  const invoiceAt = d.invoiceAt ? new Date(d.invoiceAt) : undefined
+  const dueAt = d.dueAt ?? invoiceAt
 
   const rawLines = (d.items ?? []).map((it) => ({
     name: it.name,
@@ -166,14 +167,14 @@ export async function POST(request: Request) {
       createSfB2bInvoice(db, {
         outletName: d.outletName,
         invoiceNumber: d.invoiceNumber,
-        invoiceAt: effectiveDate,
+        invoiceAt,
         amountGhs: d.amountGhs,
         discountGhs: d.discountGhs,
         paidGhs: d.paidGhs ?? 0,
         paidAt: d.paidAt ? new Date(d.paidAt) : undefined,
         paymentMethod: d.paymentMethod,
         items: preparedLines.length > 0 ? preparedLines : undefined,
-        dueAt: effectiveDate,
+        dueAt,
         repName: d.repName,
         notes: d.notes,
       }),

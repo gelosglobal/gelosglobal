@@ -76,12 +76,11 @@ function statusFor(
 
 export function serializeSfB2bInvoice(doc: SfB2bInvoiceDoc, now = new Date()): SfB2bInvoiceJson {
   const { status, balanceGhs } = statusFor(doc, now)
-  const effectiveInvoiceAt = doc.invoiceAt ?? doc.dueAt ?? null
   return {
     id: doc._id.toHexString(),
     outletName: doc.outletName,
     invoiceNumber: doc.invoiceNumber,
-    invoiceAt: effectiveInvoiceAt ? effectiveInvoiceAt.toISOString() : null,
+    invoiceAt: doc.invoiceAt ? doc.invoiceAt.toISOString() : null,
     amountGhs: doc.amountGhs,
     discountGhs: Number.isFinite(doc.discountGhs as number) ? (doc.discountGhs as number) : 0,
     paidGhs: doc.paidGhs,

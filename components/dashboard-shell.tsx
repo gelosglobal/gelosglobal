@@ -1,7 +1,12 @@
 'use client'
 
-import { Sidebar } from '@/components/sidebar'
+import type { ReactNode } from 'react'
 import { AppNavLinks } from '@/components/app-nav-links'
+import { AppTopHeader } from '@/components/app-top-header'
+import {
+  DesktopSidebarFrame,
+  SidebarCollapseProvider,
+} from '@/components/sidebar-collapse'
 import { Button } from '@/components/ui/button'
 import {
   Sheet,
@@ -15,7 +20,13 @@ import { Menu } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
 
-export function DashboardShell({ children }: { children: React.ReactNode }) {
+type DashboardShellProps = {
+  children: ReactNode
+  headerActions?: ReactNode
+  subHeader?: ReactNode
+}
+
+export function DashboardShell({ children, headerActions, subHeader }: DashboardShellProps) {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
   const title = getMobileNavTitle(pathname)
@@ -26,7 +37,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!pathname) return
-    // Fire-and-forget activity log; don't block UI.
     void fetch('/api/activity/page-view', {
       method: 'POST',
       credentials: 'include',
@@ -40,13 +50,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }, [pathname, title])
 
   return (
-    <div className="flex h-screen min-w-0 overflow-x-hidden bg-background">
-      <div className="hidden lg:flex">
-        <Sidebar />
-      </div>
+    <SidebarCollapseProvider>
+      <DesktopSidebarFrame>
+        <AppTopHeader actions={headerActions} />
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4 lg:hidden">
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border/70 bg-card/90 px-4 backdrop-blur-md lg:hidden">
           <Sheet open={open} onOpenChange={setOpen}>
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="Open menu">
@@ -55,11 +63,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             </SheetTrigger>
             <SheetContent
               side="left"
-              className="flex w-[min(100vw,20rem)] flex-col border-slate-700 bg-gradient-to-b from-slate-900 to-slate-800 p-0 text-slate-100"
+              className="flex w-[min(100vw,20rem)] flex-col border-sidebar-border bg-sidebar p-0 text-sidebar-foreground"
             >
-              <SheetHeader className="border-b border-slate-700 p-4 text-left">
-                <SheetTitle className="text-lg font-bold text-white">GELOS</SheetTitle>
-                <p className="text-xs font-semibold uppercase tracking-widest text-amber-400">
+              <SheetHeader className="border-b border-sidebar-border p-4 text-left">
+                <SheetTitle className="text-lg font-bold text-sidebar-foreground">GELOS</SheetTitle>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-sidebar-primary">
                   Navigate
                 </p>
               </SheetHeader>
@@ -71,10 +79,12 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           <h1 className="truncate text-base font-semibold text-foreground">{title}</h1>
         </header>
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+        {subHeader}
+
+        <div className="dashboard-canvas min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
           {children}
         </div>
-      </div>
-    </div>
+      </DesktopSidebarFrame>
+    </SidebarCollapseProvider>
   )
 }

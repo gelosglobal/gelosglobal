@@ -13,31 +13,35 @@ type AppNavLinksProps = {
   onNavigate?: () => void
 }
 
+function navClass(active: boolean) {
+  return cn(
+    'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors',
+    active
+      ? 'bg-sidebar-primary text-sidebar-primary-foreground'
+      : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+  )
+}
+
 export function AppNavLinks({ onNavigate }: AppNavLinksProps) {
   const pathname = usePathname()
   const { data: session } = useSession()
   const access = useMemo(() => getUserAccess((session as any) ?? null), [session])
 
   return (
-    <nav className="flex flex-col px-3 py-4">
-      <p className="mb-2 px-3 text-xs font-bold uppercase tracking-wider text-slate-500">
+    <nav className="flex flex-col px-3 py-4 text-sidebar-foreground">
+      <p className="mb-2 px-3 text-[11px] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/50">
         Main
       </p>
       {access.sections.has('master') ? (
         <Link
           href="/"
           onClick={onNavigate}
-          className={cn(
-            'mb-4 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
-            pathname === '/'
-              ? 'bg-blue-600 text-white'
-              : 'text-slate-300 hover:bg-slate-700/60',
-          )}
+          className={cn('mb-4', navClass(pathname === '/'))}
         >
           Master Dashboard
         </Link>
       ) : null}
-      <p className="mb-2 px-3 text-xs font-bold uppercase tracking-wider text-slate-500">
+      <p className="mb-2 px-3 text-[11px] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/50">
         DTC
       </p>
       <ul className="mb-4 space-y-1">
@@ -49,12 +53,7 @@ export function AppNavLinks({ onNavigate }: AppNavLinksProps) {
               <Link
                 href={item.href!}
                 onClick={onNavigate}
-                className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
-                  active
-                    ? 'bg-blue-600 text-white'
-                    : 'text-slate-300 hover:bg-slate-700/60',
-                )}
+                className={navClass(active)}
               >
                 <Icon className="h-4 w-4 shrink-0" />
                 {item.label}
@@ -63,7 +62,7 @@ export function AppNavLinks({ onNavigate }: AppNavLinksProps) {
           )
         })}
       </ul>
-      <p className="mb-2 px-3 text-xs font-bold uppercase tracking-wider text-slate-500">
+      <p className="mb-2 px-3 text-[11px] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/50">
         Retail
       </p>
       <ul className="mb-4 space-y-1">
@@ -91,10 +90,7 @@ export function AppNavLinks({ onNavigate }: AppNavLinksProps) {
                   <Link
                     href={item.href}
                     onClick={onNavigate}
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
-                      active ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700/60',
-                    )}
+                    className={navClass(active)}
                   >
                     <Icon className="h-4 w-4 shrink-0" />
                     <span className="flex-1">{item.label}</span>
@@ -125,12 +121,7 @@ export function AppNavLinks({ onNavigate }: AppNavLinksProps) {
                             <Link
                               href={c.href!}
                               onClick={onNavigate}
-                              className={cn(
-                                'flex items-center gap-3 rounded-lg px-3 py-2 text-[13px] font-medium',
-                                cActive
-                                  ? 'bg-blue-600 text-white'
-                                  : 'text-slate-300 hover:bg-slate-700/60',
-                              )}
+                              className={cn(navClass(cActive), 'text-[13px]')}
                             >
                               <ChildIcon className="h-4 w-4 shrink-0 opacity-90" />
                               {c.label}
@@ -148,7 +139,7 @@ export function AppNavLinks({ onNavigate }: AppNavLinksProps) {
             if (!item.href) {
               out.push(
                 <li key={item.label}>
-                  <span className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-500">
+                  <span className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-sidebar-foreground/40">
                     <Icon className="h-4 w-4 shrink-0" />
                     {item.label}
                   </span>
@@ -163,11 +154,7 @@ export function AppNavLinks({ onNavigate }: AppNavLinksProps) {
                 <Link
                   href={item.href}
                   onClick={onNavigate}
-                  className={cn(
-                    'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
-                    item.indent === 1 && 'ml-4 pl-4 text-[13px]',
-                    active ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700/60',
-                  )}
+                  className={cn(navClass(active), item.indent === 1 && 'ml-4 pl-4 text-[13px]')}
                 >
                   <Icon className="h-4 w-4 shrink-0" />
                   {item.label}
@@ -178,7 +165,7 @@ export function AppNavLinks({ onNavigate }: AppNavLinksProps) {
           return out
         })()}
       </ul>
-      <p className="mb-2 px-3 text-xs font-bold uppercase tracking-wider text-slate-500">
+      <p className="mb-2 px-3 text-[11px] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/50">
         Sell-in
       </p>
       <ul className="space-y-1">
@@ -190,12 +177,7 @@ export function AppNavLinks({ onNavigate }: AppNavLinksProps) {
               <Link
                 href={item.href!}
                 onClick={onNavigate}
-                className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
-                  active
-                    ? 'bg-blue-600 text-white'
-                    : 'text-slate-300 hover:bg-slate-700/60',
-                )}
+                className={navClass(active)}
               >
                 <Icon className="h-4 w-4 shrink-0" />
                 {item.label}

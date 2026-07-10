@@ -1,19 +1,76 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { ChevronDown, ChevronRight, Home, LogOut } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  Home,
+  LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { signOut, useSession } from '@/lib/auth-client'
 import { Button } from '@/components/ui/button'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { useSidebarCollapse } from '@/components/sidebar-collapse'
 import { dtcNavItems, salesForceNavItems, sellInNavItems } from '@/lib/nav'
 import { getUserAccess } from '@/lib/access'
 import { gelosLogoFont } from '@/lib/fonts'
 
+function navItemClass(active: boolean, collapsed: boolean) {
+  return cn(
+    'flex w-full items-center gap-3 rounded-xl text-sm font-medium transition-colors',
+    collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
+    active
+      ? 'bg-sidebar-primary text-sidebar-primary-foreground shadow-sm'
+      : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+  )
+}
+
+function SidebarNavItem({
+  href,
+  label,
+  icon: Icon,
+  active,
+  collapsed,
+}: {
+  href: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  active: boolean
+  collapsed: boolean
+}) {
+  const link = (
+    <Link href={href} className={navItemClass(active, collapsed)} title={collapsed ? label : undefined}>
+      <Icon className="h-4 w-4 shrink-0" />
+      {!collapsed ? <span className="truncate">{label}</span> : null}
+    </Link>
+  )
+
+  if (!collapsed) return link
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{link}</TooltipTrigger>
+      <TooltipContent side="right" className="text-xs">
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 export function Sidebar() {
   const router = useRouter()
   const pathname = usePathname()
+  const { collapsed, toggle } = useSidebarCollapse()
   const { data: session, isPending } = useSession()
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
     () => new Set(['RETAIL']),
@@ -42,290 +99,383 @@ export function Sidebar() {
     })
   }
 
+  const displayName = session?.user?.name || session?.user?.email || 'User'
+  const initials = displayName
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('')
+
+  const flatNavItems = useMemo(() => {
+    const items: Array<{ href: string; label: string; icon: React.ComponentType<{ className?: string }> }> = []
+    if (access.sections.has('master')) {
+      items.push({ href: '/', label: 'Master Dashboard', icon: Home })
+    }
+    if (access.sections.has('dtc')) {
+      for (const item of dtcNavItems) {
+        if (item.href) items.push({ href: item.href, label: item.label, icon: item.icon })
+      }
+    }
+    if (access.sections.has('retail')) {
+      for (const item of salesForceNavItems) {
+        if (item.href) items.push({ href: item.href, label: item.label, icon: item.icon })
+      }
+    }
+    if (access.sections.has('sell-in')) {
+      for (const item of sellInNavItems) {
+        if (item.href) items.push({ href: item.href, label: item.label, icon: item.icon })
+      }
+    }
+    return items
+  }, [access.sections])
+
   return (
-    <div className="flex h-screen w-64 flex-col border-r border-slate-700 bg-gradient-to-b from-slate-900 to-slate-800 text-slate-100">
-      <div className="border-b border-slate-700 p-6">
-        <div className="mb-1">
-          <h2
-            className={cn(
-              gelosLogoFont.className,
-              'text-xl font-extrabold tracking-wide text-white',
-            )}
-          >
-            GELOS
-          </h2>
-          <p className="text-xs font-semibold uppercase tracking-widest text-amber-400">
-            for staffs
-          </p>
-        </div>
-      </div>
-
-      {access.sections.has('master') ? (
-        <div className="px-4 py-3">
-          <Link
-            href="/"
-            className={cn(
-              'flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition',
-              pathname === '/'
-                ? 'bg-blue-600 text-white shadow-lg'
-                : 'bg-slate-700/50 text-white hover:bg-slate-600',
-            )}
-          >
-            <Home className="h-4 w-4" />
-            Master Dashboard
-          </Link>
-        </div>
-      ) : null}
-
-      <div className="flex-1 space-y-2 overflow-y-auto px-3 py-4">
-        {access.sections.has('dtc') ? (
-        <div>
-          <button
-            type="button"
-            onClick={() => toggleSection('DTC')}
-            className="flex w-full items-center justify-between px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-400 transition hover:text-slate-300"
-          >
-            DTC
-            <ChevronDown
+    <TooltipProvider delayDuration={0}>
+      <div
+        className={cn(
+          'flex h-screen flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground',
+          collapsed ? 'w-[4.5rem]' : 'w-64',
+        )}
+      >
+        <div
+          className={cn(
+            'flex items-center border-b border-sidebar-border',
+            collapsed ? 'justify-center px-2 py-4' : 'justify-between gap-2 px-4 py-5',
+          )}
+        >
+          {collapsed ? (
+            <button
+              type="button"
+              onClick={toggle}
               className={cn(
-                'h-4 w-4 transition-transform',
-                expandedSections.has('DTC') && 'rotate-180',
+                gelosLogoFont.className,
+                'flex h-9 w-9 items-center justify-center rounded-xl bg-sidebar-primary text-sm font-extrabold text-sidebar-primary-foreground',
               )}
-            />
-          </button>
-          {expandedSections.has('DTC') && (
-            <div className="mt-1 space-y-1">
-              {dtcNavItems.map((item) => {
-                const Icon = item.icon
-                const active = pathname === item.href
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href!}
-                    className={cn(
-                      'flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium transition',
-                      active
-                        ? 'bg-blue-600 text-white shadow-lg'
-                        : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
-                    )}
-                  >
-                    <Icon className="h-4 w-4 shrink-0" />
-                    {item.label}
-                  </Link>
-                )
-              })}
-            </div>
+              aria-label="Expand sidebar"
+            >
+              G
+            </button>
+          ) : (
+            <>
+              <div className="min-w-0">
+                <h2
+                  className={cn(
+                    gelosLogoFont.className,
+                    'text-xl font-extrabold tracking-wide text-sidebar-foreground',
+                  )}
+                >
+                  GELOS
+                </h2>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-sidebar-primary">
+                  for staffs
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="shrink-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                onClick={toggle}
+                aria-label="Collapse sidebar"
+              >
+                <PanelLeftClose className="h-4 w-4" />
+              </Button>
+            </>
           )}
         </div>
-        ) : null}
 
-        {access.sections.has('retail') ? (
-        <div>
-          <button
-            type="button"
-            onClick={() => toggleSection('RETAIL')}
-            className="flex w-full items-center justify-between px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-400 transition hover:text-slate-300"
-          >
-            RETAIL
-            <ChevronDown
-              className={cn(
-                'h-4 w-4 transition-transform',
-                expandedSections.has('RETAIL') && 'rotate-180',
-              )}
-            />
-          </button>
-          {expandedSections.has('RETAIL') && (
-            <div className="mt-1 space-y-1">
-              {(() => {
-                const out: React.ReactNode[] = []
-                for (let i = 0; i < salesForceNavItems.length; i += 1) {
-                  const item = salesForceNavItems[i]!
-                  const Icon = item.icon
+        {collapsed ? (
+          <div className="flex-1 space-y-1 overflow-y-auto px-2 py-3">
+            {flatNavItems.map((item) => (
+              <SidebarNavItem
+                key={item.href}
+                href={item.href}
+                label={item.label}
+                icon={item.icon}
+                active={pathname === item.href}
+                collapsed
+              />
+            ))}
+          </div>
+        ) : (
+          <>
+            {access.sections.has('master') ? (
+              <div className="px-3 py-3">
+                <SidebarNavItem
+                  href="/"
+                  label="Master Dashboard"
+                  icon={Home}
+                  active={pathname === '/'}
+                  collapsed={false}
+                />
+              </div>
+            ) : null}
 
-                  // Hover-reveal submenu under "B2B Payments"
-                  if (item.href === '/sf/b2b-payments') {
-                    const children = []
-                    let j = i + 1
-                    while (j < salesForceNavItems.length && salesForceNavItems[j]?.indent === 1) {
-                      children.push(salesForceNavItems[j]!)
-                      j += 1
-                    }
-                    i = j - 1
+            <div className="flex-1 space-y-3 overflow-y-auto px-2 py-2">
+              {access.sections.has('dtc') ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('DTC')}
+                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-[11px] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/50 transition hover:text-sidebar-foreground/80"
+                  >
+                    DTC
+                    <ChevronDown
+                      className={cn(
+                        'h-3.5 w-3.5 transition-transform',
+                        expandedSections.has('DTC') && 'rotate-180',
+                      )}
+                    />
+                  </button>
+                  {expandedSections.has('DTC') ? (
+                    <div className="mt-1 space-y-0.5">
+                      {dtcNavItems.map((item) => (
+                        <SidebarNavItem
+                          key={item.href}
+                          href={item.href!}
+                          label={item.label}
+                          icon={item.icon}
+                          active={pathname === item.href}
+                          collapsed={false}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
-                    const childActive = children.some((c) => c.href && pathname === c.href)
-                    const active = pathname === item.href
-                    const open = active || childActive
+              {access.sections.has('retail') ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('RETAIL')}
+                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-[11px] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/50 transition hover:text-sidebar-foreground/80"
+                  >
+                    Retail
+                    <ChevronDown
+                      className={cn(
+                        'h-3.5 w-3.5 transition-transform',
+                        expandedSections.has('RETAIL') && 'rotate-180',
+                      )}
+                    />
+                  </button>
+                  {expandedSections.has('RETAIL') ? (
+                    <div className="mt-1 space-y-0.5">
+                      {(() => {
+                        const out: ReactNode[] = []
+                        for (let i = 0; i < salesForceNavItems.length; i += 1) {
+                          const item = salesForceNavItems[i]!
+                          const Icon = item.icon
 
-                    out.push(
-                      <div key={item.href} className="group">
-                        <Link
-                          href={item.href}
-                          className={cn(
-                            'flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium transition',
-                            active
-                              ? 'bg-blue-600 text-white shadow-lg'
-                              : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
-                          )}
-                        >
-                          <Icon className="h-4 w-4 shrink-0" />
-                          <span className="flex-1">{item.label}</span>
-                          <ChevronRight
-                            className={cn(
-                              'h-4 w-4 shrink-0 opacity-70 transition-transform',
-                              open
-                                ? 'rotate-90'
-                                : 'rotate-0 group-hover:rotate-90 group-hover:opacity-90',
-                            )}
-                          />
-                        </Link>
+                          if (item.href === '/sf/b2b-payments') {
+                            const children = []
+                            let j = i + 1
+                            while (
+                              j < salesForceNavItems.length &&
+                              salesForceNavItems[j]?.indent === 1
+                            ) {
+                              children.push(salesForceNavItems[j]!)
+                              j += 1
+                            }
+                            i = j - 1
 
-                        <div
-                          className={cn(
-                            'mt-1 overflow-hidden pl-4 transition-all duration-200',
-                            open
-                              ? 'max-h-40 opacity-100'
-                              : 'max-h-0 opacity-0 group-hover:max-h-40 group-hover:opacity-100',
-                          )}
-                        >
-                          <div className="space-y-1 py-1">
-                            {children.map((c) => {
-                              const ChildIcon = c.icon
-                              const cActive = pathname === c.href
-                              return (
+                            const childActive = children.some(
+                              (c) => c.href && pathname === c.href,
+                            )
+                            const active = pathname === item.href
+                            const open = active || childActive
+
+                            out.push(
+                              <div key={item.href} className="group">
                                 <Link
-                                  key={c.href}
-                                  href={c.href!}
+                                  href={item.href}
+                                  className={navItemClass(active, false)}
+                                >
+                                  <Icon className="h-4 w-4 shrink-0" />
+                                  <span className="flex-1 truncate">{item.label}</span>
+                                  <ChevronRight
+                                    className={cn(
+                                      'h-4 w-4 shrink-0 opacity-70 transition-transform',
+                                      open
+                                        ? 'rotate-90'
+                                        : 'rotate-0 group-hover:rotate-90 group-hover:opacity-90',
+                                    )}
+                                  />
+                                </Link>
+                                <div
                                   className={cn(
-                                    'flex w-full items-center gap-3 rounded-lg px-4 py-2 text-[13px] font-medium transition',
-                                    cActive
-                                      ? 'bg-blue-600 text-white shadow-lg'
-                                      : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
+                                    'mt-0.5 overflow-hidden pl-3 transition-all duration-200',
+                                    open
+                                      ? 'max-h-40 opacity-100'
+                                      : 'max-h-0 opacity-0 group-hover:max-h-40 group-hover:opacity-100',
                                   )}
                                 >
-                                  <ChildIcon className="h-4 w-4 shrink-0 opacity-90" />
-                                  {c.label}
-                                </Link>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      </div>,
-                    )
-                    continue
-                  }
+                                  <div className="space-y-0.5 py-1">
+                                    {children.map((c) => (
+                                      <SidebarNavItem
+                                        key={c.href}
+                                        href={c.href!}
+                                        label={c.label}
+                                        icon={c.icon}
+                                        active={pathname === c.href}
+                                        collapsed={false}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>,
+                            )
+                            continue
+                          }
 
-                  if (item.href) {
-                    const active = pathname === item.href
-                    out.push(
-                      <Link
-                        key={item.label}
-                        href={item.href}
-                        className={cn(
-                          'flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium transition',
-                          item.indent === 1 && 'ml-4 pl-4 text-[13px]',
-                          active
-                            ? 'bg-blue-600 text-white shadow-lg'
-                            : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
-                        )}
-                      >
-                        <Icon className="h-4 w-4 shrink-0" />
-                        {item.label}
-                      </Link>,
-                    )
-                    continue
-                  }
+                          if (item.href) {
+                            out.push(
+                              <SidebarNavItem
+                                key={item.label}
+                                href={item.href}
+                                label={item.label}
+                                icon={item.icon}
+                                active={pathname === item.href}
+                                collapsed={false}
+                              />,
+                            )
+                            continue
+                          }
 
-                  out.push(
-                    <span
-                      key={item.label}
-                      className="flex w-full cursor-default items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-500"
-                    >
-                      <Icon className="h-4 w-4 shrink-0" />
-                      {item.label}
-                    </span>,
-                  )
-                }
-                return out
-              })()}
-            </div>
-          )}
-        </div>
-        ) : null}
+                          out.push(
+                            <span
+                              key={item.label}
+                              className="flex w-full cursor-default items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-sidebar-foreground/40"
+                            >
+                              <Icon className="h-4 w-4 shrink-0" />
+                              {item.label}
+                            </span>,
+                          )
+                        }
+                        return out
+                      })()}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
 
-        {access.sections.has('sell-in') ? (
-        <div>
-          <button
-            type="button"
-            onClick={() => toggleSection('SELL-IN')}
-            className="flex w-full items-center justify-between px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-400 transition hover:text-slate-300"
-          >
-            SELL-IN
-            <ChevronDown
-              className={cn(
-                'h-4 w-4 transition-transform',
-                expandedSections.has('SELL-IN') && 'rotate-180',
-              )}
-            />
-          </button>
-          {expandedSections.has('SELL-IN') && (
-            <div className="mt-1 space-y-1">
-              {sellInNavItems.map((item) => {
-                const Icon = item.icon
-                const active = pathname === item.href
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href!}
-                    className={cn(
-                      'flex w-full items-center gap-3 rounded-lg px-4 py-2.5 text-sm font-medium transition',
-                      active
-                        ? 'bg-blue-600 text-white shadow-lg'
-                        : 'text-slate-300 hover:bg-slate-700/60 hover:text-white',
-                    )}
+              {access.sections.has('sell-in') ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => toggleSection('SELL-IN')}
+                    className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-[11px] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/50 transition hover:text-sidebar-foreground/80"
                   >
-                    <Icon className="h-4 w-4 shrink-0" />
-                    {item.label}
-                  </Link>
-                )
-              })}
+                    Sell-in
+                    <ChevronDown
+                      className={cn(
+                        'h-3.5 w-3.5 transition-transform',
+                        expandedSections.has('SELL-IN') && 'rotate-180',
+                      )}
+                    />
+                  </button>
+                  {expandedSections.has('SELL-IN') ? (
+                    <div className="mt-1 space-y-0.5">
+                      {sellInNavItems.map((item) => (
+                        <SidebarNavItem
+                          key={item.href}
+                          href={item.href!}
+                          label={item.label}
+                          icon={item.icon}
+                          active={pathname === item.href}
+                          collapsed={false}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
+          </>
+        )}
+
+        <div className={cn('border-t border-sidebar-border', collapsed ? 'p-2' : 'space-y-3 p-3')}>
+          {!collapsed ? (
+            <div className="rounded-xl bg-sidebar-accent/70 px-3 py-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground">
+                  {initials || 'U'}
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-sidebar-foreground">
+                    {isPending ? '…' : displayName}
+                  </p>
+                  {!isPending && session?.user?.email ? (
+                    <p className="truncate text-xs text-sidebar-foreground/60">{session.user.email}</p>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground">
+                  {initials || 'U'}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="right">{displayName}</TooltipContent>
+            </Tooltip>
+          )}
+
+          {collapsed ? (
+            <div className="mt-2 flex flex-col items-center gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                    onClick={toggle}
+                    aria-label="Expand sidebar"
+                  >
+                    <PanelLeftOpen className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Expand sidebar</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                    onClick={async () => {
+                      await signOut()
+                      router.push('/sign-in')
+                      router.refresh()
+                    }}
+                    aria-label="Sign out"
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Sign out</TooltipContent>
+              </Tooltip>
+            </div>
+          ) : (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="w-full justify-center gap-2 bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent/80"
+              onClick={async () => {
+                await signOut()
+                router.push('/sign-in')
+                router.refresh()
+              }}
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </Button>
           )}
         </div>
-        ) : null}
       </div>
-
-      <div className="space-y-3 border-t border-slate-700 p-4">
-        <div className="rounded-lg bg-slate-800/80 px-3 py-2">
-          <p className="text-xs uppercase tracking-wide text-slate-500">
-            Signed in
-          </p>
-          <p className="truncate text-sm font-medium text-slate-100">
-            {isPending
-              ? '…'
-              : session?.user?.name || session?.user?.email || 'User'}
-          </p>
-          {!isPending &&
-          session?.user?.email &&
-          session.user.name &&
-          session.user.name !== session.user.email ? (
-            <p className="truncate text-xs text-slate-400">{session.user.email}</p>
-          ) : null}
-        </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          className="w-full justify-center gap-2 bg-slate-700 text-slate-100 hover:bg-slate-600"
-          onClick={async () => {
-            await signOut()
-            router.push('/sign-in')
-            router.refresh()
-          }}
-        >
-          <LogOut className="h-4 w-4" />
-          Sign out
-        </Button>
-        <p className="text-center text-xs text-slate-400">© 2026 GELOS</p>
-      </div>
-    </div>
+    </TooltipProvider>
   )
 }

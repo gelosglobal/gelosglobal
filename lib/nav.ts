@@ -104,3 +104,12 @@ export function getMobileNavTitle(pathname: string): string {
   if (pathname === '/') return 'Master Dashboard'
   return 'GELOS'
 }
+
+export function getPageBreadcrumb(pathname: string): { section: string; title: string } {
+  const title = getMobileNavTitle(pathname)
+  if (pathname === '/') return { section: 'Main', title }
+  if (pathname.startsWith('/dtc')) return { section: 'DTC', title }
+  if (pathname.startsWith('/sf')) return { section: 'Retail', title }
+  if (pathname.startsWith('/sell-in')) return { section: 'Sell-in', title }
+  return { section: 'GELOS', title }
+}

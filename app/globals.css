@@ -4,39 +4,39 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: oklch(0.98 0.002 203);
-  --foreground: oklch(0.15 0.02 203);
+  --background: oklch(0.97 0.004 240);
+  --foreground: oklch(0.18 0.02 260);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.15 0.02 203);
+  --card-foreground: oklch(0.18 0.02 260);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.15 0.02 203);
-  --primary: oklch(0.42 0.16 262);
+  --popover-foreground: oklch(0.18 0.02 260);
+  --primary: oklch(0.48 0.18 262);
   --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.96 0.01 203);
-  --secondary-foreground: oklch(0.42 0.16 262);
-  --muted: oklch(0.92 0.01 203);
-  --muted-foreground: oklch(0.56 0.08 203);
-  --accent: oklch(0.48 0.16 262);
-  --accent-foreground: oklch(1 0 0);
+  --secondary: oklch(0.95 0.01 260);
+  --secondary-foreground: oklch(0.35 0.12 262);
+  --muted: oklch(0.94 0.008 260);
+  --muted-foreground: oklch(0.5 0.04 260);
+  --accent: oklch(0.94 0.02 262);
+  --accent-foreground: oklch(0.35 0.12 262);
   --destructive: oklch(0.63 0.22 25);
   --destructive-foreground: oklch(1 0 0);
-  --border: oklch(0.92 0.01 203);
-  --input: oklch(0.96 0.01 203);
-  --ring: oklch(0.42 0.16 262);
-  --chart-1: oklch(0.42 0.16 262);
+  --border: oklch(0.9 0.01 260);
+  --input: oklch(0.94 0.008 260);
+  --ring: oklch(0.48 0.18 262);
+  --chart-1: oklch(0.48 0.18 262);
   --chart-2: oklch(0.65 0.17 35);
   --chart-3: oklch(0.55 0.13 150);
   --chart-4: oklch(0.72 0.14 100);
   --chart-5: oklch(0.48 0.15 270);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.12 0.02 203);
-  --sidebar-foreground: oklch(0.98 0.002 203);
-  --sidebar-primary: oklch(0.56 0.14 262);
+  --radius: 0.75rem;
+  --sidebar: oklch(0.16 0.025 265);
+  --sidebar-foreground: oklch(0.92 0.01 260);
+  --sidebar-primary: oklch(0.52 0.18 262);
   --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.35 0.12 262);
-  --sidebar-accent-foreground: oklch(1 0 0);
-  --sidebar-border: oklch(0.25 0.05 203);
-  --sidebar-ring: oklch(0.42 0.16 262);
+  --sidebar-accent: oklch(0.24 0.04 265);
+  --sidebar-accent-foreground: oklch(0.96 0.01 260);
+  --sidebar-border: oklch(0.28 0.03 265);
+  --sidebar-ring: oklch(0.52 0.18 262);
 }
 
 .dark {
@@ -120,6 +120,15 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+@layer utilities {
+  .dashboard-canvas {
+    @apply bg-muted/35;
+  }
+  .dashboard-card {
+    @apply rounded-xl border-0 bg-card shadow-sm ring-1 ring-border/50;
   }
 }

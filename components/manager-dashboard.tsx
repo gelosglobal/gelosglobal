@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { format, formatDistanceToNow, startOfDay, startOfMonth } from 'date-fns'
 import type { LucideIcon } from 'lucide-react'
@@ -11,6 +11,7 @@ import {
   BarChart3,
   Bell,
   CalendarClock,
+  ChevronDown,
   CreditCard,
   Footprints,
   Inbox,
@@ -18,13 +19,16 @@ import {
   Loader2,
   Map,
   MapPin,
+  Minus,
   Package,
   PieChart,
+  PiggyBank,
   RefreshCw,
   ShoppingBag,
   ShoppingCart,
   Store,
   Target,
+  TrendingDown,
   TrendingUp,
   Wallet,
   Warehouse,
@@ -43,6 +47,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -60,6 +69,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { formatGhs } from '@/lib/dtc-orders'
+import { PageHeader } from '@/components/page-header'
 
 type RangePreset = 'all' | '24h' | '7d' | '30d' | 'today' | 'mtd' | 'custom'
 
@@ -100,7 +110,64 @@ type FinancePayload = {
   b2bInvoicePaidGhs?: number
   b2bCashCollections?: number
   totalRevenue: number
+  cogsPctOfRevenue: number
+  cogsGhs: number
+  grossProfit: number
   marketingSpendGhs: number
+  fixedOpexPeriodGhs: number
+  netProfit: number
+}
+
+function growthPct(current: number, prior: number): number | null {
+  if (!Number.isFinite(current) || !Number.isFinite(prior)) return null
+  if (prior > 0) return ((current - prior) / prior) * 100
+  if (current > 0) return null
+  return 0
+}
+
+function GrowthBadge({ pct }: { pct: number | null }) {
+  if (pct === null) {
+    return <Badge variant="outline">No prior baseline</Badge>
+  }
+  if (Math.abs(pct) < 0.05) {
+    return (
+      <Badge variant="outline" className="gap-1">
+        <Minus className="h-3 w-3" />
+        Flat vs prior
+      </Badge>
+    )
+  }
+  const positive = pct > 0
+  return (
+    <Badge className={positive ? 'bg-emerald-600 hover:bg-emerald-600' : 'bg-red-600 hover:bg-red-600'}>
+      {positive ? <TrendingUp className="mr-1 h-3 w-3" /> : <TrendingDown className="mr-1 h-3 w-3" />}
+      {positive ? '+' : ''}
+      {pct.toFixed(1)}% vs prior
+    </Badge>
+  )
+}
+
+function MarginBar({ label, pct, tone }: { label: string; pct: number; tone: 'emerald' | 'blue' | 'amber' | 'red' }) {
+  const width = Math.min(100, Math.max(0, Math.abs(pct)))
+  const fill =
+    tone === 'emerald'
+      ? 'bg-emerald-500'
+      : tone === 'blue'
+        ? 'bg-blue-500'
+        : tone === 'amber'
+          ? 'bg-amber-500'
+          : 'bg-red-500'
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-semibold tabular-nums">{pct.toFixed(1)}%</span>
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div className={`h-full rounded-full ${fill}`} style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  )
 }
 
 function toDatetimeLocalValue(d: Date): string {
@@ -163,12 +230,7 @@ const QUICK_LINKS: { href: string; label: string; icon: typeof Package }[] = [
   { href: '/sf/leaderboard', label: 'Rep Leaderboard', icon: BarChart3 },
 ]
 
-function alertBorderClass(sev: 'high' | 'medium') {
-  return sev === 'high' ? 'border-l-red-600' : 'border-l-amber-600'
-}
-
 function MasterKpiCard({
-  borderAccent,
   icon: Icon,
   iconWrapClass,
   iconClass,
@@ -176,7 +238,6 @@ function MasterKpiCard({
   value,
   subtitle,
 }: {
-  borderAccent: string
   icon: LucideIcon
   iconWrapClass: string
   iconClass: string
@@ -185,9 +246,7 @@ function MasterKpiCard({
   subtitle: ReactNode
 }) {
   return (
-    <Card
-      className={`border-l-4 ${borderAccent} border-r-0 border-t-0 border-b-0 p-6`}
-    >
+    <Card className="dashboard-card p-6">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -196,14 +255,31 @@ function MasterKpiCard({
           <p className="mt-2 text-3xl font-bold tabular-nums text-foreground">{value}</p>
           <p className="mt-2 text-xs text-muted-foreground">{subtitle}</p>
         </div>
-        <div className={`shrink-0 rounded-xl p-3 ${iconWrapClass}`}>
-          <Icon className={`h-6 w-6 ${iconClass}`} />
+        <div className={`shrink-0 rounded-2xl p-3 ${iconWrapClass}`}>
+          <Icon className={`h-5 w-5 ${iconClass}`} />
         </div>
       </div>
     </Card>
   )
 }
 
+function DashboardSection({
+  title,
+  children,
+}: {
+  title: string
+  children: ReactNode
+}) {
+  return (
+    <section className="space-y-4">
+      <div className="flex items-center gap-2">
+        <div className="h-4 w-1 rounded-full bg-primary" />
+        <p className="text-sm font-semibold text-foreground">{title}</p>
+      </div>
+      {children}
+    </section>
+  )
+}
 function SectionCardTitle({
   icon: Icon,
   children,
@@ -221,10 +297,18 @@ function SectionCardTitle({
   )
 }
 
-export function ManagerDashboard() {
+export function ManagerDashboard({
+  taskOpen: taskOpenProp,
+  onTaskOpenChange,
+}: {
+  taskOpen?: boolean
+  onTaskOpenChange?: (open: boolean) => void
+} = {}) {
   const [loading, setLoading] = useState(true)
   const [sf, setSf] = useState<SfDashboardPayload | null>(null)
   const [finance, setFinance] = useState<FinancePayload | null>(null)
+  const [priorFinance, setPriorFinance] = useState<FinancePayload | null>(null)
+  const [priorSf, setPriorSf] = useState<SfDashboardPayload | null>(null)
   /** Net invoiced in the selected date range (B2B Payments). */
   const [b2bPaymentsOutstandingGhs, setB2bPaymentsOutstandingGhs] = useState<number | null>(null)
   const [b2bPaymentsInvoicedGhs, setB2bPaymentsInvoicedGhs] = useState<number | null>(null)
@@ -237,7 +321,9 @@ export function ManagerDashboard() {
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [tasks, setTasks] = useState<RepTaskRow[]>([])
 
-  const [taskOpen, setTaskOpen] = useState(false)
+  const [taskOpenInternal, setTaskOpenInternal] = useState(false)
+  const taskOpen = taskOpenProp ?? taskOpenInternal
+  const setTaskOpen = onTaskOpenChange ?? setTaskOpenInternal
   const [taskSaving, setTaskSaving] = useState(false)
   const [taskForm, setTaskForm] = useState({
     repName: '',
@@ -256,6 +342,7 @@ export function ManagerDashboard() {
   })
   const [rangeEnd, setRangeEnd] = useState<string>(() => toDatetimeLocalValue(new Date()))
   const [customDraft, setCustomDraft] = useState(() => ({ start: rangeStart, end: rangeEnd }))
+  const [alertsOpen, setAlertsOpen] = useState(false)
 
   function applyPreset(preset: Exclude<RangePreset, 'custom'>) {
     const end = new Date()
@@ -302,6 +389,8 @@ export function ManagerDashboard() {
       const sfQs = new URLSearchParams()
       const finQs = new URLSearchParams()
       const b2bQs = new URLSearchParams()
+      const priorSfQs = new URLSearchParams()
+      const priorFinQs = new URLSearchParams()
       if (startIso && endIso) {
         sfQs.set('start', startIso)
         sfQs.set('end', endIso)
@@ -309,11 +398,29 @@ export function ManagerDashboard() {
         finQs.set('end', endIso)
         b2bQs.set('start', startIso)
         b2bQs.set('end', endIso)
+
+        const start = new Date(startIso)
+        const end = new Date(endIso)
+        const windowMs = Math.max(0, end.getTime() - start.getTime())
+        const priorEnd = start.toISOString()
+        const priorStart = new Date(start.getTime() - windowMs).toISOString()
+        priorSfQs.set('start', priorStart)
+        priorSfQs.set('end', priorEnd)
+        priorFinQs.set('start', priorStart)
+        priorFinQs.set('end', priorEnd)
       } else {
         b2bQs.set('periodDays', '0')
       }
 
-      const [sfRes, finRes, b2bPayRes, ordRes, taskRes] = await Promise.all([
+      const priorFinUrl = priorFinQs.toString()
+        ? `/api/dtc/finance-layer?${priorFinQs.toString()}`
+        : null
+      const priorSfUrl = priorSfQs.toString()
+        ? `/api/sf/dashboard?${priorSfQs.toString()}`
+        : null
+
+      const [sfRes, finRes, b2bPayRes, ordRes, taskRes, priorFinRes, priorSfRes] =
+        await Promise.all([
         fetch(`/api/sf/dashboard${sfQs.toString() ? `?${sfQs.toString()}` : ''}`, {
           credentials: 'include',
         }),
@@ -326,6 +433,12 @@ export function ManagerDashboard() {
         }),
         fetch('/api/dtc/orders', { credentials: 'include' }),
         fetch('/api/master/rep-tasks', { credentials: 'include' }),
+        priorFinUrl
+          ? fetch(priorFinUrl, { credentials: 'include' })
+          : Promise.resolve(new Response(JSON.stringify(null), { status: 200 })),
+        priorSfUrl
+          ? fetch(priorSfUrl, { credentials: 'include' })
+          : Promise.resolve(new Response(JSON.stringify(null), { status: 200 })),
       ])
 
       if (
@@ -353,6 +466,18 @@ export function ManagerDashboard() {
 
       setSf(sfJson)
       setFinance(finJson)
+      if (priorFinRes.ok) {
+        const priorJson = (await priorFinRes.json()) as FinancePayload | null
+        setPriorFinance(priorJson && typeof priorJson === 'object' ? priorJson : null)
+      } else {
+        setPriorFinance(null)
+      }
+      if (priorSfRes.ok) {
+        const priorSfJson = (await priorSfRes.json()) as SfDashboardPayload | null
+        setPriorSf(priorSfJson && typeof priorSfJson === 'object' ? priorSfJson : null)
+      } else {
+        setPriorSf(null)
+      }
       const out = b2bPayJson.kpis?.outstandingGhs
       setB2bPaymentsOutstandingGhs(
         typeof out === 'number' && Number.isFinite(out) ? Math.max(0, out) : 0,
@@ -371,6 +496,8 @@ export function ManagerDashboard() {
       toast.error('Could not load master dashboard data')
       setSf(null)
       setFinance(null)
+      setPriorFinance(null)
+      setPriorSf(null)
       setB2bPaymentsOutstandingGhs(null)
       setB2bPaymentsInvoicedGhs(null)
       setOrders([])
@@ -401,9 +528,118 @@ export function ManagerDashboard() {
     { channel: 'B2B invoiced', percentage: b2bPct, fill: '#2563eb' },
   ]
 
+  const priorB2bCollected =
+    (priorFinance?.b2bInvoicePaidGhs ?? 0) +
+    (priorFinance?.b2bCashCollections ?? 0) +
+    (priorFinance?.b2bPortalOrderRevenue ?? 0)
+  const priorTotalRevenue =
+    priorFinance === null
+      ? null
+      : Math.max(0, priorFinance.dtcRevenue) + Math.max(0, priorB2bCollected)
+
+  const growthMetrics = useMemo(() => {
+    if (!finance) return null
+    const currentTotal = totalRevenueDtcPlusB2bGhs ?? 0
+    return {
+      totalRevenue: {
+        current: currentTotal,
+        growth: growthPct(currentTotal, priorTotalRevenue ?? 0),
+      },
+      dtcRevenue: {
+        current: finance.dtcRevenue,
+        growth: growthPct(finance.dtcRevenue, priorFinance?.dtcRevenue ?? 0),
+      },
+      b2bCollected: {
+        current: b2bCollectedForTotalRevenue,
+        growth: growthPct(b2bCollectedForTotalRevenue, priorB2bCollected),
+      },
+      netProfit: {
+        current: finance.netProfit,
+        growth: growthPct(finance.netProfit, priorFinance?.netProfit ?? 0),
+      },
+      sfVisits: {
+        current: sf?.kpis.visits ?? 0,
+        growth: growthPct(sf?.kpis.visits ?? 0, priorSf?.kpis.visits ?? 0),
+      },
+    }
+  }, [
+    finance,
+    priorFinance,
+    priorSf,
+    priorTotalRevenue,
+    priorB2bCollected,
+    sf,
+    totalRevenueDtcPlusB2bGhs,
+    b2bCollectedForTotalRevenue,
+  ])
+
+  const plMetrics = useMemo(() => {
+    if (!finance || totalRevenueDtcPlusB2bGhs === null) return null
+    const revenue = Math.max(0, totalRevenueDtcPlusB2bGhs)
+    const grossMarginPct = revenue > 0 ? (finance.grossProfit / revenue) * 100 : 0
+    const netMarginPct = revenue > 0 ? (finance.netProfit / revenue) * 100 : 0
+    const maxBar = Math.max(
+      revenue,
+      finance.grossProfit,
+      Math.abs(finance.netProfit),
+      finance.cogsGhs,
+      finance.marketingSpendGhs,
+      finance.fixedOpexPeriodGhs,
+      1,
+    )
+    return {
+      revenue,
+      grossMarginPct,
+      netMarginPct,
+      maxBar,
+      steps: [
+        { key: 'revenue', label: 'Revenue', value: revenue, color: 'bg-blue-600' },
+        { key: 'cogs', label: 'COGS', value: finance.cogsGhs, color: 'bg-orange-500' },
+        { key: 'gross', label: 'Gross profit', value: finance.grossProfit, color: 'bg-emerald-600' },
+        {
+          key: 'marketing',
+          label: 'Marketing',
+          value: finance.marketingSpendGhs,
+          color: 'bg-violet-500',
+        },
+        { key: 'opex', label: 'Fixed opex', value: finance.fixedOpexPeriodGhs, color: 'bg-slate-500' },
+        {
+          key: 'net',
+          label: 'Net profit',
+          value: finance.netProfit,
+          color: finance.netProfit >= 0 ? 'bg-emerald-700' : 'bg-red-600',
+        },
+      ],
+    }
+  }, [finance, totalRevenueDtcPlusB2bGhs])
+
+  const plChartData = useMemo(() => {
+    if (!plMetrics) return []
+    return plMetrics.steps.map((s) => ({
+      name: s.label,
+      amount: s.value,
+      fill:
+        s.key === 'revenue'
+          ? '#2563eb'
+          : s.key === 'cogs'
+            ? '#f97316'
+            : s.key === 'gross'
+              ? '#059669'
+              : s.key === 'marketing'
+                ? '#7c3aed'
+                : s.key === 'opex'
+                  ? '#64748b'
+                  : s.value >= 0
+                    ? '#047857'
+                    : '#dc2626',
+    }))
+  }, [plMetrics])
+
   const recentOrders = orders.slice(0, 6)
   const upcoming = sf?.upcomingVisits.slice(0, 6) ?? []
   const alerts = sf?.alerts.slice(0, 10) ?? []
+  const highAlertCount = alerts.filter((a) => a.severity === 'high').length
+  const mediumAlertCount = alerts.filter((a) => a.severity === 'medium').length
   const repOptions = Array.from(new Set((sf?.repPulse ?? []).map((r) => r.rep))).sort((a, b) =>
     a.localeCompare(b),
   )
@@ -457,55 +693,60 @@ export function ManagerDashboard() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-start justify-between gap-4 border-b border-border bg-card px-4 py-4 sm:px-6">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Master Dashboard</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Live roll-up from Finance Layer, Sales Force, and DTC orders
-          </p>
-          {rangeLabel ? (
-            <p className="mt-1 text-xs text-muted-foreground">{rangeLabel}</p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <p className="hidden text-sm text-muted-foreground sm:block">{headerDate}</p>
-          <Select
-            value={rangePreset}
-            onValueChange={(v) => {
-              const p = v as RangePreset
-              setRangePreset(p)
-              if (p === 'custom') openCustom()
-              else applyPreset(p)
-            }}
-          >
-            <SelectTrigger className="h-9 w-[170px]">
-              <SelectValue placeholder="Range" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All time</SelectItem>
-              <SelectItem value="24h">Last 24 hours</SelectItem>
-              <SelectItem value="7d">Last 7 days</SelectItem>
-              <SelectItem value="30d">Last 30 days</SelectItem>
-              <SelectItem value="today">Today</SelectItem>
-              <SelectItem value="mtd">This month</SelectItem>
-              <SelectItem value="custom">Custom…</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            disabled={loading}
-            onClick={() => void load()}
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        eyebrow="Main"
+        title="Master Dashboard"
+        description="Live roll-up from Finance Layer, Sales Force, and DTC orders"
+        meta={
+          rangeLabel ? <p className="text-xs text-muted-foreground">{rangeLabel}</p> : null
+        }
+        actions={
+          <>
+            <p className="hidden text-sm text-muted-foreground sm:block">{headerDate}</p>
+            {loading && (sf || finance) ? (
+              <Badge variant="outline" className="hidden gap-1 sm:inline-flex">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Updating
+              </Badge>
+            ) : null}
+            <Select
+              value={rangePreset}
+              onValueChange={(v) => {
+                const p = v as RangePreset
+                setRangePreset(p)
+                if (p === 'custom') openCustom()
+                else applyPreset(p)
+              }}
+            >
+              <SelectTrigger className="h-9 w-[170px]">
+                <SelectValue placeholder="Range" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All time</SelectItem>
+                <SelectItem value="24h">Last 24 hours</SelectItem>
+                <SelectItem value="7d">Last 7 days</SelectItem>
+                <SelectItem value="30d">Last 30 days</SelectItem>
+                <SelectItem value="today">Today</SelectItem>
+                <SelectItem value="mtd">This month</SelectItem>
+                <SelectItem value="custom">Custom…</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              disabled={loading}
+              onClick={() => void load()}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
-      <div className="flex-1 space-y-6 overflow-y-auto p-4 sm:p-6">
+      <div className="flex-1 space-y-6 overflow-y-auto p-4 sm:p-6 lg:p-8">
         {loading && !sf && !finance ? (
           <div className="flex flex-col items-center justify-center gap-3 py-24 text-muted-foreground">
             <Loader2 className="h-10 w-10 animate-spin" />
@@ -513,7 +754,7 @@ export function ManagerDashboard() {
           </div>
         ) : null}
 
-        <Card className="p-4">
+        <Card className="dashboard-card p-4 sm:p-5">
           <p className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
             <span className="flex h-7 w-7 items-center justify-center rounded-md bg-muted">
               <LayoutGrid className="h-3.5 w-3.5" />
@@ -532,9 +773,9 @@ export function ManagerDashboard() {
           </div>
         </Card>
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <DashboardSection title="Overview">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           <MasterKpiCard
-            borderAccent="border-l-blue-600"
             icon={Wallet}
             iconWrapClass="bg-blue-600/10"
             iconClass="text-blue-600"
@@ -543,7 +784,6 @@ export function ManagerDashboard() {
             subtitle="B2B · Net invoiced in selected range"
           />
           <MasterKpiCard
-            borderAccent="border-l-purple-600"
             icon={ShoppingBag}
             iconWrapClass="bg-purple-600/10"
             iconClass="text-purple-600"
@@ -552,7 +792,6 @@ export function ManagerDashboard() {
             subtitle="DTC orders in selected range"
           />
           <MasterKpiCard
-            borderAccent="border-l-amber-600"
             icon={LayoutGrid}
             iconWrapClass="bg-amber-600/10"
             iconClass="text-amber-700"
@@ -561,7 +800,6 @@ export function ManagerDashboard() {
             subtitle="DTC orders + B2B paid, cash & portal in range"
           />
           <MasterKpiCard
-            borderAccent="border-l-green-600"
             icon={Banknote}
             iconWrapClass="bg-green-600/10"
             iconClass="text-green-600"
@@ -570,7 +808,6 @@ export function ManagerDashboard() {
             subtitle="Invoice payments + cash + portal orders in range"
           />
           <MasterKpiCard
-            borderAccent="border-l-red-600"
             icon={CreditCard}
             iconWrapClass="bg-red-600/10"
             iconClass="text-red-600"
@@ -583,7 +820,6 @@ export function ManagerDashboard() {
             subtitle="Unpaid balance on invoices in selected range"
           />
           <MasterKpiCard
-            borderAccent="border-l-indigo-600"
             icon={Footprints}
             iconWrapClass="bg-indigo-600/10"
             iconClass="text-indigo-600"
@@ -596,9 +832,140 @@ export function ManagerDashboard() {
               </>
             }
           />
-        </div>
+          </div>
+        </DashboardSection>
 
-        <Card className="p-6">
+        {finance && growthMetrics && plMetrics ? (
+          <DashboardSection title="Growth & P&L">
+            <div className="grid gap-4 xl:grid-cols-3">
+            <Card className="dashboard-card p-6 xl:col-span-1">
+              <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-foreground">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
+                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                </span>
+                Growth vs prior period
+              </h3>
+              <div className="space-y-4">
+                {[
+                  { label: 'Total revenue', ...growthMetrics.totalRevenue },
+                  { label: 'DTC revenue', ...growthMetrics.dtcRevenue },
+                  { label: 'B2B collected', ...growthMetrics.b2bCollected },
+                  { label: 'Net profit', ...growthMetrics.netProfit },
+                  { label: 'SF visits', ...growthMetrics.sfVisits },
+                ].map((row) => (
+                  <div key={row.label} className="rounded-lg border border-border p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-xs font-medium uppercase text-muted-foreground">{row.label}</p>
+                        <p className="mt-1 text-lg font-bold tabular-nums">
+                          {row.label === 'SF visits'
+                            ? row.current.toLocaleString()
+                            : formatGhs(row.current)}
+                        </p>
+                      </div>
+                      <GrowthBadge pct={row.growth} />
+                    </div>
+                    {priorTotalRevenue !== null && row.growth !== null ? (
+                      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={`h-full rounded-full ${
+                            (row.growth ?? 0) >= 0 ? 'bg-emerald-500' : 'bg-red-500'
+                          }`}
+                          style={{
+                            width: `${Math.min(100, Math.max(8, Math.abs(row.growth ?? 0)))}%`,
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card className="dashboard-card p-6 xl:col-span-2">
+              <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-foreground">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
+                  <PiggyBank className="h-4 w-4 text-muted-foreground" />
+                </span>
+                Profit &amp; loss (selected range)
+              </h3>
+              <div className="grid gap-6 lg:grid-cols-2">
+                <div className="space-y-3">
+                  {plMetrics.steps.map((step) => (
+                    <div key={step.key}>
+                      <div className="mb-1 flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">{step.label}</span>
+                        <span
+                          className={`font-semibold tabular-nums ${
+                            step.key === 'net' && step.value < 0 ? 'text-red-600' : ''
+                          }`}
+                        >
+                          {formatGhs(step.value)}
+                        </span>
+                      </div>
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={`h-full rounded-full ${step.color}`}
+                          style={{
+                            width: `${Math.min(100, (Math.abs(step.value) / plMetrics.maxBar) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-4">
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={plChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                      <XAxis
+                        dataKey="name"
+                        tick={{ fontSize: 10 }}
+                        interval={0}
+                        angle={-20}
+                        textAnchor="end"
+                        height={56}
+                      />
+                      <YAxis tick={{ fontSize: 10 }} width={56} />
+                      <Tooltip
+                        formatter={(value: number) => [formatGhs(value), 'Amount']}
+                        contentStyle={{
+                          backgroundColor: 'var(--card)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '6px',
+                        }}
+                      />
+                      <Bar dataKey="amount" radius={[4, 4, 0, 0]}>
+                        {plChartData.map((entry) => (
+                          <Cell key={entry.name} fill={entry.fill} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <MarginBar
+                      label="Gross margin"
+                      pct={plMetrics.grossMarginPct}
+                      tone="emerald"
+                    />
+                    <MarginBar
+                      label="Net margin"
+                      pct={plMetrics.netMarginPct}
+                      tone={plMetrics.netMarginPct >= 0 ? 'blue' : 'red'}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    COGS at {(finance.cogsPctOfRevenue * 100).toFixed(1)}% of revenue · Marketing and
+                    fixed opex prorated to the selected window.
+                  </p>
+                </div>
+              </div>
+            </Card>
+            </div>
+          </DashboardSection>
+        ) : null}
+
+        <DashboardSection title="Channel mix">
+          <Card className="dashboard-card p-6">
           <h3 className="mb-6 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-foreground">
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
               <PieChart className="h-4 w-4 text-muted-foreground" />
@@ -638,59 +1005,97 @@ export function ManagerDashboard() {
               <span>B2B invoiced {b2bPct}%</span>
             </div>
           </div>
-        </Card>
+          </Card>
+        </DashboardSection>
 
-        <div>
-          <div className="mb-4 flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-amber-600" />
-            <h3 className="text-sm font-bold uppercase tracking-widest text-foreground">
-              Alerts
-            </h3>
-            {sf?.primaryRegionLabel ? (
-              <Badge variant="outline" className="font-normal">
-                {sf.primaryRegionLabel}
-              </Badge>
-            ) : null}
-          </div>
-          {alerts.length === 0 ? (
-            <Card className="flex items-start gap-3 p-6 text-sm text-muted-foreground">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-                <Inbox className="h-4 w-4" />
-              </span>
-              <span>No SF, stock, or finance alerts right now.</span>
-            </Card>
-          ) : (
-            <div className="space-y-2">
-              {alerts.map((alert) => (
-                <Card
-                  key={alert.id}
-                  className={`border-l-4 border-r-0 border-t-0 border-b-0 p-4 ${alertBorderClass(alert.severity)}`}
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="flex min-w-0 flex-1 items-start gap-3">
-                      <span
-                        className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                          alert.severity === 'high'
-                            ? 'bg-destructive/10 text-destructive'
-                            : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
-                        }`}
-                      >
-                        <Bell className="h-4 w-4" />
-                      </span>
-                      <p className="text-sm text-foreground">{alert.text}</p>
-                    </div>
-                    <Badge variant={alert.severity === 'high' ? 'destructive' : 'secondary'}>
-                      {alert.severity}
+        <Collapsible open={alertsOpen} onOpenChange={setAlertsOpen}>
+          <Card className="dashboard-card overflow-hidden">
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 p-4 text-left transition-colors hover:bg-muted/40"
+              >
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <AlertTriangle
+                    className={`h-5 w-5 shrink-0 ${
+                      highAlertCount > 0 ? 'text-red-600' : 'text-amber-600'
+                    }`}
+                  />
+                  <h3 className="text-sm font-bold uppercase tracking-widest text-foreground">
+                    Alerts
+                  </h3>
+                  {sf?.primaryRegionLabel ? (
+                    <Badge variant="outline" className="font-normal">
+                      {sf.primaryRegionLabel}
                     </Badge>
+                  ) : null}
+                  {alerts.length > 0 ? (
+                    <Badge variant="secondary">{alerts.length} active</Badge>
+                  ) : (
+                    <Badge variant="outline">All clear</Badge>
+                  )}
+                  {highAlertCount > 0 ? (
+                    <Badge variant="destructive">{highAlertCount} high</Badge>
+                  ) : null}
+                  {mediumAlertCount > 0 ? (
+                    <Badge className="bg-amber-600 hover:bg-amber-600">
+                      {mediumAlertCount} medium
+                    </Badge>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                  <span className="hidden sm:inline">{alertsOpen ? 'Hide' : 'Show'}</span>
+                  <ChevronDown
+                    className={`h-4 w-4 transition-transform ${alertsOpen ? 'rotate-180' : ''}`}
+                  />
+                </div>
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="border-t border-border p-4 pt-3">
+                {alerts.length === 0 ? (
+                  <div className="flex items-start gap-3 rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+                      <Inbox className="h-4 w-4" />
+                    </span>
+                    <span>No SF, stock, or finance alerts right now.</span>
                   </div>
-                </Card>
-              ))}
-            </div>
-          )}
-        </div>
+                ) : (
+                  <div className="space-y-2">
+                    {alerts.map((alert) => (
+                      <Card
+                        key={alert.id}
+                        className={`dashboard-card p-4 ${alert.severity === 'high' ? 'ring-red-500/30' : 'ring-amber-500/30'}`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="flex min-w-0 flex-1 items-start gap-3">
+                            <span
+                              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                                alert.severity === 'high'
+                                  ? 'bg-destructive/10 text-destructive'
+                                  : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                              }`}
+                            >
+                              <Bell className="h-4 w-4" />
+                            </span>
+                            <p className="text-sm text-foreground">{alert.text}</p>
+                          </div>
+                          <Badge variant={alert.severity === 'high' ? 'destructive' : 'secondary'}>
+                            {alert.severity}
+                          </Badge>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </CollapsibleContent>
+          </Card>
+        </Collapsible>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <Card className="border-l-4 border-l-purple-600 border-r-0 border-t-0 border-b-0 p-6">
+        <DashboardSection title="Operations">
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <Card className="dashboard-card p-6">
             <SectionCardTitle icon={ShoppingCart}>Recent DTC orders</SectionCardTitle>
             {recentOrders.length === 0 ? (
               <p className="text-sm text-muted-foreground">No orders yet.</p>
@@ -721,7 +1126,7 @@ export function ManagerDashboard() {
             )}
           </Card>
 
-          <Card className="border-l-4 border-l-blue-600 border-r-0 border-t-0 border-b-0 p-6">
+          <Card className="dashboard-card p-6">
             <SectionCardTitle icon={CalendarClock}>Upcoming shop visits</SectionCardTitle>
             {upcoming.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -748,15 +1153,10 @@ export function ManagerDashboard() {
               </div>
             )}
           </Card>
-        </div>
-
-        <Card className="border-l-4 border-l-emerald-600 border-r-0 border-t-0 border-b-0 p-6">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <SectionCardTitle icon={LayoutGrid}>Rep tasks</SectionCardTitle>
-            <Button type="button" className="gap-1.5" onClick={() => setTaskOpen(true)} disabled={loading}>
-              Assign task
-            </Button>
           </div>
+
+          <Card className="dashboard-card mt-6 p-6">
+          <SectionCardTitle icon={LayoutGrid}>Rep tasks</SectionCardTitle>
 
           {tasks.length === 0 ? (
             <p className="text-sm text-muted-foreground">No tasks assigned yet.</p>
@@ -812,6 +1212,7 @@ export function ManagerDashboard() {
             </div>
           )}
         </Card>
+        </DashboardSection>
       </div>
 
       <Dialog open={customOpen} onOpenChange={setCustomOpen}>

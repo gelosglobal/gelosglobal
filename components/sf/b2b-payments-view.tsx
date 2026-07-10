@@ -135,7 +135,10 @@ function dateToIsoNoon(value: string): string | undefined {
 
 function isoToDateInput(iso: string | null): string {
   if (!iso) return ''
-  return iso.slice(0, 10)
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
 function emptyForm() {
@@ -801,7 +804,7 @@ export function B2bPaymentsView() {
                             setForm((f) => ({
                               ...f,
                               invoiceDate: e.target.value,
-                              dueDate: e.target.value,
+                              dueDate: f.dueDate.trim() ? f.dueDate : e.target.value,
                             }))
                           }
                         />
