@@ -19,7 +19,12 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   return (
-    <div className={cn('border-b border-border/70 bg-card/80 px-4 py-5 backdrop-blur-sm sm:px-6', className)}>
+    <div
+      className={cn(
+        'mx-4 mt-4 rounded-2xl border border-border/50 bg-muted/25 px-4 py-5 sm:mx-6 dark:border-border/35 dark:bg-card/70',
+        className,
+      )}
+    >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           {eyebrow ? (

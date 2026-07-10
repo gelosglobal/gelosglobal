@@ -71,8 +71,12 @@ export function DesktopSidebarFrame({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-screen min-w-0 overflow-x-hidden bg-background">
       <div
-        className="hidden shrink-0 transition-[width] duration-200 ease-in-out lg:block"
-        style={{ width: collapsed ? SIDEBAR_WIDTH_ICON : SIDEBAR_WIDTH }}
+        className="hidden h-screen shrink-0 p-3 transition-[width] duration-200 ease-in-out lg:block"
+        style={{
+          width: collapsed
+            ? `calc(${SIDEBAR_WIDTH_ICON} + 1.5rem)`
+            : `calc(${SIDEBAR_WIDTH} + 1.5rem)`,
+        }}
       >
         <Sidebar />
       </div>

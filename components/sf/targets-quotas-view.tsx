@@ -2,7 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
-import { Loader2, Pencil, Plus, Target } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import {
+  Footprints,
+  Loader2,
+  Package,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Store,
+  Target,
+  Users,
+  Wallet,
+} from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { SfPageHeader } from '@/components/sf/sf-page-header'
@@ -37,7 +51,15 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import { Progress } from '@/components/ui/progress'
 import { formatGhs } from '@/lib/dtc-orders'
+import { cn } from '@/lib/utils'
+
+const QUICK_LINKS = [
+  { href: '/sf/posm-tracker', label: 'POSM tracker', icon: Package },
+  { href: '/sf/shop-visits', label: 'Shop visits', icon: Footprints },
+  { href: '/sf/outlet-scouting', label: 'Outlet scouting', icon: Store },
+] as const
 
 type TargetRow = {
   id: string
@@ -65,11 +87,81 @@ function monthKeyForDate(d: Date): string {
   return `${y}-${m}`
 }
 
+function formatPct(pct: number | null): string {
+  if (pct == null) return '—'
+  return pct < 10 ? `${pct.toFixed(1)}%` : `${Math.round(pct)}%`
+}
+
+function attainmentTone(pct: number | null): 'emerald' | 'amber' | 'red' | 'muted' {
+  if (pct == null) return 'muted'
+  if (pct >= 100) return 'emerald'
+  if (pct >= 75) return 'amber'
+  return 'red'
+}
+
 function attainmentBadge(pct: number | null) {
   if (pct == null) return <Badge variant="outline">—</Badge>
-  if (pct >= 100) return <Badge className="bg-emerald-600 hover:bg-emerald-600">{pct}%</Badge>
-  if (pct >= 75) return <Badge variant="secondary">{pct}%</Badge>
-  return <Badge variant="destructive">{pct}%</Badge>
+  const tone = attainmentTone(pct)
+  const label = formatPct(pct)
+  if (tone === 'emerald') {
+    return (
+      <Badge className="border-transparent bg-emerald-600 text-white hover:bg-emerald-600">
+        {label}
+      </Badge>
+    )
+  }
+  if (tone === 'amber') {
+    return <Badge variant="secondary">{label}</Badge>
+  }
+  return <Badge variant="destructive">{label}</Badge>
+}
+
+function AttainmentBar({ pct }: { pct: number | null }) {
+  const tone = attainmentTone(pct)
+  const width = pct == null ? 0 : Math.min(100, Math.max(4, pct))
+  return (
+    <Progress
+      value={width}
+      className={cn(
+        'h-1.5',
+        tone === 'emerald' && '[&>div]:bg-emerald-500',
+        tone === 'amber' && '[&>div]:bg-amber-500',
+        tone === 'red' && '[&>div]:bg-red-500',
+        tone === 'muted' && '[&>div]:bg-muted-foreground/30',
+      )}
+    />
+  )
+}
+
+function TqKpiCard({
+  label,
+  value,
+  subtitle,
+  icon: Icon,
+  iconWrapClass,
+  iconClass,
+}: {
+  label: string
+  value: React.ReactNode
+  subtitle: React.ReactNode
+  icon: LucideIcon
+  iconWrapClass: string
+  iconClass: string
+}) {
+  return (
+    <Card className="dashboard-card p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{value}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+        </div>
+        <div className={cn('shrink-0 rounded-2xl p-3', iconWrapClass)}>
+          <Icon className={cn('h-5 w-5', iconClass)} />
+        </div>
+      </div>
+    </Card>
+  )
 }
 
 export function TargetsQuotasView() {
@@ -374,10 +466,12 @@ export function TargetsQuotasView() {
     }
   }
 
-  const pageSubtitle = useMemo(() => {
+  const monthLabel = useMemo(() => {
     const dt = new Date(`${month}-01T12:00:00.000Z`)
-    return `Month: ${format(dt, 'MMM yyyy')} · MTD actuals from completed shop visits (sf_visits), sell-in on visits, and POSM tasks marked done (sf_posm_tasks)`
+    return format(dt, 'MMMM yyyy')
   }, [month])
+
+  const hasActiveFilters = query.trim().length > 0 || regionFilter !== 'all'
 
   return (
     <div className="flex min-h-0 flex-col">
@@ -386,6 +480,17 @@ export function TargetsQuotasView() {
         description="Set monthly rep quotas and track MTD attainment from completed shop visits, sell-in on visits, and POSM tasks completed in the month (assign reps on the POSM Tracker for accurate roll-up)."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => void load()}
+              disabled={loading}
+            >
+              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+              Refresh
+            </Button>
             <Button variant="outline" size="sm" asChild>
               <Link href="/sf/posm-tracker">POSM Tracker</Link>
             </Button>
@@ -507,202 +612,315 @@ export function TargetsQuotasView() {
         }
       />
 
-      <div className="flex-1 space-y-6 p-4 sm:p-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div className="space-y-1">
-            <p className="text-sm text-muted-foreground">{pageSubtitle}</p>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <div className="flex flex-col gap-2">
-              <Label className="text-muted-foreground">Month</Label>
-              <Input
-                type="month"
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
-                className="w-44"
-              />
+      <div className="flex-1 space-y-6 p-4 sm:p-6 lg:p-8">
+        <div className="flex flex-wrap gap-2">
+          {QUICK_LINKS.map((link) => {
+            const Icon = link.icon
+            return (
+              <Button key={link.href} variant="outline" size="sm" className="gap-1.5" asChild>
+                <Link href={link.href}>
+                  <Icon className="h-3.5 w-3.5" />
+                  {link.label}
+                </Link>
+              </Button>
+            )
+          })}
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <TqKpiCard
+            label="Reps targeted"
+            value={loading ? '—' : summary.reps}
+            subtitle={`Quotas set for ${monthLabel}`}
+            icon={Users}
+            iconWrapClass="bg-primary/10"
+            iconClass="text-primary"
+          />
+          <TqKpiCard
+            label="Visits (MTD)"
+            value={loading ? '—' : `${summary.actualVisits.toLocaleString()} / ${summary.targetVisits.toLocaleString()}`}
+            subtitle={
+              loading
+                ? 'Completed shop visits vs quota'
+                : `Attainment ${formatPct(summary.visitsPct)}`
+            }
+            icon={Footprints}
+            iconWrapClass="bg-indigo-500/10"
+            iconClass="text-indigo-600 dark:text-indigo-400"
+          />
+          <TqKpiCard
+            label="Sell-in (MTD)"
+            value={
+              loading
+                ? '—'
+                : `${formatGhs(summary.actualSellIn)} / ${formatGhs(summary.targetSellIn)}`
+            }
+            subtitle={
+              loading ? 'Sell-in on completed visits' : `Attainment ${formatPct(summary.sellInPct)}`
+            }
+            icon={Wallet}
+            iconWrapClass="bg-emerald-500/10"
+            iconClass="text-emerald-600 dark:text-emerald-400"
+          />
+          <TqKpiCard
+            label="New shops won"
+            value={loading ? '—' : summary.newShops.toLocaleString()}
+            subtitle="Outlet scouting · status won"
+            icon={Store}
+            iconWrapClass="bg-sky-500/10"
+            iconClass="text-sky-600 dark:text-sky-400"
+          />
+        </div>
+
+        <Card className="dashboard-card p-4 sm:p-5">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-foreground">MTD attainment snapshot</p>
+              <p className="text-xs text-muted-foreground">
+                Team roll-up for {monthLabel} · actuals from shop visits, sell-in, and POSM tasks
+                marked done
+              </p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs font-medium uppercase text-muted-foreground">Above 100%</p>
+              <p className="text-lg font-bold tabular-nums text-foreground">
+                {loading
+                  ? '—'
+                  : `${summary.above100Visits}V · ${summary.above100SellIn}S · ${summary.above100Posm}P`}
+              </p>
             </div>
           </div>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Card className="p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">Reps targeted</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums">{loading ? '—' : summary.reps}</p>
-          </Card>
-          <Card className="p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">Visits (MTD)</p>
-            <p className="mt-2 text-xl font-bold tabular-nums sm:text-3xl">
-              {loading ? '—' : `${summary.actualVisits} / ${summary.targetVisits}`}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Attainment: {summary.visitsPct == null ? '—' : `${summary.visitsPct}%`}
-            </p>
-          </Card>
-          <Card className="p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">Sell-in (MTD)</p>
-            <p className="mt-2 text-xl font-bold tabular-nums sm:text-3xl">
-              {loading
-                ? '—'
-                : `${formatGhs(summary.actualSellIn)} / ${formatGhs(summary.targetSellIn)}`}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Attainment: {summary.sellInPct == null ? '—' : `${summary.sellInPct}%`}
-            </p>
-          </Card>
-          <Card className="p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">POSM tasks (MTD)</p>
-            <p className="mt-2 text-xl font-bold tabular-nums sm:text-3xl">
-              {loading ? '—' : `${summary.actualPosm} / ${summary.targetPosm}`}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Done this month vs sum of rep quotas ·{' '}
-              {summary.posmPct == null ? '—' : `${summary.posmPct}%`}
-            </p>
-          </Card>
-          <Card className="p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">New shops acquired</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums">{loading ? '—' : summary.newShops}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Outlet Scouting · status “won”</p>
-          </Card>
-          <Card className="border-l-4 border-l-emerald-600 p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">Above 100%</p>
-            <p className="mt-2 text-2xl font-bold tabular-nums sm:text-3xl">
-              {loading
-                ? '—'
-                : `${summary.above100Visits}V / ${summary.above100SellIn}S / ${summary.above100Posm}P`}
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Reps at or above quota (Visits / Sell-in / POSM)
-            </p>
-          </Card>
-        </div>
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex min-w-0 flex-1 flex-col gap-2 sm:max-w-md">
-            <Label htmlFor="tq-search" className="text-muted-foreground">
-              Search
-            </Label>
-            <Input
-              id="tq-search"
-              placeholder="Rep, region, notes…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+          <div className="grid gap-4 md:grid-cols-3">
+            {[
+              {
+                key: 'visits',
+                label: 'Visits',
+                pct: summary.visitsPct,
+                detail: loading
+                  ? '—'
+                  : `${summary.actualVisits.toLocaleString()} / ${summary.targetVisits.toLocaleString()}`,
+              },
+              {
+                key: 'sellin',
+                label: 'Sell-in',
+                pct: summary.sellInPct,
+                detail: loading
+                  ? '—'
+                  : `${formatGhs(summary.actualSellIn)} / ${formatGhs(summary.targetSellIn)}`,
+              },
+              {
+                key: 'posm',
+                label: 'POSM tasks',
+                pct: summary.posmPct,
+                detail: loading
+                  ? '—'
+                  : `${summary.actualPosm.toLocaleString()} / ${summary.targetPosm.toLocaleString()}`,
+              },
+            ].map((row) => (
+              <div key={row.key} className="rounded-xl border border-border/60 bg-muted/15 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    {row.label}
+                  </p>
+                  {attainmentBadge(row.pct)}
+                </div>
+                <AttainmentBar pct={row.pct} />
+                <p className="mt-2 text-xs tabular-nums text-muted-foreground">{row.detail}</p>
+              </div>
+            ))}
           </div>
-          <div className="flex flex-col gap-2 sm:w-56">
-            <Label className="flex items-center gap-1.5 text-muted-foreground">
-              <Target className="h-3.5 w-3.5" />
-              Region
-            </Label>
-            <Select value={regionFilter} onValueChange={setRegionFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="All regions" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All regions</SelectItem>
-                {regions.map((r) => (
-                  <SelectItem key={r} value={r}>
-                    {r}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
+        </Card>
 
-        <Card className="p-0">
-          <div className="border-b border-border px-4 py-3 sm:px-6">
-            <h2 className="text-sm font-semibold uppercase tracking-wide">
-              Rep quotas — {month}
-            </h2>
+        <Card className="dashboard-card p-4 sm:p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold text-foreground">Filter quotas</h2>
+            </div>
+            {hasActiveFilters ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setQuery('')
+                  setRegionFilter('all')
+                }}
+              >
+                Clear filters
+              </Button>
+            ) : null}
+          </div>
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_12rem_12rem]">
+            <div className="space-y-2">
+              <Label htmlFor="tq-search" className="text-muted-foreground">
+                Search
+              </Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="tq-search"
+                  placeholder="Rep, region, notes…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-muted-foreground">Month</Label>
+              <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5 text-muted-foreground">
+                <Target className="h-3.5 w-3.5" />
+                Region
+              </Label>
+              <Select value={regionFilter} onValueChange={setRegionFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All regions" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All regions</SelectItem>
+                  {regions.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          {!loading ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Showing {filtered.length} of {items.length} rep{items.length === 1 ? '' : 's'} for{' '}
+              {monthLabel}
+            </p>
+          ) : null}
+        </Card>
+
+        <Card className="dashboard-card overflow-hidden p-0">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-4 py-3 sm:px-6">
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">Rep quotas</h2>
+              <p className="text-xs text-muted-foreground">
+                Visits, sell-in, and POSM attainment per rep
+              </p>
+            </div>
+            {!loading && items.length > 0 ? (
+              <Badge variant="outline" className="tabular-nums">
+                {filtered.length} rows
+              </Badge>
+            ) : null}
           </div>
 
           {loading ? (
-            <div className="flex items-center justify-center py-16 text-muted-foreground">
-              <Loader2 className="h-8 w-8 animate-spin" />
+            <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              <span className="text-sm">Loading targets…</span>
             </div>
           ) : items.length === 0 ? (
             <Empty className="border-0 py-16">
               <EmptyHeader>
-                <EmptyTitle>No targets for this month</EmptyTitle>
+                <EmptyTitle>No targets for {monthLabel}</EmptyTitle>
                 <EmptyDescription>
-                  Add rep targets to track quota attainment for visits, sell-in, and POSM tasks
-                  (use the POSM Tracker to log work and assign reps).
+                  Add rep targets to track quota attainment for visits, sell-in, and POSM tasks.
+                  Assign reps on the POSM Tracker for accurate roll-up.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : filtered.length === 0 ? (
+            <Empty className="border-0 py-16">
+              <EmptyHeader>
+                <EmptyTitle>No matches</EmptyTitle>
+                <EmptyDescription>
+                  No rows match your filters. Try another search or region.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Rep</TableHead>
-                  <TableHead className="hidden md:table-cell">Region</TableHead>
-                  <TableHead className="text-right">Visits</TableHead>
-                  <TableHead className="text-right">Sell-in</TableHead>
-                  <TableHead className="hidden text-right xl:table-cell">POSM</TableHead>
-                  <TableHead className="hidden lg:table-cell">Notes</TableHead>
-                  <TableHead className="w-[52px] text-right" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium">{r.repName}</TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">
-                      {r.region ?? '—'}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="text-sm">
-                          {r.actualVisitsMtd} / {r.targetVisits}
-                        </div>
-                        {attainmentBadge(r.visitsAttainmentPct)}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="text-sm">
-                          {formatGhs(r.actualSellInMtdGhs)} / {formatGhs(r.targetSellInGhs)}
-                        </div>
-                        {attainmentBadge(r.sellInAttainmentPct)}
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden text-right tabular-nums xl:table-cell">
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="text-sm">
-                          {r.actualPosmDoneMtd ?? 0} / {r.targetPosmTasks ?? 0}
-                        </div>
-                        {attainmentBadge(r.posmAttainmentPct)}
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden max-w-[320px] truncate text-sm text-muted-foreground lg:table-cell">
-                      {r.notes ?? '—'}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => openEdit(r)}
-                        aria-label={`Edit ${r.repName}`}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader className="sticky top-0 z-10 bg-card/95 backdrop-blur-sm">
+                  <TableRow>
+                    <TableHead>Rep</TableHead>
+                    <TableHead className="hidden md:table-cell">Region</TableHead>
+                    <TableHead>Visits</TableHead>
+                    <TableHead>Sell-in</TableHead>
+                    <TableHead className="hidden xl:table-cell">POSM</TableHead>
+                    <TableHead className="hidden lg:table-cell">Notes</TableHead>
+                    <TableHead className="w-[52px] text-right" />
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map((r) => (
+                    <TableRow key={r.id} className="align-top">
+                      <TableCell>
+                        <div>
+                          <p className="font-medium text-foreground">{r.repName}</p>
+                          <p className="text-xs text-muted-foreground md:hidden">
+                            {r.region ?? 'No region'}
+                          </p>
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground md:table-cell">
+                        {r.region ?? '—'}
+                      </TableCell>
+                      <TableCell className="min-w-[140px]">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
+                            <span>
+                              {r.actualVisitsMtd} / {r.targetVisits}
+                            </span>
+                            {attainmentBadge(r.visitsAttainmentPct)}
+                          </div>
+                          <AttainmentBar pct={r.visitsAttainmentPct} />
+                        </div>
+                      </TableCell>
+                      <TableCell className="min-w-[160px]">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
+                            <span className="truncate">
+                              {formatGhs(r.actualSellInMtdGhs)} / {formatGhs(r.targetSellInGhs)}
+                            </span>
+                            {attainmentBadge(r.sellInAttainmentPct)}
+                          </div>
+                          <AttainmentBar pct={r.sellInAttainmentPct} />
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden min-w-[120px] xl:table-cell">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2 text-xs tabular-nums">
+                            <span>
+                              {r.actualPosmDoneMtd ?? 0} / {r.targetPosmTasks ?? 0}
+                            </span>
+                            {attainmentBadge(r.posmAttainmentPct)}
+                          </div>
+                          <AttainmentBar pct={r.posmAttainmentPct} />
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden max-w-[280px] truncate text-sm text-muted-foreground lg:table-cell">
+                        {r.notes ?? '—'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => openEdit(r)}
+                          aria-label={`Edit ${r.repName}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </Card>
-
-        {!loading && items.length > 0 && filtered.length === 0 ? (
-          <p className="text-center text-sm text-muted-foreground">
-            No rows match your filters. Try another search or region.
-          </p>
-        ) : null}
       </div>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>

@@ -1,8 +1,23 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { format, parseISO, subDays, subMonths } from 'date-fns'
-import { Download, Loader2, Pencil, Plus, Trash2, Users } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
+import {
+  Banknote,
+  Download,
+  Loader2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  ShoppingCart,
+  SlidersHorizontal,
+  Trash2,
+  Users,
+  Wallet,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import * as XLSX from 'xlsx'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
@@ -238,6 +253,58 @@ function todayLocalYmd(): string {
 }
 
 type RangePreset = 'all' | '7d' | '1m' | '3m' | '6m' | '12m' | 'custom'
+
+function rangePresetLabel(preset: RangePreset): string {
+  switch (preset) {
+    case 'all':
+      return 'All time'
+    case '7d':
+      return 'Last 7 days'
+    case '1m':
+      return 'Last 1 month'
+    case '3m':
+      return 'Last 3 months'
+    case '6m':
+      return 'Last 6 months'
+    case '12m':
+      return 'Last 12 months'
+    case 'custom':
+      return 'Custom range'
+    default:
+      return 'All time'
+  }
+}
+
+function OrdersEngineKpiCard({
+  label,
+  value,
+  subtitle,
+  icon: Icon,
+  iconWrapClass,
+  iconClass,
+}: {
+  label: string
+  value: ReactNode
+  subtitle: ReactNode
+  icon: LucideIcon
+  iconWrapClass: string
+  iconClass: string
+}) {
+  return (
+    <Card className="dashboard-card p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{value}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+        </div>
+        <div className={cn('shrink-0 rounded-2xl p-3', iconWrapClass)}>
+          <Icon className={cn('h-5 w-5', iconClass)} />
+        </div>
+      </div>
+    </Card>
+  )
+}
 
 function computeRangeTs(preset: RangePreset, fromYmd: string, toYmd: string) {
   const now = new Date()
@@ -915,12 +982,16 @@ export function CustomerIntelligenceView({
         isReturnedish(String(r.additionalRemarks ?? ''))
       return s + (hit ? 1 : 0)
     }, 0)
+    const outstandingGhs = Math.max(0, totalBilled - totalCollected)
+    const collectionRatePct = totalBilled > 0 ? (totalCollected / totalBilled) * 100 : null
     return {
       uniqueCustomers: uniqueCustomerKeys.size,
       totalOrders,
       totalBilled,
       totalCollected,
       returnedCount,
+      outstandingGhs,
+      collectionRatePct,
     }
   }, [ledgerRows, mode, rangeFrom, rangePreset, rangeTo])
 
@@ -1607,6 +1678,18 @@ export function CustomerIntelligenceView({
               size="sm"
               className="gap-1.5"
               type="button"
+              onClick={() => void load()}
+              disabled={loading}
+            >
+              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+              Refresh
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              type="button"
               onClick={handleExport}
               disabled={loading || customers.length === 0}
             >
@@ -1628,48 +1711,183 @@ export function CustomerIntelligenceView({
         }
       />
 
-      <div className="flex-1 space-y-6 p-4 sm:p-6">
+      <div className="flex-1 space-y-6 p-4 sm:p-6 lg:p-8">
         {mode === 'orders-engine' ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <Card className="border-l-4 border-l-teal-600 p-5">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Total orders
-              </p>
-              <p className="mt-2 text-2xl font-bold tabular-nums">
-                {loading ? '—' : ordersEngineCards.totalOrders.toLocaleString()}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {loading ? '—' : `${ordersEngineCards.uniqueCustomers.toLocaleString()} unique customers (by phone)`}
+          <>
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <OrdersEngineKpiCard
+                label="Total orders"
+                value={loading ? '—' : ordersEngineCards.totalOrders.toLocaleString()}
+                subtitle={
+                  loading
+                    ? '—'
+                    : `${ordersEngineCards.uniqueCustomers.toLocaleString()} unique customers (by phone)`
+                }
+                icon={ShoppingCart}
+                iconWrapClass="bg-teal-500/10"
+                iconClass="text-teal-600 dark:text-teal-400"
+              />
+              <OrdersEngineKpiCard
+                label="Total billed"
+                value={loading ? '—' : formatGhs(ordersEngineCards.totalBilled)}
+                subtitle="Sum of amount to collect"
+                icon={Banknote}
+                iconWrapClass="bg-cyan-500/10"
+                iconClass="text-cyan-600 dark:text-cyan-400"
+              />
+              <OrdersEngineKpiCard
+                label="Total collected"
+                value={loading ? '—' : formatGhs(ordersEngineCards.totalCollected)}
+                subtitle={
+                  loading || ordersEngineCards.collectionRatePct === null
+                    ? 'Sum of total collected'
+                    : `${ordersEngineCards.collectionRatePct.toFixed(1)}% of billed`
+                }
+                icon={Wallet}
+                iconWrapClass="bg-sky-500/10"
+                iconClass="text-sky-600 dark:text-sky-400"
+              />
+              <OrdersEngineKpiCard
+                label="Returned"
+                value={
+                  loading ? '—' : ordersEngineCards.returnedCount.toLocaleString()
+                }
+                subtitle="Count of returned rows"
+                icon={RotateCcw}
+                iconWrapClass="bg-slate-500/10"
+                iconClass="text-slate-600 dark:text-slate-400"
+              />
+            </div>
+
+            <Card className="dashboard-card p-4 sm:p-5">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Collection progress</p>
+                  <p className="text-xs text-muted-foreground">
+                    {rangePresetLabel(rangePreset)}
+                    {rangePreset === 'custom' && rangeFrom && rangeTo
+                      ? ` · ${rangeFrom} → ${rangeTo}`
+                      : ''}
+                  </p>
+                </div>
+                <p className="text-xl font-bold tabular-nums text-foreground">
+                  {loading || ordersEngineCards.collectionRatePct === null
+                    ? '—'
+                    : `${ordersEngineCards.collectionRatePct.toFixed(1)}%`}
+                </p>
+              </div>
+              <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300"
+                  style={{
+                    width:
+                      loading || ordersEngineCards.collectionRatePct === null
+                        ? '0%'
+                        : `${Math.min(100, ordersEngineCards.collectionRatePct)}%`,
+                  }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {loading
+                  ? 'Updating metrics…'
+                  : `${displayRows.length.toLocaleString()} orders in view · ${formatGhs(ordersEngineCards.outstandingGhs)} still to collect`}
               </p>
             </Card>
-            <Card className="border-l-4 border-l-cyan-600 p-5">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Total billed
-              </p>
-              <p className="mt-2 text-2xl font-bold tabular-nums">
-                {loading ? '—' : formatGhs(ordersEngineCards.totalBilled)}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">Sum of Amount to Collect</p>
+
+            <Card className="dashboard-card p-4 sm:p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+                  <h2 className="text-sm font-semibold text-foreground">Filter & sort</h2>
+                </div>
+                {query || rangePreset !== 'all' || rangeFrom || rangeTo || sortBy !== 'date' ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setQuery('')
+                      setRangePreset('all')
+                      setRangeFrom('')
+                      setRangeTo('')
+                      setSortBy('date')
+                    }}
+                  >
+                    Reset filters
+                  </Button>
+                ) : null}
+              </div>
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                <div className="space-y-2">
+                  <Label htmlFor="customer-search" className="text-muted-foreground">
+                    Search orders
+                  </Label>
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="customer-search"
+                      placeholder="Customer, phone, order #, rider, location…"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="w-full space-y-2 sm:w-[200px]">
+                    <Label className="text-muted-foreground">Date range</Label>
+                    <Select value={rangePreset} onValueChange={(v) => setRangePreset(v as RangePreset)}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select range" />
+                      </SelectTrigger>
+                      <SelectContent className="z-[300]">
+                        <SelectItem value="all">All time</SelectItem>
+                        <SelectItem value="7d">Last 7 days</SelectItem>
+                        <SelectItem value="1m">Last 1 month</SelectItem>
+                        <SelectItem value="3m">Last 3 months</SelectItem>
+                        <SelectItem value="6m">Last 6 months</SelectItem>
+                        <SelectItem value="12m">Last 12 months</SelectItem>
+                        <SelectItem value="custom">Custom…</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {rangePreset === 'custom' ? (
+                    <>
+                      <Input
+                        type="date"
+                        value={rangeFrom}
+                        onChange={(e) => setRangeFrom(e.target.value)}
+                        className="w-[10.5rem]"
+                      />
+                      <span className="pb-2 text-xs text-muted-foreground">to</span>
+                      <Input
+                        type="date"
+                        value={rangeTo}
+                        onChange={(e) => setRangeTo(e.target.value)}
+                        className="w-[10.5rem]"
+                      />
+                    </>
+                  ) : null}
+                  <div className="w-full space-y-2 sm:w-44">
+                    <Label htmlFor="customer-sort" className="text-muted-foreground">
+                      Sort by
+                    </Label>
+                    <Select value={sortBy} onValueChange={(v) => setSortBy(v as CustomerSortKey)}>
+                      <SelectTrigger id="customer-sort" className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="z-[300]">
+                        <SelectItem value="date">Date (recent first)</SelectItem>
+                        <SelectItem value="amountToCollect">Amount to collect (high first)</SelectItem>
+                        <SelectItem value="totalCollected">Total collected (high first)</SelectItem>
+                        <SelectItem value="name">Customer name (A–Z)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
             </Card>
-            <Card className="border-l-4 border-l-sky-600 p-5">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Total collected
-              </p>
-              <p className="mt-2 text-2xl font-bold tabular-nums">
-                {loading ? '—' : formatGhs(ordersEngineCards.totalCollected)}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">Sum of Total Collected</p>
-            </Card>
-            <Card className="border-l-4 border-l-slate-600 p-5">
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Returned
-              </p>
-              <p className="mt-2 text-2xl font-bold tabular-nums">
-                {loading ? '—' : (ordersEngineCards.returnedCount ? ordersEngineCards.returnedCount.toLocaleString() : '—')}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">Count of returned rows</p>
-            </Card>
-          </div>
+          </>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <Card className="p-4">
@@ -1713,6 +1931,7 @@ export function CustomerIntelligenceView({
           </div>
         )}
 
+        {mode !== 'orders-engine' ? (
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div className="max-w-md flex-1 space-y-2">
             <Label htmlFor="customer-search" className="text-muted-foreground">
@@ -1803,13 +2022,22 @@ export function CustomerIntelligenceView({
             ) : null}
           </div>
         </div>
+        ) : null}
 
-        <Card className="p-0">
-          <div className="border-b border-border px-4 py-3 sm:px-6">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold uppercase tracking-wide">
-                {mode === 'orders-engine' ? 'Orders list' : 'Customer list'}
-              </h2>
+        <Card className={cn('overflow-hidden p-0', mode === 'orders-engine' ? 'dashboard-card' : '')}>
+          <div className="border-b border-border/60 px-4 py-3 sm:px-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-foreground">
+                  {mode === 'orders-engine' ? 'Orders list' : 'Customer list'}
+                </h2>
+                {mode === 'orders-engine' && !loading ? (
+                  <Badge variant="secondary" className="tabular-nums">
+                    {displayRows.length.toLocaleString()}
+                  </Badge>
+                ) : null}
+              </div>
+              {mode !== 'orders-engine' ? (
               <Button
                 type="button"
                 variant="ghost"
@@ -1821,28 +2049,43 @@ export function CustomerIntelligenceView({
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Refresh
               </Button>
+              ) : null}
             </div>
           </div>
 
           {loading ? (
             <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin" />
-              Loading customers…
+              {mode === 'orders-engine' ? 'Loading orders…' : 'Loading customers…'}
             </div>
           ) : (mode === 'orders-engine' ? displayRows.length === 0 : displayCustomers.length === 0) ? (
             <div className="p-6">
               <Empty className="border-0 p-0">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
-                    <Users className="h-6 w-6" />
+                    {mode === 'orders-engine' ? (
+                      <ShoppingCart className="h-6 w-6" />
+                    ) : (
+                      <Users className="h-6 w-6" />
+                    )}
                   </EmptyMedia>
                   <EmptyTitle>
-                    {customers.length === 0 ? 'No customers yet' : 'No matches'}
+                    {mode === 'orders-engine'
+                      ? ledgerRows.length === 0
+                        ? 'No orders yet'
+                        : 'No orders match your filters'
+                      : customers.length === 0
+                        ? 'No customers yet'
+                        : 'No matches'}
                   </EmptyTitle>
                   <EmptyDescription>
-                    {customers.length === 0
-                      ? 'Use Add customer to create a record, or wait until customer data is available. Sell-out orders stay in Orders.'
-                      : 'Try a different search term.'}
+                    {mode === 'orders-engine'
+                      ? ledgerRows.length === 0
+                        ? 'Use Add order to create your first sell-out order row.'
+                        : 'Try adjusting search, date range, or reset filters.'
+                      : customers.length === 0
+                        ? 'Use Add customer to create a record, or wait until customer data is available. Sell-out orders stay in Orders.'
+                        : 'Try a different search term.'}
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
@@ -1851,7 +2094,7 @@ export function CustomerIntelligenceView({
             <div className="overflow-x-auto">
             {mode === 'orders-engine' ? (
               <Table>
-                <TableHeader>
+                <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead className="w-10 min-w-10 text-right tabular-nums text-muted-foreground">#</TableHead>
                     <TableHead className="whitespace-nowrap">Date</TableHead>

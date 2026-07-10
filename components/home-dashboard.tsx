@@ -18,7 +18,7 @@ export function HomeDashboard() {
         </Button>
       }
       subHeader={
-        <div className="flex gap-2 border-b border-border/70 bg-card/90 p-3 backdrop-blur-md lg:hidden">
+        <div className="flex gap-2 border-b border-border/40 bg-card/90 px-3 py-3 backdrop-blur-md lg:hidden">
           {view === 'manager' ? (
             <Button type="button" className="flex-1" onClick={() => setTaskOpen(true)}>
               Assign task

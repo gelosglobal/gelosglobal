@@ -30,8 +30,12 @@ function navItemClass(active: boolean, collapsed: boolean) {
     'flex w-full items-center gap-3 rounded-xl text-sm font-medium transition-colors',
     collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
     active
-      ? 'bg-sidebar-primary text-sidebar-primary-foreground shadow-sm'
-      : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+      ? cn(
+          'shadow-none',
+          'bg-primary/10 text-primary ring-1 ring-primary/15',
+          'dark:bg-white dark:text-neutral-950 dark:ring-0',
+        )
+      : 'text-sidebar-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-foreground',
   )
 }
 
@@ -133,13 +137,12 @@ export function Sidebar() {
     <TooltipProvider delayDuration={0}>
       <div
         className={cn(
-          'flex h-screen flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground',
-          collapsed ? 'w-[4.5rem]' : 'w-64',
+          'flex h-full w-full flex-col overflow-hidden rounded-2xl border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-md ring-1 ring-border/40 dark:border-sidebar-border dark:shadow-none dark:ring-border/25',
         )}
       >
         <div
           className={cn(
-            'flex items-center border-b border-sidebar-border',
+            'flex items-center border-b border-sidebar-border/80 bg-sidebar',
             collapsed ? 'justify-center px-2 py-4' : 'justify-between gap-2 px-4 py-5',
           )}
         >
@@ -149,7 +152,7 @@ export function Sidebar() {
               onClick={toggle}
               className={cn(
                 gelosLogoFont.className,
-                'flex h-9 w-9 items-center justify-center rounded-xl bg-sidebar-primary text-sm font-extrabold text-sidebar-primary-foreground',
+                'flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-sm font-extrabold text-primary-foreground shadow-sm',
               )}
               aria-label="Expand sidebar"
             >
@@ -157,24 +160,34 @@ export function Sidebar() {
             </button>
           ) : (
             <>
-              <div className="min-w-0">
-                <h2
+              <div className="flex min-w-0 items-center gap-3">
+                <div
                   className={cn(
                     gelosLogoFont.className,
-                    'text-xl font-extrabold tracking-wide text-sidebar-foreground',
+                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-sm font-extrabold text-primary-foreground shadow-sm',
                   )}
                 >
-                  GELOS
-                </h2>
-                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-sidebar-primary">
-                  for staffs
-                </p>
+                  G
+                </div>
+                <div className="min-w-0">
+                  <h2
+                    className={cn(
+                      gelosLogoFont.className,
+                      'truncate text-lg font-extrabold tracking-wide text-sidebar-foreground',
+                    )}
+                  >
+                    GELOS
+                  </h2>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-primary">
+                    for staffs
+                  </p>
+                </div>
               </div>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="shrink-0 text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                className="shrink-0 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
                 onClick={toggle}
                 aria-label="Collapse sidebar"
               >
@@ -394,11 +407,11 @@ export function Sidebar() {
           </>
         )}
 
-        <div className={cn('border-t border-sidebar-border', collapsed ? 'p-2' : 'space-y-3 p-3')}>
+        <div className={cn('border-t border-sidebar-border/80 bg-sidebar', collapsed ? 'p-2' : 'space-y-3 p-3')}>
           {!collapsed ? (
-            <div className="rounded-xl bg-sidebar-accent/70 px-3 py-3">
+            <div className="rounded-xl border border-sidebar-border bg-muted/30 px-3 py-3">
               <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
                   {initials || 'U'}
                 </div>
                 <div className="min-w-0">
@@ -406,7 +419,7 @@ export function Sidebar() {
                     {isPending ? '…' : displayName}
                   </p>
                   {!isPending && session?.user?.email ? (
-                    <p className="truncate text-xs text-sidebar-foreground/60">{session.user.email}</p>
+                    <p className="truncate text-xs text-muted-foreground">{session.user.email}</p>
                   ) : null}
                 </div>
               </div>
@@ -414,7 +427,7 @@ export function Sidebar() {
           ) : (
             <Tooltip>
               <TooltipTrigger asChild>
-                <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground">
+                <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
                   {initials || 'U'}
                 </div>
               </TooltipTrigger>
@@ -430,7 +443,7 @@ export function Sidebar() {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                    className="text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
                     onClick={toggle}
                     aria-label="Expand sidebar"
                   >
@@ -445,7 +458,7 @@ export function Sidebar() {
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                    className="text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
                     onClick={async () => {
                       await signOut()
                       router.push('/sign-in')
@@ -461,9 +474,9 @@ export function Sidebar() {
             </div>
           ) : (
             <Button
-              variant="secondary"
+              variant="outline"
               size="sm"
-              className="w-full justify-center gap-2 bg-sidebar-accent text-sidebar-accent-foreground hover:bg-sidebar-accent/80"
+              className="w-full justify-center gap-2 border-sidebar-border bg-sidebar text-sidebar-foreground hover:bg-sidebar-accent"
               onClick={async () => {
                 await signOut()
                 router.push('/sign-in')

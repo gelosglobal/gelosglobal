@@ -139,7 +139,13 @@ function GrowthBadge({ pct }: { pct: number | null }) {
   }
   const positive = pct > 0
   return (
-    <Badge className={positive ? 'bg-emerald-600 hover:bg-emerald-600' : 'bg-red-600 hover:bg-red-600'}>
+    <Badge
+      className={
+        positive
+          ? 'border-transparent bg-emerald-600 text-white hover:bg-emerald-600'
+          : 'border-transparent bg-red-600 text-white hover:bg-red-600'
+      }
+    >
       {positive ? <TrendingUp className="mr-1 h-3 w-3" /> : <TrendingDown className="mr-1 h-3 w-3" />}
       {positive ? '+' : ''}
       {pct.toFixed(1)}% vs prior

@@ -1,7 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { format, formatDistanceToNow, startOfDay, startOfMonth } from 'date-fns'
+import type { LucideIcon } from 'lucide-react'
 import {
   AlertTriangle,
   Building2,
@@ -9,10 +11,12 @@ import {
   CheckCircle2,
   CircleDot,
   Footprints,
+  LayoutGrid,
   Loader2,
   MapPin,
   Package,
   RefreshCw,
+  SlidersHorizontal,
   Target,
   TrendingUp,
   Wallet,
@@ -32,7 +36,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import {
   Select,
   SelectContent,
@@ -49,6 +53,15 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatGhs } from '@/lib/dtc-orders'
+import { cn } from '@/lib/utils'
+
+const QUICK_LINKS = [
+  { href: '/sf/shop-visits', label: 'Shop visits', icon: Footprints },
+  { href: '/sf/posm-tracker', label: 'POSM tracker', icon: Package },
+  { href: '/sf/inventory', label: 'Retail inventory', icon: Package },
+  { href: '/sf/b2b-payments', label: 'B2B payments', icon: Wallet },
+  { href: '/sf/customer-intelligence', label: 'Customer intelligence', icon: Building2 },
+] as const
 
 type SfDashboardPayload = {
   generatedAt: string
@@ -102,6 +115,58 @@ function severityBadge(s: 'high' | 'medium') {
   return <Badge variant="secondary">Medium</Badge>
 }
 
+function SfDashboardKpiCard({
+  label,
+  value,
+  subtitle,
+  icon: Icon,
+  iconWrapClass,
+  iconClass,
+}: {
+  label: string
+  value: ReactNode
+  subtitle: ReactNode
+  icon: LucideIcon
+  iconWrapClass: string
+  iconClass: string
+}) {
+  return (
+    <Card className="dashboard-card p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{value}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+        </div>
+        <div className={cn('shrink-0 rounded-2xl p-3', iconWrapClass)}>
+          <Icon className={cn('h-5 w-5', iconClass)} />
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function rangePresetLabel(preset: RangePreset): string {
+  switch (preset) {
+    case '24h':
+      return 'Last 24 hours'
+    case '7d':
+      return 'Last 7 days'
+    case '30d':
+      return 'Last 30 days'
+    case 'today':
+      return 'Today'
+    case 'mtd':
+      return 'This month'
+    case 'custom':
+      return 'Custom range'
+    default:
+      return 'Selected range'
+  }
+}
+
+type RangePreset = '24h' | '7d' | '30d' | 'today' | 'mtd' | 'custom'
+
 export function SfDashboardView() {
   const [data, setData] = useState<SfDashboardPayload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -114,7 +179,6 @@ export function SfDashboardView() {
     primaryRegionLabel: '',
   })
 
-  type RangePreset = '24h' | '7d' | '30d' | 'today' | 'mtd' | 'custom'
   const [rangePreset, setRangePreset] = useState<RangePreset>('7d')
   const [customOpen, setCustomOpen] = useState(false)
 
@@ -303,48 +367,51 @@ export function SfDashboardView() {
     return [
       {
         label: 'Active outlets',
-        value: String(kpis.activeOutlets),
+        value: kpis.activeOutlets.toLocaleString(),
         subtitle: 'Registered active · or visited (30d) if none registered',
         icon: Building2,
-        accent: 'border-l-blue-600',
+        iconWrapClass: 'bg-blue-500/10',
+        iconClass: 'text-blue-600 dark:text-blue-400',
       },
       {
         label: 'Visits',
-        value: String(kpis.visits),
-        subtitle: 'Completed shop visits',
+        value: kpis.visits.toLocaleString(),
+        subtitle: 'Completed shop visits in range',
         icon: Footprints,
-        accent: 'border-l-emerald-600',
+        iconWrapClass: 'bg-emerald-500/10',
+        iconClass: 'text-emerald-600 dark:text-emerald-400',
       },
       {
-        label: 'B2B ',
+        label: 'B2B sell-in',
         value: formatGhs(kpis.b2bSellInGhs),
         subtitle: 'B2B Payments (invoiced net) · selected range',
         icon: TrendingUp,
-        accent: 'border-l-violet-600',
+        iconWrapClass: 'bg-violet-500/10',
+        iconClass: 'text-violet-600 dark:text-violet-400',
       },
       {
         label: 'Collections',
         value: formatGhs(kpis.collectionsGhs),
         subtitle: 'Paid from B2B Payments · selected range',
         icon: Wallet,
-        accent: 'border-l-amber-600',
+        iconWrapClass: 'bg-amber-500/10',
+        iconClass: 'text-amber-600 dark:text-amber-400',
       },
       {
         label: 'Target MTD',
-        value:
-          kpis.targetAttainmentPct != null
-            ? `${kpis.targetAttainmentPct}%`
-            : '—',
+        value: kpis.targetAttainmentPct != null ? `${kpis.targetAttainmentPct}%` : '—',
         subtitle: targetLabel,
         icon: Target,
-        accent: 'border-l-indigo-600',
+        iconWrapClass: 'bg-indigo-500/10',
+        iconClass: 'text-indigo-600 dark:text-indigo-400',
       },
       {
         label: 'Open POSM tasks',
-        value: String(kpis.openPosmTasks),
-        subtitle: 'Installs & audits',
+        value: kpis.openPosmTasks.toLocaleString(),
+        subtitle: 'Installs & audits needing follow-up',
         icon: Package,
-        accent: 'border-l-orange-600',
+        iconWrapClass: 'bg-orange-500/10',
+        iconClass: 'text-orange-600 dark:text-orange-400',
       },
     ]
   }, [data])
@@ -363,31 +430,13 @@ export function SfDashboardView() {
         title="Retail Dashboard"
         description="Live roll-up from outlets, field visits, POSM tasks, DTC B2B portal orders, logged collections, finance receivables, and inventory health."
         actions={
-          <div className="flex flex-wrap gap-2">
-            <Select
-              value={rangePreset}
-              onValueChange={(v) => {
-                const p = v as RangePreset
-                setRangePreset(p)
-                if (p === 'custom') {
-                  openCustom()
-                } else {
-                  applyPreset(p)
-                }
-              }}
-            >
-              <SelectTrigger className="h-9 w-[170px]">
-                <SelectValue placeholder="Range" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="24h">Last 24 hours</SelectItem>
-                <SelectItem value="7d">Last 7 days</SelectItem>
-                <SelectItem value="30d">Last 30 days</SelectItem>
-                <SelectItem value="today">Today</SelectItem>
-                <SelectItem value="mtd">This month</SelectItem>
-                <SelectItem value="custom">Custom…</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="flex flex-wrap items-center gap-2">
+            {loading && data ? (
+              <Badge variant="outline" className="hidden gap-1 sm:inline-flex">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Updating
+              </Badge>
+            ) : null}
             <Button
               type="button"
               variant="outline"
@@ -396,7 +445,7 @@ export function SfDashboardView() {
               disabled={loading}
               onClick={() => void load()}
             >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
               Refresh
             </Button>
             <Button
@@ -412,174 +461,288 @@ export function SfDashboardView() {
         }
       />
 
-      <div className="flex-1 space-y-6 p-4 sm:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-muted-foreground">{today}</p>
-          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            {rangeLabel ? <span>{rangeLabel}</span> : null}
-            {data?.primaryRegionLabel ? (
-              <span className="flex items-center gap-2">
-                <MapPin className="h-3.5 w-3.5" />
-                {data.primaryRegionLabel}
-              </span>
-            ) : null}
-            {data?.generatedAt ? (
-              <span>
-                Updated {formatDistanceToNow(new Date(data.generatedAt), { addSuffix: true })}
-              </span>
-            ) : null}
+      <div className="flex-1 space-y-6 p-4 sm:p-6 lg:p-8">
+        <Card className="dashboard-card p-4 sm:p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold text-foreground">Date range</h2>
+            </div>
+            <p className="text-sm text-muted-foreground">{today}</p>
           </div>
-        </div>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="w-full sm:w-[200px]">
+              <Label className="text-muted-foreground">Preset</Label>
+              <Select
+                value={rangePreset}
+                onValueChange={(v) => {
+                  const p = v as RangePreset
+                  setRangePreset(p)
+                  if (p === 'custom') {
+                    openCustom()
+                  } else {
+                    applyPreset(p)
+                  }
+                }}
+              >
+                <SelectTrigger className="mt-1.5 w-full">
+                  <SelectValue placeholder="Range" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="24h">Last 24 hours</SelectItem>
+                  <SelectItem value="7d">Last 7 days</SelectItem>
+                  <SelectItem value="30d">Last 30 days</SelectItem>
+                  <SelectItem value="today">Today</SelectItem>
+                  <SelectItem value="mtd">This month</SelectItem>
+                  <SelectItem value="custom">Custom…</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{rangePresetLabel(rangePreset)}</span>
+              {rangeLabel ? <span>{rangeLabel}</span> : null}
+              {data?.primaryRegionLabel ? (
+                <span className="flex items-center gap-1.5">
+                  <MapPin className="h-3.5 w-3.5" />
+                  {data.primaryRegionLabel}
+                </span>
+              ) : null}
+              {data?.generatedAt ? (
+                <span>
+                  Updated {formatDistanceToNow(new Date(data.generatedAt), { addSuffix: true })}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </Card>
 
         {loading && !data ? (
-          <div className="flex justify-center py-24">
-            <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
+          <div className="flex flex-col items-center justify-center gap-3 py-24 text-muted-foreground">
+            <Loader2 className="h-10 w-10 animate-spin" />
+            <p className="text-sm">Loading live metrics…</p>
           </div>
         ) : data ? (
           <>
+            <Card className="dashboard-card p-4 sm:p-5">
+              <p className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-muted">
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                </span>
+                Jump to
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {QUICK_LINKS.map(({ href, label, icon: Icon }) => (
+                  <Button key={href} variant="outline" size="sm" className="gap-1.5" asChild>
+                    <Link href={href}>
+                      <Icon className="h-3.5 w-3.5" />
+                      {label}
+                    </Link>
+                  </Button>
+                ))}
+              </div>
+            </Card>
+
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {kpiCards.map((k) => {
-                const Icon = k.icon
-                return (
-                  <Card
-                    key={k.label}
-                    className={`border-b-0 border-r-0 border-t-0 border-l-4 p-5 ${k.accent}`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                          {k.label}
-                        </p>
-                        <p className="mt-2 text-2xl font-bold tabular-nums text-foreground sm:text-3xl">
-                          {k.value}
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">{k.subtitle}</p>
-                      </div>
-                      <div className="rounded-lg bg-muted/80 p-2 text-muted-foreground">
-                        <Icon className="h-5 w-5" />
-                      </div>
-                    </div>
-                  </Card>
-                )
-              })}
+              {kpiCards.map((k) => (
+                <SfDashboardKpiCard
+                  key={k.label}
+                  label={k.label}
+                  value={loading ? '—' : k.value}
+                  subtitle={k.subtitle}
+                  icon={k.icon}
+                  iconWrapClass={k.iconWrapClass}
+                  iconClass={k.iconClass}
+                />
+              ))}
             </div>
 
             {data.kpis.monthlyTargetGhs > 0 ? (
-              <p className="text-xs text-muted-foreground">
-                MTD mix: sell-in {formatGhs(data.kpis.mtdSellInGhs)} · collections{' '}
-                {formatGhs(data.kpis.mtdCollectionsGhs)} · target {formatGhs(data.kpis.monthlyTargetGhs)}
-              </p>
+              <Card className="dashboard-card p-4 sm:p-5">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">MTD target attainment</p>
+                    <p className="text-xs text-muted-foreground">
+                      Sell-in {formatGhs(data.kpis.mtdSellInGhs)} · collections{' '}
+                      {formatGhs(data.kpis.mtdCollectionsGhs)} · target{' '}
+                      {formatGhs(data.kpis.monthlyTargetGhs)}
+                    </p>
+                  </div>
+                  <p className="text-xl font-bold tabular-nums text-foreground">
+                    {data.kpis.targetAttainmentPct != null
+                      ? `${data.kpis.targetAttainmentPct}%`
+                      : '—'}
+                  </p>
+                </div>
+                <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{
+                      width:
+                        data.kpis.targetAttainmentPct != null
+                          ? `${Math.min(100, data.kpis.targetAttainmentPct)}%`
+                          : '0%',
+                    }}
+                  />
+                </div>
+              </Card>
             ) : null}
 
             <div className="grid gap-6 lg:grid-cols-2">
-              <Card className="p-0">
-                <div className="flex items-center gap-2 border-b border-border px-4 py-3 sm:px-6">
-                  <CalendarCheck className="h-4 w-4 text-muted-foreground" />
-                  <h2 className="text-sm font-semibold uppercase tracking-wide">
-                    Upcoming visits
-                  </h2>
+              <Card className="dashboard-card overflow-hidden p-0">
+                <div className="border-b border-border/60 px-4 py-3 sm:px-6">
+                  <div className="flex items-center gap-2">
+                    <CalendarCheck className="h-4 w-4 text-muted-foreground" />
+                    <h2 className="text-sm font-semibold text-foreground">Upcoming visits</h2>
+                    <Badge variant="secondary" className="tabular-nums">
+                      {data.upcomingVisits.length.toLocaleString()}
+                    </Badge>
+                  </div>
                 </div>
                 {data.upcomingVisits.length === 0 ? (
-                  <Empty className="border-0 py-12">
-                    <EmptyHeader>
-                      <EmptyTitle>No scheduled visits</EmptyTitle>
-                      <EmptyDescription>
-                        Add visits with status &quot;scheduled&quot; and a future time in{' '}
-                        <code className="rounded bg-muted px-1 py-0.5 text-xs">sf_visits</code> to
-                        see them here.
-                      </EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
+                  <div className="p-6">
+                    <Empty className="border-0 p-0">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <CalendarCheck className="h-6 w-6" />
+                        </EmptyMedia>
+                        <EmptyTitle>No scheduled visits</EmptyTitle>
+                        <EmptyDescription>
+                          Schedule shop visits with a future date to see them here.
+                        </EmptyDescription>
+                      </EmptyHeader>
+                      <Button asChild size="sm" className="mt-4" variant="outline">
+                        <Link href="/sf/shop-visits">Open shop visits</Link>
+                      </Button>
+                    </Empty>
+                  </div>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Outlet</TableHead>
-                        <TableHead className="hidden sm:table-cell">Rep</TableHead>
-                        <TableHead className="text-right">When</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.upcomingVisits.map((v) => (
-                        <TableRow key={v.id}>
-                          <TableCell className="font-medium">{v.outlet}</TableCell>
-                          <TableCell className="hidden text-muted-foreground sm:table-cell">
-                            {v.rep}
-                          </TableCell>
-                          <TableCell className="text-right text-sm text-muted-foreground">
-                            {format(new Date(v.scheduledAt), 'd MMM · HH:mm')}
-                          </TableCell>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader className="sticky top-0 z-10 bg-card">
+                        <TableRow>
+                          <TableHead>Outlet</TableHead>
+                          <TableHead className="hidden sm:table-cell">Rep</TableHead>
+                          <TableHead className="text-right">When</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {data.upcomingVisits.map((v) => (
+                          <TableRow key={v.id}>
+                            <TableCell className="font-medium">{v.outlet}</TableCell>
+                            <TableCell className="hidden text-muted-foreground sm:table-cell">
+                              {v.rep}
+                            </TableCell>
+                            <TableCell className="text-right text-sm text-muted-foreground whitespace-nowrap">
+                              {format(new Date(v.scheduledAt), 'd MMM · HH:mm')}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 )}
               </Card>
 
-              <Card className="p-0">
-                <div className="flex items-center gap-2 border-b border-border px-4 py-3 sm:px-6">
-                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                  <h2 className="text-sm font-semibold uppercase tracking-wide">
-                    Rep pulse (range)
-                  </h2>
+              <Card className="dashboard-card overflow-hidden p-0">
+                <div className="border-b border-border/60 px-4 py-3 sm:px-6">
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                    <h2 className="text-sm font-semibold text-foreground">Rep pulse</h2>
+                    <Badge variant="secondary" className="tabular-nums">
+                      {data.repPulse.length.toLocaleString()}
+                    </Badge>
+                  </div>
                 </div>
                 {data.repPulse.length === 0 ? (
-                  <Empty className="border-0 py-12">
-                    <EmptyHeader>
-                      <EmptyTitle>No rep activity</EmptyTitle>
-                      <EmptyDescription>
-                        Page activity in the selected range will roll up here.
-                      </EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
+                  <div className="p-6">
+                    <Empty className="border-0 p-0">
+                      <EmptyHeader>
+                        <EmptyMedia variant="icon">
+                          <Footprints className="h-6 w-6" />
+                        </EmptyMedia>
+                        <EmptyTitle>No rep activity</EmptyTitle>
+                        <EmptyDescription>
+                          Page activity in the selected range will roll up here.
+                        </EmptyDescription>
+                      </EmptyHeader>
+                    </Empty>
+                  </div>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Rep</TableHead>
-                        <TableHead className="hidden md:table-cell">Last page</TableHead>
-                        <TableHead className="hidden lg:table-cell text-right">Last seen</TableHead>
-                        <TableHead className="text-right">Activity</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {data.repPulse.map((r) => (
-                        <TableRow key={r.rep}>
-                          <TableCell className="font-medium">{r.rep}</TableCell>
-                          <TableCell className="hidden md:table-cell text-muted-foreground">
-                            {r.lastPageTitle ?? '—'}
-                          </TableCell>
-                          <TableCell className="hidden lg:table-cell text-right text-sm text-muted-foreground">
-                            {r.lastSeenAt
-                              ? formatDistanceToNow(new Date(r.lastSeenAt), { addSuffix: true })
-                              : '—'}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums text-muted-foreground">
-                            {r.activityCount}
-                          </TableCell>
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader className="sticky top-0 z-10 bg-card">
+                        <TableRow>
+                          <TableHead>Rep</TableHead>
+                          <TableHead className="hidden text-right md:table-cell">Visits</TableHead>
+                          <TableHead className="hidden text-right lg:table-cell">Sell-in</TableHead>
+                          <TableHead className="hidden md:table-cell">Last page</TableHead>
+                          <TableHead className="hidden text-right lg:table-cell">Last seen</TableHead>
+                          <TableHead className="text-right">Activity</TableHead>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {data.repPulse.map((r) => (
+                          <TableRow key={r.rep}>
+                            <TableCell className="font-medium">{r.rep}</TableCell>
+                            <TableCell className="hidden text-right tabular-nums md:table-cell">
+                              {r.visits.toLocaleString()}
+                            </TableCell>
+                            <TableCell className="hidden text-right tabular-nums lg:table-cell">
+                              {formatGhs(r.sellInGhs)}
+                            </TableCell>
+                            <TableCell className="hidden max-w-[10rem] truncate text-muted-foreground md:table-cell">
+                              {r.lastPageTitle ?? '—'}
+                            </TableCell>
+                            <TableCell className="hidden text-right text-sm text-muted-foreground lg:table-cell">
+                              {r.lastSeenAt
+                                ? formatDistanceToNow(new Date(r.lastSeenAt), { addSuffix: true })
+                                : '—'}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums text-muted-foreground">
+                              {r.activityCount.toLocaleString()}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 )}
               </Card>
             </div>
 
-            <div>
-              <div className="mb-3 flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-amber-600" />
-                <h2 className="text-sm font-semibold uppercase tracking-wide">Alerts</h2>
+            <Card className="dashboard-card overflow-hidden p-0">
+              <div className="border-b border-border/60 px-4 py-3 sm:px-6">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  <h2 className="text-sm font-semibold text-foreground">Alerts</h2>
+                  <Badge variant="secondary" className="tabular-nums">
+                    {data.alerts.length.toLocaleString()}
+                  </Badge>
+                </div>
               </div>
               {data.alerts.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  No stock, POSM, or receivable alerts right now.
-                </p>
+                <div className="p-6">
+                  <Empty className="border-0 p-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <CheckCircle2 className="h-6 w-6 text-emerald-600" />
+                      </EmptyMedia>
+                      <EmptyTitle>All clear</EmptyTitle>
+                      <EmptyDescription>
+                        No stock, POSM, or receivable alerts right now.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                </div>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-2 p-4 sm:p-5">
                   {data.alerts.map((a) => (
                     <Card
                       key={a.id}
-                      className="flex flex-col gap-2 border-l-4 border-l-amber-600 p-4 sm:flex-row sm:items-center sm:justify-between"
+                      className={cn(
+                        'dashboard-card flex flex-col gap-2 border-l-4 p-4 sm:flex-row sm:items-center sm:justify-between',
+                        a.severity === 'high' ? 'border-l-red-500' : 'border-l-amber-500',
+                      )}
                     >
                       <p className="text-sm text-foreground">{a.text}</p>
                       {severityBadge(a.severity)}
@@ -587,38 +750,69 @@ export function SfDashboardView() {
                   ))}
                 </div>
               )}
-            </div>
+            </Card>
 
-            <div>
-              <div className="mb-3 flex items-center gap-2">
-                <CalendarCheck className="h-5 w-5 text-emerald-600" />
-                <h2 className="text-sm font-semibold uppercase tracking-wide">My tasks</h2>
+            <Card className="dashboard-card overflow-hidden p-0">
+              <div className="border-b border-border/60 px-4 py-3 sm:px-6">
+                <div className="flex items-center gap-2">
+                  <CalendarCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                  <h2 className="text-sm font-semibold text-foreground">My tasks</h2>
+                  {!tasksLoading ? (
+                    <Badge variant="secondary" className="tabular-nums">
+                      {tasks.length.toLocaleString()}
+                    </Badge>
+                  ) : null}
+                </div>
               </div>
               {tasksLoading ? (
-                <p className="text-sm text-muted-foreground">Loading tasks…</p>
+                <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Loading tasks…
+                </div>
               ) : tasks.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No tasks assigned to you.</p>
+                <div className="p-6">
+                  <Empty className="border-0 p-0">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <CheckCircle2 className="h-6 w-6" />
+                      </EmptyMedia>
+                      <EmptyTitle>No tasks assigned</EmptyTitle>
+                      <EmptyDescription>
+                        Tasks assigned to you will appear here for quick status updates.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                </div>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-2 p-4 sm:p-5">
                   {tasks.slice(0, 12).map((t) => (
                     <Card
                       key={t.id}
-                      className="flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between"
+                      className="dashboard-card flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between"
                     >
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-foreground">
-                          {t.title}
-                        </p>
+                        <p className="text-sm font-medium text-foreground">{t.title}</p>
                         <p className="text-xs text-muted-foreground">
                           {t.dueAt ? `Due ${format(new Date(t.dueAt), 'd MMM yyyy')}` : 'No due date'}
                           {t.priority ? ` · ${t.priority}` : ''}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Badge variant={t.priority === 'high' ? 'destructive' : t.priority === 'medium' ? 'secondary' : 'outline'}>
+                        <Badge
+                          variant={
+                            t.priority === 'high'
+                              ? 'destructive'
+                              : t.priority === 'medium'
+                                ? 'secondary'
+                                : 'outline'
+                          }
+                        >
                           {t.priority}
                         </Badge>
-                        <Select value={t.status} onValueChange={(v) => void updateTaskStatus(t, v as RepTaskRow['status'])}>
+                        <Select
+                          value={t.status}
+                          onValueChange={(v) => void updateTaskStatus(t, v as RepTaskRow['status'])}
+                        >
                           <SelectTrigger className="h-8 w-[150px]">
                             <SelectValue placeholder="Status" />
                           </SelectTrigger>
@@ -631,7 +825,7 @@ export function SfDashboardView() {
                             </SelectItem>
                             <SelectItem value="in_progress">
                               <span className="flex items-center gap-2">
-                                <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
+                                <Loader2 className="h-4 w-4 text-amber-600" />
                                 In progress
                               </span>
                             </SelectItem>
@@ -648,10 +842,31 @@ export function SfDashboardView() {
                   ))}
                 </div>
               )}
-            </div>
+            </Card>
           </>
         ) : (
-          <p className="text-sm text-muted-foreground">No data.</p>
+          <div className="p-6">
+            <Empty className="border-0 p-0">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <AlertTriangle className="h-6 w-6" />
+                </EmptyMedia>
+                <EmptyTitle>No dashboard data</EmptyTitle>
+                <EmptyDescription>
+                  Try refreshing. If it persists, check your connection or date range.
+                </EmptyDescription>
+              </EmptyHeader>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-4"
+                variant="outline"
+                onClick={() => void load()}
+              >
+                Refresh
+              </Button>
+            </Empty>
+          </div>
         )}
       </div>
 

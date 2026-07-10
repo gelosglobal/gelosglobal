@@ -113,3 +113,54 @@ export function getPageBreadcrumb(pathname: string): { section: string; title: s
   if (pathname.startsWith('/sell-in')) return { section: 'Sell-in', title }
   return { section: 'GELOS', title }
 }
+
+export type SearchablePage = {
+  label: string
+  href: string
+  section: string
+  keywords: string[]
+}
+
+export function getSearchablePages(sections: Set<string>): SearchablePage[] {
+  const out: SearchablePage[] = []
+
+  const push = (label: string, href: string, section: string, keywords: string[] = []) => {
+    out.push({
+      label,
+      href,
+      section,
+      keywords: [
+        label.toLowerCase(),
+        section.toLowerCase(),
+        ...keywords.map((k) => k.toLowerCase()),
+      ],
+    })
+  }
+
+  if (sections.has('master')) {
+    push('Master Dashboard', '/', 'Main', ['home', 'overview', 'kpi'])
+  }
+  if (sections.has('dtc')) {
+    for (const item of dtcNavItems) {
+      if (item.href) {
+        push(item.label, item.href, 'DTC', [item.href.split('/').pop() ?? ''])
+      }
+    }
+  }
+  if (sections.has('retail')) {
+    for (const item of salesForceNavItems) {
+      if (item.href) {
+        push(item.label, item.href, 'Retail', [item.href.split('/').pop() ?? ''])
+      }
+    }
+  }
+  if (sections.has('sell-in')) {
+    for (const item of sellInNavItems) {
+      if (item.href) {
+        push(item.label, item.href, 'Sell-in', [item.href.split('/').pop() ?? ''])
+      }
+    }
+  }
+
+  return out
+}

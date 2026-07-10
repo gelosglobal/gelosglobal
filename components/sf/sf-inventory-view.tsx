@@ -1,7 +1,21 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Download, Loader2, Pencil, Plus, RefreshCw, ScanBarcode, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import type { LucideIcon } from 'lucide-react'
+import {
+  AlertTriangle,
+  Download,
+  Loader2,
+  Package,
+  Pencil,
+  Plus,
+  RefreshCw,
+  ScanBarcode,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+  UserCircle,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
 import { SfPageHeader } from '@/components/sf/sf-page-header'
@@ -48,6 +62,7 @@ import {
 } from '@/components/ui/table'
 import type { StockHealth } from '@/lib/dtc-inventory'
 import { formatGhs } from '@/lib/dtc-orders'
+import { cn } from '@/lib/utils'
 
 type InventoryRow = {
   id: string
@@ -81,6 +96,37 @@ function healthBadge(h: StockHealth) {
     return <Badge variant="secondary">Low</Badge>
   }
   return <Badge variant="destructive">Critical</Badge>
+}
+
+function SfInventoryKpiCard({
+  label,
+  value,
+  subtitle,
+  icon: Icon,
+  iconWrapClass,
+  iconClass,
+}: {
+  label: string
+  value: ReactNode
+  subtitle: ReactNode
+  icon: LucideIcon
+  iconWrapClass: string
+  iconClass: string
+}) {
+  return (
+    <Card className="dashboard-card p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{value}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
+        </div>
+        <div className={cn('shrink-0 rounded-2xl p-3', iconWrapClass)}>
+          <Icon className={cn('h-5 w-5', iconClass)} />
+        </div>
+      </div>
+    </Card>
+  )
 }
 
 export type SfInventoryViewProps = {
@@ -123,6 +169,8 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
   const [stats, setStats] = useState<StatsPayload | null>(null)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
+  const [healthFilter, setHealthFilter] = useState<'all' | StockHealth>('all')
+  const [repFilter, setRepFilter] = useState<string>('all')
   const [reorderDrafts, setReorderDrafts] = useState<Record<string, string>>({})
   const [reorderSaving, setReorderSaving] = useState<Record<string, boolean>>({})
 
@@ -196,6 +244,8 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return items.filter((row) => {
+      if (healthFilter !== 'all' && row.health !== healthFilter) return false
+      if (repFilter !== 'all' && (row.repName ?? '') !== repFilter) return false
       if (!q) return true
       return (
         row.sku.toLowerCase().includes(q) ||
@@ -203,7 +253,47 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
         (row.repName ?? '').toLowerCase().includes(q)
       )
     })
-  }, [items, query])
+  }, [items, query, healthFilter, repFilter])
+
+  const repOptions = useMemo(() => {
+    const reps = new Set<string>()
+    for (const row of items) {
+      const rep = (row.repName ?? '').trim()
+      if (rep) reps.add(rep)
+    }
+    return Array.from(reps).sort((a, b) => a.localeCompare(b))
+  }, [items])
+
+  const inventoryInsights = useMemo(() => {
+    let ok = 0
+    let low = 0
+    let critical = 0
+    let totalOnHand = 0
+    let daysCoverSum = 0
+    let daysCoverCount = 0
+
+    for (const row of items) {
+      if (row.health === 'ok') ok += 1
+      else if (row.health === 'low') low += 1
+      else critical += 1
+      totalOnHand += row.onHand
+      if (row.daysCover !== null && Number.isFinite(row.daysCover)) {
+        daysCoverSum += row.daysCover
+        daysCoverCount += 1
+      }
+    }
+
+    const tracked = items.length
+    const healthyPct = tracked > 0 ? (ok / tracked) * 100 : null
+    const avgDaysCover = daysCoverCount > 0 ? daysCoverSum / daysCoverCount : null
+
+    return { ok, low, critical, totalOnHand, healthyPct, avgDaysCover }
+  }, [items])
+
+  const hasActiveFilters =
+    Boolean(query.trim()) || healthFilter !== 'all' || repFilter !== 'all'
+
+  const stockNoun = headerKind === 'dtc' ? 'wholesale' : 'retail'
 
   const wholesaleEditSkuDuplicate = useMemo(() => {
     if (headerKind !== 'dtc' || !editOpen || !editRow) return false
@@ -529,7 +619,7 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
               onClick={() => void load()}
               disabled={loading}
             >
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
               Refresh
             </Button>
             <Button
@@ -553,7 +643,9 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
               <DialogContent className="sm:max-w-lg">
                 <form onSubmit={handleCreate}>
                   <DialogHeader>
-                    <DialogTitle>Add retail stock line</DialogTitle>
+                    <DialogTitle>
+                      {headerKind === 'dtc' ? 'Add wholesale stock line' : 'Add retail stock line'}
+                    </DialogTitle>
                     <DialogDescription>
                       Create a SKU line per outlet. Use safety stock and demand (optional) to
                       surface health and days of cover.
@@ -703,83 +795,262 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
         }
       />
 
-      <div className="flex-1 space-y-6 p-4 sm:p-6">
+      <div className="flex-1 space-y-6 p-4 sm:p-6 lg:p-8">
         {readOnly ? (
-          <Card className="border-dashed bg-muted/30 p-4">
+          <Card className="dashboard-card border-dashed bg-muted/25 p-4">
             <p className="text-sm text-muted-foreground">
               <span className="font-medium text-foreground">View only.</span> Stock levels are maintained
-              by the DTC team in <span className="font-medium text-foreground">DTC → Wholesale Inventory</span>.
+              by the DTC team in{' '}
+              <span className="font-medium text-foreground">DTC → Wholesale Inventory</span>.
             </p>
           </Card>
         ) : null}
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Card className="p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">SKUs tracked</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums">
-              {loading ? '—' : (stats?.skusTracked ?? 0)}
-            </p>
-          </Card>
-          <Card className="border-l-4 border-l-amber-600 p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">Below safety</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums">
-              {loading ? '—' : (stats?.belowSafety ?? 0)}
-            </p>
-          </Card>
-          <Card className="border-l-4 border-l-red-600 p-5">
-            <p className="text-xs font-medium uppercase text-muted-foreground">Critical</p>
-            <p className="mt-2 text-3xl font-bold tabular-nums">
-              {loading ? '—' : (stats?.critical ?? 0)}
-            </p>
-          </Card>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <SfInventoryKpiCard
+            label="SKUs tracked"
+            value={loading ? '—' : (stats?.skusTracked ?? 0).toLocaleString()}
+            subtitle={
+              loading
+                ? `Active ${stockNoun} lines`
+                : `${inventoryInsights.totalOnHand.toLocaleString()} units on hand`
+            }
+            icon={Package}
+            iconWrapClass="bg-primary/10"
+            iconClass="text-primary"
+          />
+          <SfInventoryKpiCard
+            label="Below safety"
+            value={loading ? '—' : (stats?.belowSafety ?? 0).toLocaleString()}
+            subtitle="SKUs under safety stock level"
+            icon={AlertTriangle}
+            iconWrapClass="bg-amber-500/10"
+            iconClass="text-amber-600 dark:text-amber-400"
+          />
+          <SfInventoryKpiCard
+            label="Critical"
+            value={loading ? '—' : (stats?.critical ?? 0).toLocaleString()}
+            subtitle={
+              loading
+                ? 'Needs immediate replenishment'
+                : `${inventoryInsights.low.toLocaleString()} low · ${inventoryInsights.ok.toLocaleString()} healthy`
+            }
+            icon={AlertTriangle}
+            iconWrapClass="bg-red-500/10"
+            iconClass="text-red-600 dark:text-red-400"
+          />
+          <SfInventoryKpiCard
+            label="Avg days cover"
+            value={
+              loading || inventoryInsights.avgDaysCover === null
+                ? '—'
+                : `${Math.round(inventoryInsights.avgDaysCover)}d`
+            }
+            subtitle="From retail order velocity where available"
+            icon={ScanBarcode}
+            iconWrapClass="bg-sky-500/10"
+            iconClass="text-sky-600 dark:text-sky-400"
+          />
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex min-w-0 flex-1 flex-col gap-2 sm:max-w-md">
-            <Label htmlFor="sf-inv-search" className="text-muted-foreground">
-              Search
-            </Label>
-            <Input
-              id="sf-inv-search"
-              placeholder="Rep, SKU, product…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-            />
+        <Card className="dashboard-card p-4 sm:p-5">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold text-foreground">Stock health snapshot</p>
+              <p className="text-xs text-muted-foreground">
+                {loading
+                  ? 'Calculating…'
+                  : inventoryInsights.avgDaysCover !== null
+                    ? `Avg ${Math.round(inventoryInsights.avgDaysCover)} days of cover across SKUs`
+                    : 'Days of cover from order velocity'}
+              </p>
+            </div>
+            <p className="text-xl font-bold tabular-nums text-foreground">
+              {loading || inventoryInsights.healthyPct === null
+                ? '—'
+                : `${inventoryInsights.healthyPct.toFixed(0)}%`}
+            </p>
           </div>
-        </div>
+          <div className="flex h-2.5 overflow-hidden rounded-full bg-muted">
+            {loading || items.length === 0 ? (
+              <div className="h-full w-0 rounded-full bg-primary" />
+            ) : (
+              <>
+                <div
+                  className="h-full bg-emerald-500 transition-all duration-300"
+                  style={{ width: `${(inventoryInsights.ok / items.length) * 100}%` }}
+                />
+                <div
+                  className="h-full bg-amber-500 transition-all duration-300"
+                  style={{ width: `${(inventoryInsights.low / items.length) * 100}%` }}
+                />
+                <div
+                  className="h-full bg-red-500 transition-all duration-300"
+                  style={{ width: `${(inventoryInsights.critical / items.length) * 100}%` }}
+                />
+              </>
+            )}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-emerald-500" />
+              OK {loading ? '—' : inventoryInsights.ok}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-amber-500" />
+              Low {loading ? '—' : inventoryInsights.low}
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-red-500" />
+              Critical {loading ? '—' : inventoryInsights.critical}
+            </span>
+          </div>
+        </Card>
 
-        <Card className="p-0">
-          <div className="border-b border-border px-4 py-3 sm:px-6">
-            <h2 className="text-sm font-semibold uppercase tracking-wide">{stockTableTitle}</h2>
+        <Card className="dashboard-card p-4 sm:p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold text-foreground">Filter inventory</h2>
+            </div>
+            {hasActiveFilters ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setQuery('')
+                  setHealthFilter('all')
+                  setRepFilter('all')
+                }}
+              >
+                Reset filters
+              </Button>
+            ) : null}
+          </div>
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+            <div className="space-y-2">
+              <Label htmlFor="sf-inv-search" className="text-muted-foreground">
+                Search SKUs
+              </Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  id="sf-inv-search"
+                  placeholder="Rep, SKU, product…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              {repOptions.length > 0 ? (
+                <div className="w-full space-y-2 sm:w-44">
+                  <Label className="flex items-center gap-1.5 text-muted-foreground">
+                    <UserCircle className="h-3.5 w-3.5" />
+                    Rep
+                  </Label>
+                  <Select value={repFilter} onValueChange={setRepFilter}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All reps" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All reps</SelectItem>
+                      {repOptions.map((rep) => (
+                        <SelectItem key={rep} value={rep}>
+                          {rep}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
+              <div className="w-full space-y-2 sm:w-44">
+                <Label className="text-muted-foreground">Stock status</Label>
+                <Select
+                  value={healthFilter}
+                  onValueChange={(v) => setHealthFilter(v as 'all' | StockHealth)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="All statuses" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    <SelectItem value="ok">Healthy</SelectItem>
+                    <SelectItem value="low">Low stock</SelectItem>
+                    <SelectItem value="critical">Critical</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="dashboard-card overflow-hidden p-0">
+          <div className="border-b border-border/60 px-4 py-3 sm:px-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-foreground">{stockTableTitle}</h2>
+                {!loading ? (
+                  <Badge variant="secondary" className="tabular-nums">
+                    {filtered.length.toLocaleString()}
+                  </Badge>
+                ) : null}
+              </div>
+            </div>
           </div>
           {loading ? (
-            <div className="flex items-center justify-center py-16 text-muted-foreground">
-              <Loader2 className="h-8 w-8 animate-spin" />
+            <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Loading inventory…
             </div>
           ) : items.length === 0 ? (
-            <Empty className="border-0 py-16">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <ScanBarcode className="h-6 w-6" />
-                </EmptyMedia>
-                <EmptyTitle>No retail lines yet</EmptyTitle>
-                <EmptyDescription>
-                  {readOnly
-                    ? 'No stock lines yet. DTC will add SKUs from Wholesale inventory.'
-                    : 'Add retail stock lines to track on-hand levels and surface low / critical SKUs.'}
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
+            <div className="p-6">
+              <Empty className="border-0 p-0">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <ScanBarcode className="h-6 w-6" />
+                  </EmptyMedia>
+                  <EmptyTitle>
+                    {headerKind === 'dtc' ? 'No wholesale lines yet' : 'No retail lines yet'}
+                  </EmptyTitle>
+                  <EmptyDescription>
+                    {readOnly
+                      ? 'No stock lines yet. DTC will add SKUs from Wholesale inventory.'
+                      : headerKind === 'dtc'
+                        ? 'Add wholesale stock lines to track on-hand levels and surface low / critical SKUs.'
+                        : 'Add retail stock lines to track on-hand levels and surface low / critical SKUs.'}
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="p-6">
+              <Empty className="border-0 p-0">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <Package className="h-6 w-6" />
+                  </EmptyMedia>
+                  <EmptyTitle>No lines match your filters</EmptyTitle>
+                  <EmptyDescription>
+                    Try another search, rep, or stock status — or reset filters.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            </div>
           ) : (
+            <div className="overflow-x-auto">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
                   <TableHead className="hidden lg:table-cell">Rep</TableHead>
                   <TableHead>SKU</TableHead>
                   <TableHead>Product</TableHead>
                   <TableHead className="hidden md:table-cell text-right">Cost</TableHead>
                   <TableHead className="hidden md:table-cell text-right">Price</TableHead>
-              <TableHead>Stock</TableHead>
-              <TableHead className="text-right">Reorder</TableHead>
+                  <TableHead>Stock</TableHead>
+                  <TableHead className="text-right">Reorder</TableHead>
                   <TableHead className="hidden text-right sm:table-cell">Days cover</TableHead>
                   <TableHead>Health</TableHead>
                   {!readOnly ? <TableHead className="w-[52px] text-right" /> : null}
@@ -890,14 +1161,9 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </Card>
-
-        {!loading && items.length > 0 && filtered.length === 0 ? (
-          <p className="text-center text-sm text-muted-foreground">
-            No rows match your search.
-          </p>
-        ) : null}
       </div>
 
       {!readOnly ? (
@@ -906,7 +1172,9 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
         <DialogContent className="sm:max-w-lg">
           <form onSubmit={handleEditSubmit}>
             <DialogHeader>
-              <DialogTitle>Update retail stock</DialogTitle>
+              <DialogTitle>
+                {headerKind === 'dtc' ? 'Update wholesale stock' : 'Update retail stock'}
+              </DialogTitle>
               <DialogDescription>
                 {editRow ? 'Adjust stock, pricing, and metadata for this line.' : null}
               </DialogDescription>
