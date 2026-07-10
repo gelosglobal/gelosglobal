@@ -2,6 +2,7 @@
 
 import { useId, useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
+import { authInputClassName, authLabelClassName } from '@/components/auth/auth-field-styles'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -38,11 +39,9 @@ export function PasswordField({
 
   return (
     <div className={cn('space-y-2', className)}>
-      <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={id} className="text-foreground">
-          {label}
-        </Label>
-      </div>
+      <Label htmlFor={id} className={authLabelClassName}>
+        {label}
+      </Label>
       <div className="relative">
         <Input
           id={id}
@@ -53,13 +52,13 @@ export function PasswordField({
           disabled={disabled}
           required={required}
           minLength={minLength}
-          className="h-11 pr-11"
+          className={cn(authInputClassName, 'pr-12')}
         />
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="absolute right-0.5 top-1/2 h-9 w-9 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          className="absolute right-1 top-1/2 h-9 w-9 -translate-y-1/2 rounded-lg text-muted-foreground hover:bg-muted/60 hover:text-foreground"
           onClick={() => setVisible((v) => !v)}
           aria-label={visible ? 'Hide password' : 'Show password'}
           aria-pressed={visible}
@@ -68,7 +67,7 @@ export function PasswordField({
         </Button>
       </div>
       {hint ? (
-        <p className="text-xs text-muted-foreground leading-snug">{hint}</p>
+        <p className="text-xs leading-snug text-muted-foreground">{hint}</p>
       ) : null}
     </div>
   )
