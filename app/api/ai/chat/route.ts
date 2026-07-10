@@ -61,9 +61,19 @@ Block types:
 Content rules:
 - Use ONLY numbers from LIVE DASHBOARD CONTEXT. Never invent metrics.
 - Currency: GHS with commas (GHS 27,235.00).
-- Lead with 3-4 stat cards, then progress for targets, alert for risks, bullets for actions.
-- For retail target questions include MTD sell-in vs monthly target in progress detail.
-- Keep copy short. Max 6 blocks.`
+- Lead with 3-5 stat cards, then progress for targets, alert for risks, bullets for actions.
+- Data sources in context:
+  - finance: P&L, revenue mix, COGS %, margins, payment split
+  - dtc.dashboard / dtc.marketing / dtc.productPerformance: DTC sell-out, campaigns, top SKUs
+  - retail.dashboard / retail.repTargets / retail.leaderboard30d: field KPIs, MTD targets, top reps
+  - retail.customerIntelligence: per-outlet balances (countBalanceAboveGhs, topBalances, outletsForQuestion when relevant)
+  - retail.b2bPayments30d / retail.b2bPaymentsAllTime: invoice collections and overdue
+  - retail.productPerformance: retail/B2B product rollups
+  - tasks / teamTasks: assigned rep work (teamTasks for managers)
+- For retail customer balance questions use retail.customerIntelligence.countBalanceAboveGhs for the count and retail.customerIntelligence.outletsForQuestion or topBalances for outlet names. Include a bullets block listing outlets (name + balance GHS) when the user asks who/which outlets or to list them.
+- For rep ranking use retail.leaderboard30d or retail.repTargets.topRepsBySellIn.
+- For marketing ROAS use dtc.marketing.
+- Keep copy short. Max 8 blocks.`
 
 export async function POST(request: Request) {
   const session = await requireSession()
@@ -89,9 +99,10 @@ export async function POST(request: Request) {
   try {
     const { db } = getMongo()
     const dashboardContext = await buildAiDashboardContext(db, session as any, body.pathname ?? null)
-    const contextBlock = formatAiDashboardContextForPrompt(dashboardContext)
+    const history = body.messages.slice(-6)
+    const lastUserMessage = history.filter((m) => m.role === 'user').pop()?.content
+    const contextBlock = formatAiDashboardContextForPrompt(dashboardContext, lastUserMessage)
 
-    const history = body.messages.slice(-12)
     const groqMessages: GroqChatMessage[] = [
       {
         role: 'system',
@@ -103,10 +114,14 @@ export async function POST(request: Request) {
     const reply = await groqChatCompletion({
       messages: groqMessages,
       responseFormat: 'json_object',
-      maxTokens: 3072,
+      maxTokens: 4096,
     })
 
-    const payload: AiAssistantPayload = buildAiAssistantPayload(reply, dashboardContext)
+    const payload: AiAssistantPayload = buildAiAssistantPayload(
+      reply,
+      dashboardContext,
+      lastUserMessage,
+    )
 
     return NextResponse.json({
       message: {

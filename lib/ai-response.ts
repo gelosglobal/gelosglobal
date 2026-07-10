@@ -306,9 +306,107 @@ function looksLikeJsonDump(text: string): boolean {
   return t.startsWith('{') && t.includes('"blocks"')
 }
 
+type BalanceOutletRow = {
+  outletName: string
+  balanceGhs: number
+}
+
+function parseBalanceThresholdGhs(text: string): number | null {
+  const t = text.toLowerCase()
+  if (!/(balance|outstanding|receivable|owe|debt|collect|outlet)/i.test(t)) return null
+
+  const kMatch = t.match(/(\d+(?:\.\d+)?)\s*k\b/)
+  if (kMatch) {
+    const n = parseFloat(kMatch[1])
+    return Number.isFinite(n) ? Math.round(n * 1000) : null
+  }
+
+  const patterns = [
+    /(?:above|over|more than|greater than|>)\s*(?:ghs\s*)?([\d,]+(?:\.\d+)?)/i,
+    /([\d,]+(?:\.\d+)?)\s*ghs/i,
+    /(?:above|over|more than)\s*([\d,]+(?:\.\d+)?)/i,
+  ]
+  for (const pattern of patterns) {
+    const m = t.match(pattern)
+    if (!m) continue
+    const n = parseFloat(m[1].replace(/,/g, ''))
+    if (Number.isFinite(n) && n > 0) return Math.round(n)
+  }
+  return null
+}
+
+function resolveOutletsAboveThreshold(
+  lists: Record<string, unknown> | null,
+  thresholdGhs: number,
+): BalanceOutletRow[] {
+  if (!lists) return []
+
+  const mapRows = (raw: unknown): BalanceOutletRow[] => {
+    if (!Array.isArray(raw)) return []
+    return raw
+      .map((row) => {
+        const r = asRecord(row)
+        if (!r || typeof r.outletName !== 'string') return null
+        const balanceGhs = asNumber(r.balanceGhs)
+        if (balanceGhs === null) return null
+        return { outletName: r.outletName, balanceGhs }
+      })
+      .filter(Boolean) as BalanceOutletRow[]
+  }
+
+  const exact = mapRows(lists[String(thresholdGhs)])
+  if (exact.length > 0 || lists[String(thresholdGhs)] != null) {
+    return exact
+  }
+
+  const keys = Object.keys(lists)
+    .map((k) => Number(k))
+    .filter((n) => Number.isFinite(n))
+    .sort((a, b) => a - b)
+  let useKey = keys[0]
+  for (const n of keys) {
+    if (n <= thresholdGhs) useKey = n
+  }
+  return mapRows(lists[String(useKey)]).filter((r) => r.balanceGhs > thresholdGhs)
+}
+
+function injectBalanceOutletList(
+  structured: AiStructuredResponse,
+  context: AiDashboardContext,
+  userMessage?: string,
+): AiStructuredResponse {
+  const threshold = userMessage ? parseBalanceThresholdGhs(userMessage) : null
+  if (threshold === null) return structured
+
+  const retail = asRecord(context.retail)
+  const ci = asRecord(retail?.customerIntelligence)
+  const lists = asRecord(ci?.outletsAboveBalanceGhs)
+  const outlets = resolveOutletsAboveThreshold(lists, threshold)
+  if (outlets.length === 0) return structured
+
+  const hasOutletList = structured.blocks.some(
+    (b) =>
+      b.type === 'bullets' &&
+      b.items.some((item) => outlets.some((o) => item.includes(o.outletName))),
+  )
+  if (hasOutletList) return structured
+
+  const blocks = [
+    ...structured.blocks,
+    {
+      type: 'bullets' as const,
+      title: `Outlets with balance above ${formatGhs(threshold)}`,
+      items: outlets.map((o) => `${o.outletName} — ${formatGhs(o.balanceGhs)}`),
+    },
+  ]
+
+  return { ...structured, blocks }
+}
+
 export function enrichStructuredResponse(
   structured: AiStructuredResponse,
   context: AiDashboardContext,
+  userMessage?: string,
 ): AiStructuredResponse {
   const retail = asRecord(context.retail)
   const retailDash = asRecord(retail?.dashboard)
@@ -355,7 +453,12 @@ export function enrichStructuredResponse(
     })
   }
 
-  return { ...structured, blocks }
+  const withOutlets = injectBalanceOutletList(
+    { ...structured, blocks },
+    context,
+    userMessage,
+  )
+  return withOutlets
 }
 
 export function parseAiStructuredResponse(raw: string): AiStructuredResponse {
@@ -413,8 +516,62 @@ export function parseAiStructuredResponse(raw: string): AiStructuredResponse {
   }
 }
 
-export function buildAiContextHighlights(context: AiDashboardContext): AiContextHighlight[] {
+export function buildAiContextHighlights(
+  context: AiDashboardContext,
+  opts?: {
+    userMessage?: string
+    structured?: AiStructuredResponse
+    limit?: number
+  },
+): AiContextHighlight[] {
+  const candidates = collectAiContextHighlightCandidates(context, opts?.userMessage)
+  return rankAiContextHighlights(candidates, context, opts).slice(0, opts?.limit ?? 4)
+}
+
+const HIGHLIGHT_TOPIC_PATTERNS: Record<string, RegExp[]> = {
+  'retail-balance-threshold': [
+    /balance|outstanding|receivable|owe|debt|collect|ghs|above|over/i,
+    /outlet|customer|retail/i,
+  ],
+  'retail-balance-total': [/balance|outstanding|receivable|owe|debt|collect/i],
+  'retail-b2b-overdue': [/overdue|late|past due|collect|receivable/i],
+  'retail-at-risk': [/at risk|risk|churn|inactive|stale/i],
+  'retail-outlets': [/outlet|customer|retail|store|shop/i],
+  'retail-target': [/target|attainment|quota|goal|mtd/i],
+  'retail-mtd-sellin': [/sell.?in|revenue|sales|trade/i],
+  'retail-visits': [/visit|field|coverage|shop visit/i],
+  'retail-team-target': [/target|team|rep|quota|attainment/i],
+  'retail-top-rep': [/leaderboard|top rep|best rep|ranking|rep/i],
+  'finance-total': [/revenue|profit|p&l|finance|sales|total/i],
+  'finance-net-profit': [/profit|p&l|margin|net|bottom line/i],
+  'finance-gross-margin': [/gross|margin|cogs|profit/i],
+  'finance-mix': [/dtc|b2b|mix|channel|split/i],
+  'finance-outstanding': [/outstanding|receivable|collect|balance|b2b/i],
+  'dtc-roas': [/marketing|roas|campaign|ad|spend|attribution/i],
+  'dtc-revenue': [/dtc|revenue|sell.?out|direct/i],
+  'dtc-orders': [/order|dtc|fulfillment/i],
+  'dtc-below-safety': [/inventory|stock|safety|sku|restock|warehouse/i],
+  'inventory-critical': [/inventory|stock|critical|restock|warehouse/i],
+  'inventory-low': [/inventory|stock|low|restock|warehouse/i],
+  'tasks-open': [/task|todo|assigned|my work/i],
+  'team-tasks-open': [/task|team|rep task|assign/i],
+}
+
+const DEFAULT_HIGHLIGHT_PRIORITY = [
+  'finance-total',
+  'retail-mtd-sellin',
+  'retail-target',
+  'dtc-revenue',
+  'retail-balance-total',
+  'inventory-critical',
+]
+
+function collectAiContextHighlightCandidates(
+  context: AiDashboardContext,
+  userMessage?: string,
+): AiContextHighlight[] {
   const highlights: AiContextHighlight[] = []
+  const balanceThreshold = userMessage ? parseBalanceThresholdGhs(userMessage) : null
 
   const finance = asRecord(context.finance)
   if (finance) {
@@ -422,11 +579,30 @@ export function buildAiContextHighlights(context: AiDashboardContext): AiContext
     const dtc = asNumber(finance.dtcRevenue)
     const b2b = asNumber(finance.b2bCollected)
     const outstanding = asNumber(finance.b2bOutstandingGhs)
+    const netProfit = asNumber(finance.netProfit)
+    const grossMarginPct = asNumber(finance.grossMarginPct)
     if (total !== null) {
       highlights.push({
         id: 'finance-total',
         label: 'Total revenue',
         value: formatGhs(total),
+        hint: `${finance.periodDays ?? 30}d`,
+      })
+    }
+    if (netProfit !== null) {
+      highlights.push({
+        id: 'finance-net-profit',
+        label: 'Net profit',
+        value: formatGhs(netProfit),
+        hint: `${finance.periodDays ?? 30}d`,
+        trend: netProfit >= 0 ? 'up' : 'down',
+      })
+    }
+    if (grossMarginPct !== null) {
+      highlights.push({
+        id: 'finance-gross-margin',
+        label: 'Gross margin',
+        value: `${grossMarginPct}%`,
         hint: `${finance.periodDays ?? 30}d`,
       })
     }
@@ -482,7 +658,115 @@ export function buildAiContextHighlights(context: AiDashboardContext): AiContext
     }
   }
 
+  const customerIntel = asRecord(retail?.customerIntelligence)
+  if (customerIntel) {
+    const totalBalance = asNumber(customerIntel.totalBalanceGhs)
+    const withBalance = asNumber(customerIntel.outletsWithBalance)
+    const totalOutlets = asNumber(customerIntel.totalOutlets)
+    const segments = asRecord(customerIntel.segments)
+    const atRisk = asNumber(segments?.atRisk)
+
+    if (balanceThreshold !== null) {
+      const count = asNumber(
+        asRecord(customerIntel.countBalanceAboveGhs)?.[String(balanceThreshold)],
+      )
+      if (count !== null) {
+        highlights.push({
+          id: 'retail-balance-threshold',
+          label: `Balance > ${formatGhs(balanceThreshold)}`,
+          value: String(Math.round(count)),
+          hint: 'Retail outlets',
+          trend: count > 0 ? 'down' : 'neutral',
+          trendText: count > 0 ? 'Collect' : 'None',
+        })
+      }
+    } else if (withBalance !== null && withBalance > 0 && totalBalance !== null) {
+      highlights.push({
+        id: 'retail-balance-total',
+        label: 'Retail receivables',
+        value: formatGhs(totalBalance),
+        hint: `${Math.round(withBalance)} outlets`,
+        trend: 'down',
+        trendText: 'Collect',
+      })
+    }
+
+    if (atRisk !== null && atRisk > 0) {
+      highlights.push({
+        id: 'retail-at-risk',
+        label: 'At-risk outlets',
+        value: String(Math.round(atRisk)),
+        hint: '60d+ no invoice',
+        trend: 'down',
+      })
+    }
+
+    if (totalOutlets !== null && totalOutlets > 0) {
+      highlights.push({
+        id: 'retail-outlets',
+        label: 'Retail outlets',
+        value: String(Math.round(totalOutlets)),
+        hint: 'On file',
+      })
+    }
+  }
+
+  const b2b30 = asRecord(retail?.b2bPayments30d)
+  const overdue30 = asNumber(b2b30?.overdueGhs)
+  if (overdue30 !== null && overdue30 > 0) {
+    highlights.push({
+      id: 'retail-b2b-overdue',
+      label: 'B2B overdue',
+      value: formatGhs(overdue30),
+      hint: 'Last 30d',
+      trend: 'down',
+      trendText: 'Collect',
+    })
+  }
+
+  const repTargets = asRecord(retail?.repTargets)
+  if (repTargets) {
+    const teamAttainment = asNumber(repTargets.teamSellInAttainmentPct)
+    if (teamAttainment !== null) {
+      highlights.push({
+        id: 'retail-team-target',
+        label: 'Team sell-in',
+        value: `${teamAttainment < 10 ? teamAttainment.toFixed(1) : Math.round(teamAttainment)}%`,
+        hint: 'MTD vs quota',
+        trend: teamAttainment >= 100 ? 'up' : teamAttainment >= 70 ? 'neutral' : 'down',
+      })
+    }
+  }
+
+  const leaderboard = asRecord(retail?.leaderboard30d)
+  const topReps = Array.isArray(leaderboard?.topReps) ? leaderboard.topReps : []
+  const topRep = asRecord(topReps[0])
+  if (topRep && typeof topRep.rep === 'string') {
+    const sellIn = asNumber(topRep.sellInGhs)
+    highlights.push({
+      id: 'retail-top-rep',
+      label: 'Top rep (30d)',
+      value: sellIn !== null ? formatGhs(sellIn) : topRep.rep,
+      hint: topRep.rep,
+      trend: 'up',
+    })
+  }
+
   const dtc = asRecord(context.dtc)
+  const marketing = asRecord(dtc?.marketing)
+  if (marketing) {
+    const roas = asNumber(marketing.blendedRoas)
+    if (roas !== null && roas > 0) {
+      highlights.push({
+        id: 'dtc-roas',
+        label: 'Blended ROAS',
+        value: `${roas.toFixed(2)}x`,
+        hint: `${marketing.periodDays ?? 30}d`,
+        trend: roas >= 2 ? 'up' : roas >= 1 ? 'neutral' : 'down',
+      })
+    }
+  }
+
   const dtcDash = asRecord(dtc?.dashboard)
   const dtcKpis = asRecord(dtcDash?.kpis)
   if (dtcKpis) {
@@ -549,7 +833,100 @@ export function buildAiContextHighlights(context: AiDashboardContext): AiContext
     })
   }
 
-  return highlights.slice(0, 6)
+  const teamOpen =
+    context.teamTasks?.filter((t) => t.status !== 'done' && t.status !== 'completed').length ?? 0
+  if (teamOpen > 0) {
+    highlights.push({
+      id: 'team-tasks-open',
+      label: 'Team open tasks',
+      value: String(teamOpen),
+      trend: teamOpen > 5 ? 'down' : 'neutral',
+    })
+  }
+
+  return highlights
+}
+
+function structuredResponseText(structured?: AiStructuredResponse): string {
+  if (!structured) return ''
+  const parts: string[] = []
+  if (structured.title) parts.push(structured.title)
+  if (structured.summary) parts.push(structured.summary)
+  for (const block of structured.blocks) {
+    if (block.type === 'stats') {
+      for (const item of block.items) {
+        parts.push(item.label, item.value, item.hint ?? '', item.trendText ?? '')
+      }
+    } else if (block.type === 'text') {
+      parts.push(block.text)
+    } else if (block.type === 'alert') {
+      parts.push(block.title, block.body ?? '')
+    } else if (block.type === 'bullets') {
+      parts.push(block.title ?? '', ...block.items)
+    } else if (block.type === 'progress') {
+      parts.push(block.label, block.detail ?? '')
+    }
+  }
+  return parts.join(' ').toLowerCase()
+}
+
+function rankAiContextHighlights(
+  candidates: AiContextHighlight[],
+  context: AiDashboardContext,
+  opts?: {
+    userMessage?: string
+    structured?: AiStructuredResponse
+  },
+): AiContextHighlight[] {
+  if (candidates.length === 0) return []
+
+  const query = (opts?.userMessage ?? '').toLowerCase()
+  const responseText = structuredResponseText(opts?.structured)
+  const page = (context.currentPage ?? '').toLowerCase()
+
+  const scored = candidates.map((highlight) => {
+    let score = 0
+    const patterns = HIGHLIGHT_TOPIC_PATTERNS[highlight.id] ?? []
+
+    for (const pattern of patterns) {
+      if (query && pattern.test(query)) score += 12
+      if (page && pattern.test(page)) score += 4
+    }
+
+    const label = highlight.label.toLowerCase()
+    const value = highlight.value.toLowerCase()
+    if (query && label.split(/\s+/).some((w) => w.length > 3 && query.includes(w))) score += 6
+    if (responseText.includes(value) && value.length > 1) score -= 8
+    if (responseText.includes(label)) score -= 4
+
+    if (highlight.trend === 'down') score += 1
+
+    const defaultIdx = DEFAULT_HIGHLIGHT_PRIORITY.indexOf(highlight.id)
+    if (defaultIdx >= 0) score += 3 - defaultIdx * 0.25
+
+    return { highlight, score }
+  })
+
+  scored.sort((a, b) => b.score - a.score)
+
+  const positive = scored.filter((s) => s.score > 0)
+  const ordered =
+    positive.length > 0
+      ? positive
+      : [...scored].sort((a, b) => {
+          const ai = DEFAULT_HIGHLIGHT_PRIORITY.indexOf(a.highlight.id)
+          const bi = DEFAULT_HIGHLIGHT_PRIORITY.indexOf(b.highlight.id)
+          return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
+        })
+
+  const seen = new Set<string>()
+  const result: AiContextHighlight[] = []
+  for (const { highlight } of ordered) {
+    if (seen.has(highlight.id)) continue
+    seen.add(highlight.id)
+    result.push(highlight)
+  }
+  return result
 }
 
 export function buildDisplayText(structured: AiStructuredResponse): string {
@@ -562,12 +939,13 @@ export function buildDisplayText(structured: AiStructuredResponse): string {
 export function buildAiAssistantPayload(
   raw: string,
   context: AiDashboardContext,
+  userMessage?: string,
 ): AiAssistantPayload {
   const parsed = parseAiStructuredResponse(raw)
-  const structured = enrichStructuredResponse(parsed, context)
+  const structured = enrichStructuredResponse(parsed, context, userMessage)
   return {
     structured,
-    highlights: buildAiContextHighlights(context),
+    highlights: buildAiContextHighlights(context, { userMessage, structured }),
     displayText: buildDisplayText(structured),
     raw,
   }

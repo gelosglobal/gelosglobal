@@ -357,15 +357,6 @@ export function AiMessageRenderer({
         </Card>
       ) : null}
 
-      {showHighlights && highlights && highlights.length > 0 ? (
-        <div className="space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Snapshot
-          </p>
-          <HighlightGrid items={highlights} />
-        </div>
-      ) : null}
-
       <div className="space-y-3">
         {structured.blocks.map((block, i) => {
           const sectionLabel =
@@ -391,6 +382,15 @@ export function AiMessageRenderer({
           )
         })}
       </div>
+
+      {showHighlights && highlights && highlights.length > 0 ? (
+        <div className="space-y-2 border-t border-border/60 pt-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Related snapshot
+          </p>
+          <HighlightGrid items={highlights} />
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -403,14 +403,15 @@ export function AiMessageSkeleton() {
         <div className="h-4 w-28 rounded bg-muted" />
       </div>
       <div className="h-16 rounded-xl bg-muted/80" />
-      <div className="grid grid-cols-2 gap-2">
-        <div className="h-20 rounded-xl bg-muted/70" />
-        <div className="h-20 rounded-xl bg-muted/70" />
-        <div className="h-20 rounded-xl bg-muted/70" />
-        <div className="h-20 rounded-xl bg-muted/70" />
-      </div>
       <div className="h-32 rounded-xl bg-muted/60" />
       <div className="h-24 rounded-xl bg-muted/50" />
+      <div className="space-y-2 border-t border-border/60 pt-3">
+        <div className="h-3 w-24 rounded bg-muted" />
+        <div className="grid grid-cols-2 gap-2">
+          <div className="h-20 rounded-xl bg-muted/70" />
+          <div className="h-20 rounded-xl bg-muted/70" />
+        </div>
+      </div>
     </div>
   )
 }
