@@ -26,6 +26,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatGhs } from '@/lib/dtc-orders'
+import { defaultCustomRangeYmd } from '@/lib/product-performance-range'
 
 type ProductRow = {
   key: string
@@ -73,10 +74,16 @@ function formatWow(p: number | null, isNew: boolean) {
 type RangePreset = '7d' | '1m' | '3m' | '6m' | '12m' | 'custom'
 type SortKey = 'revenue_desc' | 'units_desc' | 'wow_desc' | 'name_asc'
 
+type PeriodMeta = {
+  label: string
+  currentRangeLabel: string
+  priorRangeLabel: string
+}
+
 export function SfProductPerformanceView() {
   const [rows, setRows] = useState<ProductRow[]>([])
   const [highlights, setHighlights] = useState<Highlights | null>(null)
-  const [periodLabel, setPeriodLabel] = useState<string>('')
+  const [periodMeta, setPeriodMeta] = useState<PeriodMeta | null>(null)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [rangePreset, setRangePreset] = useState<RangePreset>('7d')
@@ -96,13 +103,17 @@ export function SfProductPerformanceView() {
   }, [rows])
 
   const load = useCallback(async () => {
+    if (rangePreset === 'custom' && (!from.trim() || !to.trim())) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const params = new URLSearchParams()
       params.set('preset', rangePreset)
       if (rangePreset === 'custom') {
-        if (from) params.set('from', from)
-        if (to) params.set('to', to)
+        params.set('from', from.trim())
+        params.set('to', to.trim())
       }
       const res = await fetch(`/api/sf/product-performance?${params.toString()}`, {
         credentials: 'include',
@@ -119,13 +130,13 @@ export function SfProductPerformanceView() {
       const data = (await res.json()) as {
         rows: ProductRow[]
         highlights: Highlights
-        period: { label: string }
+        period: PeriodMeta
       }
       setRows(data.rows)
       setHighlights(data.highlights)
-      setPeriodLabel(data.period.label)
-    } catch {
-      toast.error('Could not load retail product performance')
+      setPeriodMeta(data.period)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not load retail product performance')
     } finally {
       setLoading(false)
     }
@@ -134,6 +145,16 @@ export function SfProductPerformanceView() {
   useEffect(() => {
     void load()
   }, [load])
+
+  function handlePresetChange(value: string) {
+    const preset = value as RangePreset
+    setRangePreset(preset)
+    if (preset === 'custom' && !from.trim() && !to.trim()) {
+      const defaults = defaultCustomRangeYmd()
+      setFrom(defaults.from)
+      setTo(defaults.to)
+    }
+  }
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -267,15 +288,20 @@ export function SfProductPerformanceView() {
         }
       />
       <div className="flex-1 space-y-6 p-4 sm:p-6">
-        {periodLabel ? (
-          <p className="text-xs text-muted-foreground">{periodLabel}</p>
+        {periodMeta ? (
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <p>{periodMeta.label}</p>
+            <p>
+              Current: {periodMeta.currentRangeLabel} · Prior: {periodMeta.priorRangeLabel}
+            </p>
+          </div>
         ) : null}
 
         <Card className="p-4 sm:p-5">
           <div className="grid gap-4 lg:grid-cols-4">
             <div className="space-y-2">
               <Label className="text-muted-foreground">Date range</Label>
-              <Select value={rangePreset} onValueChange={(v) => setRangePreset(v as RangePreset)}>
+              <Select value={rangePreset} onValueChange={handlePresetChange}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select range" />
                 </SelectTrigger>

@@ -26,6 +26,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatGhs } from '@/lib/dtc-orders'
+import { defaultCustomRangeYmd } from '@/lib/product-performance-range'
 
 type ProductRow = {
   key: string
@@ -77,10 +78,16 @@ function formatWow(p: number | null, isNew: boolean) {
 type RangePreset = '7d' | '1m' | '3m' | '6m' | '12m' | 'custom'
 type SortKey = 'revenue_desc' | 'units_desc' | 'wow_desc' | 'name_asc'
 
+type PeriodMeta = {
+  label: string
+  currentRangeLabel: string
+  priorRangeLabel: string
+}
+
 export function ProductPerformanceView() {
   const [rows, setRows] = useState<ProductRow[]>([])
   const [highlights, setHighlights] = useState<Highlights | null>(null)
-  const [periodLabel, setPeriodLabel] = useState<string>('')
+  const [periodMeta, setPeriodMeta] = useState<PeriodMeta | null>(null)
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [rangePreset, setRangePreset] = useState<RangePreset>('7d')
@@ -100,16 +107,21 @@ export function ProductPerformanceView() {
   }, [rows])
 
   const load = useCallback(async () => {
+    if (rangePreset === 'custom' && (!from.trim() || !to.trim())) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const params = new URLSearchParams()
       params.set('preset', rangePreset)
       if (rangePreset === 'custom') {
-        if (from) params.set('from', from)
-        if (to) params.set('to', to)
+        params.set('from', from.trim())
+        params.set('to', to.trim())
       }
       const res = await fetch(`/api/dtc/product-performance?${params.toString()}`, {
         credentials: 'include',
+        cache: 'no-store',
       })
       if (res.status === 401) {
         toast.error('Session expired. Sign in again.')
@@ -122,21 +134,31 @@ export function ProductPerformanceView() {
       const data = (await res.json()) as {
         rows: ProductRow[]
         highlights: Highlights
-        period: { label: string }
+        period: PeriodMeta
       }
       setRows(data.rows)
       setHighlights(data.highlights)
-      setPeriodLabel(data.period.label)
-    } catch {
-      toast.error('Could not load product performance')
+      setPeriodMeta(data.period)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not load product performance')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [rangePreset, from, to])
 
   useEffect(() => {
     void load()
-  }, [load, rangePreset, from, to])
+  }, [load])
+
+  function handlePresetChange(value: string) {
+    const preset = value as RangePreset
+    setRangePreset(preset)
+    if (preset === 'custom' && !from.trim() && !to.trim()) {
+      const defaults = defaultCustomRangeYmd()
+      setFrom(defaults.from)
+      setTo(defaults.to)
+    }
+  }
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -255,7 +277,7 @@ export function ProductPerformanceView() {
     <div className="flex min-h-0 flex-col">
       <DtcPageHeader
         title="Product Performance"
-        description="SKU-level sell-out velocity, revenue, and week-over-week trends for DTC assortment planning. Figures are derived from DTC order line items."
+        description="SKU-level sell-out velocity, revenue, and period-over-period trends for DTC assortment planning. Figures are derived from DTC order line items."
         actions={
           <Button
             variant="outline"
@@ -270,15 +292,20 @@ export function ProductPerformanceView() {
         }
       />
       <div className="flex-1 space-y-6 p-4 sm:p-6">
-        {periodLabel ? (
-          <p className="text-xs text-muted-foreground">{periodLabel}</p>
+        {periodMeta ? (
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <p>{periodMeta.label}</p>
+            <p>
+              Current: {periodMeta.currentRangeLabel} · Prior: {periodMeta.priorRangeLabel}
+            </p>
+          </div>
         ) : null}
 
         <Card className="p-4 sm:p-5">
           <div className="grid gap-4 lg:grid-cols-4">
             <div className="space-y-2">
               <Label className="text-muted-foreground">Date range</Label>
-              <Select value={rangePreset} onValueChange={(v) => setRangePreset(v as RangePreset)}>
+              <Select value={rangePreset} onValueChange={handlePresetChange}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select range" />
                 </SelectTrigger>
@@ -373,7 +400,7 @@ export function ProductPerformanceView() {
         <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
           <Card className="p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">
-              Top SKU revenue (7d)
+              Top SKU revenue
             </p>
             {loading ? (
               <div className="mt-6 flex justify-center py-4">
@@ -396,13 +423,13 @@ export function ProductPerformanceView() {
               </>
             ) : (
               <p className="mt-4 text-sm text-muted-foreground">
-                No line-item revenue in the last 7 days yet.
+                No line-item revenue in the selected range yet.
               </p>
             )}
           </Card>
           <Card className="p-5">
             <p className="text-xs font-medium uppercase text-muted-foreground">
-              Fastest growing (WoW revenue)
+              Fastest growing (revenue vs prior)
             </p>
             {loading ? (
               <div className="mt-6 flex justify-center py-4">
@@ -421,13 +448,13 @@ export function ProductPerformanceView() {
                 <p className="mt-2 flex items-center gap-1 text-sm text-emerald-600">
                   <ArrowUpRight className="h-4 w-4" />
                   +
-                  {(Math.round(highlights.fastestGrowing.wowPercent * 10) / 10).toFixed(1)}%
-                  vs prior week
+                  {(Math.round(highlights.fastestGrowing.wowPercent * 10) / 10).toFixed(1)}% vs prior
+                  period
                 </p>
               </>
             ) : (
               <p className="mt-4 text-sm text-muted-foreground">
-                WoW needs sales in both windows. New SKUs show as &quot;New&quot; in the table.
+                Change needs sales in both windows. New SKUs show as &quot;New&quot; in the table.
               </p>
             )}
           </Card>
@@ -621,10 +648,10 @@ export function ProductPerformanceView() {
                 <TableRow>
                   <TableHead>Product</TableHead>
                   <TableHead className="hidden sm:table-cell">SKU</TableHead>
-                  <TableHead className="text-right">Units (7d)</TableHead>
-                  <TableHead className="text-right">Revenue (7d)</TableHead>
-                  <TableHead className="hidden text-right md:table-cell">Rev (prev 7d)</TableHead>
-                  <TableHead className="text-right">WoW</TableHead>
+                  <TableHead className="text-right">Units (current)</TableHead>
+                  <TableHead className="text-right">Revenue (current)</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">Rev (prior)</TableHead>
+                  <TableHead className="text-right">Change</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

@@ -95,14 +95,32 @@ type FinancePayload = {
   periodEnd?: string
   dtcRevenue: number
   b2bCollected: number
+  b2bPortalOrderRevenue?: number
   b2bInvoiceRevenue?: number
   b2bInvoicePaidGhs?: number
+  b2bCashCollections?: number
   totalRevenue: number
   marketingSpendGhs: number
 }
 
-type DtcCustomerRow = {
-  totalCollected: number
+function toDatetimeLocalValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function toIso(value: string): string | undefined {
+  const v = value.trim()
+  if (!v) return undefined
+  const d = new Date(v)
+  if (Number.isNaN(d.getTime())) return undefined
+  return d.toISOString()
+}
+
+function orderInRange(orderedAt: string, startIso?: string, endIso?: string) {
+  if (!startIso || !endIso) return true
+  const t = new Date(orderedAt).getTime()
+  if (Number.isNaN(t)) return false
+  return t >= new Date(startIso).getTime() && t <= new Date(endIso).getTime()
 }
 
 type OrderRow = {
@@ -207,17 +225,15 @@ export function ManagerDashboard() {
   const [loading, setLoading] = useState(true)
   const [sf, setSf] = useState<SfDashboardPayload | null>(null)
   const [finance, setFinance] = useState<FinancePayload | null>(null)
-  /** Sum of unpaid invoice balance from B2B Payments (same as `/sf/b2b-payments`). */
+  /** Net invoiced in the selected date range (B2B Payments). */
   const [b2bPaymentsOutstandingGhs, setB2bPaymentsOutstandingGhs] = useState<number | null>(null)
-  /** Net invoiced amount (after discounts) from B2B Payments. */
   const [b2bPaymentsInvoicedGhs, setB2bPaymentsInvoicedGhs] = useState<number | null>(null)
-  /** DTC revenue as sum of Customer Intelligence totalCollected. */
-  const [dtcCollectedFromIntelGhs, setDtcCollectedFromIntelGhs] = useState<number | null>(null)
-  const b2bCollectedForTotalRevenue = finance?.b2bInvoicePaidGhs ?? 0
+  const b2bCollectedForTotalRevenue =
+    (finance?.b2bInvoicePaidGhs ?? 0) +
+    (finance?.b2bCashCollections ?? 0) +
+    (finance?.b2bPortalOrderRevenue ?? 0)
   const totalRevenueDtcPlusB2bGhs =
-    dtcCollectedFromIntelGhs === null
-      ? null
-      : Math.max(0, b2bCollectedForTotalRevenue) + Math.max(0, dtcCollectedFromIntelGhs)
+    finance === null ? null : Math.max(0, finance.dtcRevenue) + Math.max(0, b2bCollectedForTotalRevenue)
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [tasks, setTasks] = useState<RepTaskRow[]>([])
 
@@ -236,18 +252,10 @@ export function ManagerDashboard() {
   const [rangeStart, setRangeStart] = useState<string>(() => {
     const end = new Date()
     const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000)
-    return start.toISOString().slice(0, 16)
+    return toDatetimeLocalValue(start)
   })
-  const [rangeEnd, setRangeEnd] = useState<string>(() => new Date().toISOString().slice(0, 16))
+  const [rangeEnd, setRangeEnd] = useState<string>(() => toDatetimeLocalValue(new Date()))
   const [customDraft, setCustomDraft] = useState(() => ({ start: rangeStart, end: rangeEnd }))
-
-  function toIso(value: string): string | undefined {
-    const v = value.trim()
-    if (!v) return undefined
-    const d = new Date(v)
-    if (Number.isNaN(d.getTime())) return undefined
-    return d.toISOString()
-  }
 
   function applyPreset(preset: Exclude<RangePreset, 'custom'>) {
     const end = new Date()
@@ -258,8 +266,8 @@ export function ManagerDashboard() {
     else if (preset === '30d') start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000)
     else if (preset === 'today') start = startOfDay(end)
     else start = startOfMonth(end)
-    const s = start.toISOString().slice(0, 16)
-    const e = end.toISOString().slice(0, 16)
+    const s = toDatetimeLocalValue(start)
+    const e = toDatetimeLocalValue(end)
     setRangeStart(s)
     setRangeEnd(e)
     setCustomDraft({ start: s, end: e })
@@ -293,23 +301,29 @@ export function ManagerDashboard() {
       const endIso = toIso(rangeEnd)
       const sfQs = new URLSearchParams()
       const finQs = new URLSearchParams()
+      const b2bQs = new URLSearchParams()
       if (startIso && endIso) {
         sfQs.set('start', startIso)
         sfQs.set('end', endIso)
         finQs.set('start', startIso)
         finQs.set('end', endIso)
+        b2bQs.set('start', startIso)
+        b2bQs.set('end', endIso)
+      } else {
+        b2bQs.set('periodDays', '0')
       }
 
-      const [sfRes, finRes, b2bPayRes, dtcCustomersRes, ordRes, taskRes] = await Promise.all([
+      const [sfRes, finRes, b2bPayRes, ordRes, taskRes] = await Promise.all([
         fetch(`/api/sf/dashboard${sfQs.toString() ? `?${sfQs.toString()}` : ''}`, {
           credentials: 'include',
         }),
         fetch(`/api/dtc/finance-layer${finQs.toString() ? `?${finQs.toString()}` : ''}`, {
           credentials: 'include',
         }),
-        // Master dashboard should use all-time B2B invoice totals/outstanding (not a due-date window).
-        fetch('/api/sf/b2b-payments?periodDays=0', { credentials: 'include', cache: 'no-store' }),
-        fetch('/api/dtc/customers', { credentials: 'include', cache: 'no-store' }),
+        fetch(`/api/sf/b2b-payments?${b2bQs.toString()}`, {
+          credentials: 'include',
+          cache: 'no-store',
+        }),
         fetch('/api/dtc/orders', { credentials: 'include' }),
         fetch('/api/master/rep-tasks', { credentials: 'include' }),
       ])
@@ -318,7 +332,6 @@ export function ManagerDashboard() {
         sfRes.status === 401 ||
         finRes.status === 401 ||
         b2bPayRes.status === 401 ||
-        dtcCustomersRes.status === 401 ||
         ordRes.status === 401 ||
         taskRes.status === 401
       ) {
@@ -326,14 +339,7 @@ export function ManagerDashboard() {
         return
       }
 
-      if (
-        !sfRes.ok ||
-        !finRes.ok ||
-        !b2bPayRes.ok ||
-        !dtcCustomersRes.ok ||
-        !ordRes.ok ||
-        !taskRes.ok
-      ) {
+      if (!sfRes.ok || !finRes.ok || !b2bPayRes.ok || !ordRes.ok || !taskRes.ok) {
         throw new Error('One or more requests failed')
       }
 
@@ -342,7 +348,6 @@ export function ManagerDashboard() {
       const b2bPayJson = (await b2bPayRes.json()) as {
         kpis?: { outstandingGhs?: number; invoicedGhs?: number }
       }
-      const dtcCustomersJson = (await dtcCustomersRes.json()) as { customers?: DtcCustomerRow[] }
       const ordJson = (await ordRes.json()) as { orders: OrderRow[] }
       const taskJson = (await taskRes.json()) as { tasks: RepTaskRow[] }
 
@@ -357,13 +362,10 @@ export function ManagerDashboard() {
         typeof inv === 'number' && Number.isFinite(inv) ? Math.max(0, inv) : 0,
       )
 
-      const collected = (dtcCustomersJson.customers ?? []).reduce(
-        (s, c) => s + (Number.isFinite(Number(c.totalCollected)) ? Number(c.totalCollected) : 0),
-        0,
+      const ordersInRange = (ordJson.orders ?? []).filter((o) =>
+        orderInRange(o.orderedAt, startIso, endIso),
       )
-      setDtcCollectedFromIntelGhs(collected)
-
-      setOrders(ordJson.orders ?? [])
+      setOrders(ordersInRange)
       setTasks(taskJson.tasks ?? [])
     } catch {
       toast.error('Could not load master dashboard data')
@@ -371,7 +373,6 @@ export function ManagerDashboard() {
       setFinance(null)
       setB2bPaymentsOutstandingGhs(null)
       setB2bPaymentsInvoicedGhs(null)
-      setDtcCollectedFromIntelGhs(null)
       setOrders([])
       setTasks([])
     } finally {
@@ -383,7 +384,7 @@ export function ManagerDashboard() {
     void load()
   }, [load])
 
-  const splitDtc = dtcCollectedFromIntelGhs ?? 0
+  const splitDtc = finance?.dtcRevenue ?? 0
   const splitB2b = b2bPaymentsInvoicedGhs ?? 0
   const totalRev = Math.max(0, splitDtc) + Math.max(0, splitB2b)
   const dtcPct =
@@ -539,7 +540,7 @@ export function ManagerDashboard() {
             iconClass="text-blue-600"
             label="Total invoice"
             value={b2bPaymentsInvoicedGhs === null ? '—' : formatGhs(b2bPaymentsInvoicedGhs)}
-            subtitle="B2B Payments · Net invoiced (after discounts)"
+            subtitle="B2B · Net invoiced in selected range"
           />
           <MasterKpiCard
             borderAccent="border-l-purple-600"
@@ -547,10 +548,8 @@ export function ManagerDashboard() {
             iconWrapClass="bg-purple-600/10"
             iconClass="text-purple-600"
             label="DTC revenue"
-            value={
-              dtcCollectedFromIntelGhs === null ? '—' : formatGhs(dtcCollectedFromIntelGhs)
-            }
-            subtitle="Customer Intelligence · Total collected"
+            value={finance ? formatGhs(finance.dtcRevenue) : '—'}
+            subtitle="DTC orders in selected range"
           />
           <MasterKpiCard
             borderAccent="border-l-amber-600"
@@ -559,7 +558,7 @@ export function ManagerDashboard() {
             iconClass="text-amber-700"
             label="Total revenue (DTC + B2B)"
             value={totalRevenueDtcPlusB2bGhs === null ? '—' : formatGhs(totalRevenueDtcPlusB2bGhs)}
-            subtitle="DTC collected + B2B collected · Combined"
+            subtitle="DTC orders + B2B paid, cash & portal in range"
           />
           <MasterKpiCard
             borderAccent="border-l-green-600"
@@ -567,8 +566,8 @@ export function ManagerDashboard() {
             iconWrapClass="bg-green-600/10"
             iconClass="text-green-600"
             label="B2B collected"
-            value={finance ? formatGhs(finance.b2bInvoicePaidGhs ?? 0) : '—'}
-            subtitle="Sum of paid across invoices"
+            value={finance ? formatGhs(b2bCollectedForTotalRevenue) : '—'}
+            subtitle="Invoice payments + cash + portal orders in range"
           />
           <MasterKpiCard
             borderAccent="border-l-red-600"
@@ -581,7 +580,7 @@ export function ManagerDashboard() {
                 ? '—'
                 : formatGhs(b2bPaymentsOutstandingGhs)
             }
-            subtitle="Net unpaid on B2B invoices · B2B Payments"
+            subtitle="Unpaid balance on invoices in selected range"
           />
           <MasterKpiCard
             borderAccent="border-l-indigo-600"
@@ -604,7 +603,7 @@ export function ManagerDashboard() {
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
               <PieChart className="h-4 w-4 text-muted-foreground" />
             </span>
-            Revenue split — DTC vs B2B invoiced
+            Revenue split — DTC vs B2B invoiced (selected range)
           </h3>
           <ResponsiveContainer width="100%" height={96}>
             <BarChart

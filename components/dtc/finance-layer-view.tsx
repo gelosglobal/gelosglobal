@@ -374,14 +374,18 @@ export function FinanceLayerView() {
               />
               <MetricCard
                 title="B2B collected"
-                value={formatGhs(data.b2bInvoicePaidGhs ?? 0)}
-                subtitle="Sum of paid across invoices"
+                value={formatGhs(
+                  (data.b2bInvoicePaidGhs ?? 0) +
+                    (data.b2bCashCollections ?? 0) +
+                    (data.b2bPortalOrderRevenue ?? 0),
+                )}
+                subtitle="Invoice payments + cash + portal orders in window"
                 icon={Wallet}
               />
               <MetricCard
                 title="Total revenue"
                 value={formatGhs(data.totalRevenue)}
-                subtitle="DTC + B2B collected"
+                subtitle="DTC orders + B2B collected in window"
                 icon={PiggyBank}
               />
               <MetricCard

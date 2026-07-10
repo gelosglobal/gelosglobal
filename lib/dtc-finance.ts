@@ -145,26 +145,56 @@ export async function sumB2BPortalOrderRevenue(
   return rows[0]?.total ?? 0
 }
 
+/** Effective invoice date (aligned with B2B Payments). */
+export function sfB2bInvoiceEffectiveDate(
+  doc: Pick<
+    import('@/lib/sf-b2b-invoices').SfB2bInvoiceDoc,
+    'invoiceAt' | 'dueAt' | 'createdAt'
+  >,
+): Date {
+  return doc.invoiceAt ?? doc.dueAt ?? doc.createdAt
+}
+
+/** When payment was recorded (for collections in a period). */
+export function sfB2bInvoicePaymentDate(
+  doc: Pick<
+    import('@/lib/sf-b2b-invoices').SfB2bInvoiceDoc,
+    'paidAt' | 'updatedAt' | 'invoiceAt' | 'createdAt' | 'paidGhs'
+  >,
+): Date | null {
+  if ((Number(doc.paidGhs) || 0) <= 0) return null
+  return doc.paidAt ?? doc.updatedAt ?? doc.invoiceAt ?? doc.createdAt ?? null
+}
+
+export function sfB2bInvoiceNetAmount(
+  doc: Pick<import('@/lib/sf-b2b-invoices').SfB2bInvoiceDoc, 'amountGhs' | 'discountGhs'>,
+): number {
+  const amount = Number(doc.amountGhs) || 0
+  const discount = Math.max(0, Math.min(amount, Number(doc.discountGhs) || 0))
+  return Math.max(0, amount - discount)
+}
+
 export async function sumSfB2bInvoiceRevenue(
   db: Db,
   since: Date,
   until: Date,
 ): Promise<number> {
-  const rows = await db
+  const rows = (await db
     .collection(SF_B2B_INVOICES_COLLECTION)
-    .aggregate<{ total: number }>([
-      {
-        $match: {
-          $or: [
-            { createdAt: { $gte: since, $lte: until } },
-            { updatedAt: { $gte: since, $lte: until } },
-          ],
-        },
-      },
-      { $group: { _id: null, total: { $sum: '$amountGhs' } } },
-    ])
-    .toArray()
-  return rows[0]?.total ?? 0
+    .find({})
+    .project({ amountGhs: 1, discountGhs: 1, invoiceAt: 1, dueAt: 1, createdAt: 1 })
+    .toArray()) as Pick<
+    import('@/lib/sf-b2b-invoices').SfB2bInvoiceDoc,
+    'amountGhs' | 'discountGhs' | 'invoiceAt' | 'dueAt' | 'createdAt'
+  >[]
+
+  let total = 0
+  for (const row of rows) {
+    const d = sfB2bInvoiceEffectiveDate(row)
+    if (!d || d < since || d > until) continue
+    total += sfB2bInvoiceNetAmount(row)
+  }
+  return total
 }
 
 export async function sumSfB2bInvoicePaidTotal(db: Db): Promise<number> {
@@ -175,6 +205,35 @@ export async function sumSfB2bInvoicePaidTotal(db: Db): Promise<number> {
     ])
     .toArray()
   return rows[0]?.total ?? 0
+}
+
+export async function sumSfB2bInvoicePaidInRange(
+  db: Db,
+  since: Date,
+  until: Date,
+): Promise<number> {
+  const rows = (await db
+    .collection(SF_B2B_INVOICES_COLLECTION)
+    .find({ paidGhs: { $gt: 0 } })
+    .project({
+      paidGhs: 1,
+      paidAt: 1,
+      updatedAt: 1,
+      invoiceAt: 1,
+      createdAt: 1,
+    })
+    .toArray()) as Pick<
+    import('@/lib/sf-b2b-invoices').SfB2bInvoiceDoc,
+    'paidGhs' | 'paidAt' | 'updatedAt' | 'invoiceAt' | 'createdAt'
+  >[]
+
+  let total = 0
+  for (const row of rows) {
+    const d = sfB2bInvoicePaymentDate(row)
+    if (!d || d < since || d > until) continue
+    total += Number(row.paidGhs) || 0
+  }
+  return total
 }
 
 export async function listB2BCashCollections(
@@ -351,9 +410,10 @@ export async function computeFinanceLayerSnapshotForRange(
   }
 
   const b2bInvoiceRevenue = await sumSfB2bInvoiceRevenue(db, since, until)
-  const b2bInvoicePaidGhs = await sumSfB2bInvoicePaidTotal(db)
+  const b2bInvoicePaidGhs = await sumSfB2bInvoicePaidInRange(db, since, until)
   const b2bCashCollections = await sumB2BCashCollections(db, since, until)
-  const b2bCollected = b2bPortalOrderRevenue + b2bInvoiceRevenue + b2bCashCollections
+  const b2bCollected =
+    b2bPortalOrderRevenue + b2bInvoicePaidGhs + b2bCashCollections
   const totalRevenue = dtcRevenue + b2bCollected
 
   const spendMap = await spendByChannelFromCampaigns(db, since, until)

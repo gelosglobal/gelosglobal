@@ -13,6 +13,7 @@ import {
   isSfB2bInvoiceInventoryError,
   withSfInventoryDecrementsForNewInvoice,
 } from '@/lib/sf-b2b-invoice-inventory'
+import { sfB2bInvoiceEffectiveDate } from '@/lib/dtc-finance'
 import { subDays } from 'date-fns'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
@@ -73,17 +74,32 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
+  const url = new URL(request.url)
   const { db } = getMongo()
   const now = new Date()
-  const periodDays = parsePeriodDays(new URL(request.url))
+  const periodDays = parsePeriodDays(url)
+  const startRaw = url.searchParams.get('start')
+  const endRaw = url.searchParams.get('end')
+  const rangeStart = startRaw ? new Date(startRaw) : null
+  const rangeEnd = endRaw ? new Date(endRaw) : null
+  const hasCustomRange =
+    rangeStart &&
+    rangeEnd &&
+    !Number.isNaN(rangeStart.getTime()) &&
+    !Number.isNaN(rangeEnd.getTime()) &&
+    rangeStart.getTime() <= rangeEnd.getTime()
 
   const rowsAll = await listSfB2bInvoices(db)
-  const rows =
-    periodDays <= 0
+  const rows = hasCustomRange
+    ? rowsAll.filter((r) => {
+        const d = sfB2bInvoiceEffectiveDate(r)
+        if (!d || Number.isNaN(d.getTime())) return false
+        return d >= rangeStart! && d <= rangeEnd!
+      })
+    : periodDays <= 0
       ? rowsAll
       : rowsAll.filter((r) => {
-          // Date filter uses *invoice dates*.
-          const d = r.invoiceAt ?? r.dueAt
+          const d = sfB2bInvoiceEffectiveDate(r)
           if (!d || Number.isNaN(d.getTime())) return false
           const since = subDays(now, periodDays)
           return d >= since && d <= now

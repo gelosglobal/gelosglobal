@@ -121,6 +121,7 @@ export async function computeSfProductPerformance(
     .find({
       $or: [
         { invoiceAt: { $gte: prevStart, $lt: currentEnd } },
+        { dueAt: { $gte: prevStart, $lt: currentEnd } },
         { createdAt: { $gte: prevStart, $lt: currentEnd } },
       ],
     })
