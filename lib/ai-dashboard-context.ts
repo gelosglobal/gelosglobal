@@ -18,6 +18,11 @@ import { listSfInventoryWithOrderVelocity } from '@/lib/sf-inventory'
 import { computeRetailCustomerIntelligence } from '@/lib/sf-customer-intelligence'
 import { computeInvoiceKpis, listSfB2bInvoices } from '@/lib/sf-b2b-invoices'
 import { REP_TASKS_COLLECTION, serializeRepTask, type RepTaskDoc } from '@/lib/rep-tasks'
+import {
+  detectAiContextIntents,
+  estimateTokens,
+  type AiContextIntent,
+} from '@/lib/ai-context-intent'
 import type { Db } from 'mongodb'
 import { subDays } from 'date-fns'
 
@@ -533,149 +538,180 @@ function parseBalanceThresholdForPrompt(text: string): number | null {
 export function formatAiDashboardContextForPrompt(
   context: AiDashboardContext,
   userMessage?: string,
+  opts?: { minimal?: boolean },
 ): string {
-  const retail = context.retail as Record<string, unknown> | null
-  const ci = retail?.customerIntelligence as Record<string, unknown> | undefined
+  const intents = detectAiContextIntents(userMessage, context.currentPage)
+  const payload = opts?.minimal
+    ? buildMinimalPromptContext(context, userMessage)
+    : buildIntentPromptContext(context, userMessage, intents)
+  return JSON.stringify(payload)
+}
+
+export function estimateAiPromptContextTokens(
+  context: AiDashboardContext,
+  userMessage?: string,
+  opts?: { minimal?: boolean },
+): number {
+  return estimateTokens(formatAiDashboardContextForPrompt(context, userMessage, opts))
+}
+
+function buildCustomerIntelligenceForPrompt(
+  ci: Record<string, unknown> | undefined,
+  userMessage?: string,
+  includeLists = true,
+) {
+  if (!ci) return undefined
   const balanceThreshold = userMessage ? parseBalanceThresholdForPrompt(userMessage) : null
+  const counts = ci.countBalanceAboveGhs as Record<string, number> | undefined
 
-  let customerIntelligence: Record<string, unknown> | undefined
-  if (ci) {
-    const { outletsAboveBalanceGhs: _omit, ...ciRest } = ci
-    customerIntelligence = { ...ciRest }
+  const slim: Record<string, unknown> = {
+    totalOutlets: ci.totalOutlets,
+    outletsWithBalance: ci.outletsWithBalance,
+    totalBalanceGhs: ci.totalBalanceGhs,
+    segments: ci.segments,
+  }
 
-    if (balanceThreshold !== null) {
-      const lists = ci.outletsAboveBalanceGhs as Record<string, unknown[]> | undefined
-      const key = String(balanceThreshold)
-      const exact = lists?.[key]
-      const fallbackKey = Object.keys(lists ?? {})
-        .map(Number)
-        .filter(Number.isFinite)
-        .sort((a, b) => a - b)
-        .filter((n) => n <= balanceThreshold)
-        .pop()
-      const rows = (exact ?? (fallbackKey != null ? lists?.[String(fallbackKey)] : [])) as
-        | Array<Record<string, unknown>>
-        | undefined
-      customerIntelligence.outletsForQuestion = (rows ?? [])
-        .filter((r) => Number(r.balanceGhs) > balanceThreshold)
-        .slice(0, 25)
-        .map((r) => ({
-          outletName: r.outletName,
-          balanceGhs: r.balanceGhs,
-        }))
+  if (counts) {
+    slim.countBalanceAboveGhs = {
+      '2000': counts['2000'],
+      '5000': counts['5000'],
+      '8000': counts['8000'],
+      '10000': counts['10000'],
     }
   }
 
-  const compactRetail = retail
-    ? {
-        dashboard: (() => {
-          const dash = retail.dashboard as Record<string, unknown> | undefined
-          if (!dash) return dash
-          return {
-            rangeStart: dash.rangeStart,
-            rangeEnd: dash.rangeEnd,
-            primaryRegionLabel: dash.primaryRegionLabel,
-            kpis: dash.kpis,
-            repPulse: Array.isArray(dash.repPulse) ? dash.repPulse.slice(0, 5) : dash.repPulse,
-            alerts: Array.isArray(dash.alerts) ? dash.alerts.slice(0, 5) : dash.alerts,
-          }
-        })(),
-        inventory: retail.inventory,
-        b2bPayments30d: retail.b2bPayments30d,
-        b2bPaymentsAllTime: retail.b2bPaymentsAllTime,
-        customerIntelligence,
-        repTargets: (() => {
-          const rt = retail.repTargets as Record<string, unknown> | undefined
-          if (!rt) return rt
-          return {
-            month: rt.month,
-            mtdSummary: rt.mtdSummary,
-            repCount: rt.repCount,
-            teamTargetSellInGhs: rt.teamTargetSellInGhs,
-            teamActualSellInGhs: rt.teamActualSellInGhs,
-            teamSellInAttainmentPct: rt.teamSellInAttainmentPct,
-            repsBelow70PctSellIn: rt.repsBelow70PctSellIn,
-            topRepsBySellIn: Array.isArray(rt.topRepsBySellIn)
-              ? rt.topRepsBySellIn.slice(0, 5)
-              : rt.topRepsBySellIn,
-          }
-        })(),
-        leaderboard30d: (() => {
-          const lb = retail.leaderboard30d as Record<string, unknown> | undefined
-          if (!lb) return lb
-          return {
-            range: lb.range,
-            metric: lb.metric,
-            topReps: Array.isArray(lb.topReps) ? lb.topReps.slice(0, 5) : lb.topReps,
-          }
-        })(),
-        productPerformance: (() => {
-          const pp = retail.productPerformance as Record<string, unknown> | undefined
-          if (!pp) return pp
-          return {
-            windowLabel: pp.windowLabel,
-            highlights: pp.highlights,
-            topProducts: Array.isArray(pp.topProducts) ? pp.topProducts.slice(0, 5) : pp.topProducts,
-          }
-        })(),
-      }
-    : null
+  if (!includeLists) return slim
 
-  const dtc = context.dtc as Record<string, unknown> | null
-  const compactDtc = dtc
-    ? {
-        dashboard: (() => {
-          const dash = dtc.dashboard as Record<string, unknown> | undefined
-          if (!dash) return dash
-          return {
-            kpis: dash.kpis,
-            topSkus: Array.isArray(dash.topSkus) ? dash.topSkus.slice(0, 5) : dash.topSkus,
-            alerts: Array.isArray(dash.alerts) ? dash.alerts.slice(0, 5) : dash.alerts,
-            period: dash.period,
-          }
-        })(),
-        inventory: (() => {
-          const inv = dtc.inventory as Record<string, unknown> | undefined
-          if (!inv) return inv
-          return {
-            stats: inv.stats,
-            critical: inv.critical,
-            low: inv.low,
-          }
-        })(),
-        marketing: (() => {
-          const m = dtc.marketing as Record<string, unknown> | undefined
-          if (!m) return m
-          return {
-            periodDays: m.periodDays,
-            totalSpendGhs: m.totalSpendGhs,
-            totalAttributedGhs: m.totalAttributedGhs,
-            blendedRoas: m.blendedRoas,
-            channels: Array.isArray(m.channels) ? m.channels.slice(0, 6) : m.channels,
-          }
-        })(),
-        productPerformance: (() => {
-          const pp = dtc.productPerformance as Record<string, unknown> | undefined
-          if (!pp) return pp
-          return {
-            windowLabel: pp.windowLabel,
-            highlights: pp.highlights,
-            topProducts: Array.isArray(pp.topProducts) ? pp.topProducts.slice(0, 5) : pp.topProducts,
-          }
-        })(),
-      }
-    : null
-
-  const compact = {
-    generatedAt: context.generatedAt,
-    user: context.user,
-    currentPage: context.currentPage,
-    finance: context.finance,
-    dtc: compactDtc,
-    retail: compactRetail,
-    tasks: context.tasks?.slice(0, 8) ?? null,
-    teamTasks: context.teamTasks?.slice(0, 8) ?? null,
+  if (balanceThreshold !== null && counts) {
+    const lists = ci.outletsAboveBalanceGhs as Record<string, unknown[]> | undefined
+    const key = String(balanceThreshold)
+    const rows = (lists?.[key] ?? []) as Array<Record<string, unknown>>
+    slim.outletsForQuestion = rows
+      .filter((r) => Number(r.balanceGhs) > balanceThreshold)
+      .slice(0, 20)
+      .map((r) => ({ outletName: r.outletName, balanceGhs: r.balanceGhs }))
+  } else {
+    const top = Array.isArray(ci.topBalances) ? ci.topBalances.slice(0, 5) : []
+    if (top.length) slim.topBalances = top
   }
 
-  return JSON.stringify(compact)
+  return slim
+}
+
+function buildMinimalPromptContext(context: AiDashboardContext, userMessage?: string) {
+  const retail = context.retail as Record<string, unknown> | null
+  const dtc = context.dtc as Record<string, unknown> | null
+  const dash = retail?.dashboard as Record<string, unknown> | undefined
+  const dtcDash = dtc?.dashboard as Record<string, unknown> | undefined
+  const ci = retail?.customerIntelligence as Record<string, unknown> | undefined
+
+  return {
+    generatedAt: context.generatedAt,
+    currentPage: context.currentPage,
+    finance: context.finance
+      ? {
+          totalRevenue: (context.finance as Record<string, unknown>).totalRevenue,
+          netProfit: (context.finance as Record<string, unknown>).netProfit,
+          b2bOutstandingGhs: (context.finance as Record<string, unknown>).b2bOutstandingGhs,
+        }
+      : null,
+    retail: dash
+      ? {
+          kpis: dash.kpis,
+          customerIntelligence: buildCustomerIntelligenceForPrompt(ci, userMessage, true),
+        }
+      : null,
+    dtc: dtcDash ? { kpis: dtcDash.kpis } : null,
+  }
+}
+
+function buildIntentPromptContext(
+  context: AiDashboardContext,
+  userMessage: string | undefined,
+  intents: Set<AiContextIntent>,
+) {
+  const retail = context.retail as Record<string, unknown> | null
+  const dtc = context.dtc as Record<string, unknown> | null
+  const dash = retail?.dashboard as Record<string, unknown> | undefined
+  const dtcDash = dtc?.dashboard as Record<string, unknown> | undefined
+  const ci = retail?.customerIntelligence as Record<string, unknown> | undefined
+
+  const payload: Record<string, unknown> = {
+    generatedAt: context.generatedAt,
+    currentPage: context.currentPage,
+    intents: Array.from(intents),
+  }
+
+  if (intents.has('finance') && context.finance) {
+    payload.finance = context.finance
+  }
+
+  const retailOut: Record<string, unknown> = {}
+  if (dash && (intents.has('retail_kpis') || intents.has('retail_reps'))) {
+    retailOut.kpis = dash.kpis
+    if (intents.has('retail_reps')) {
+      retailOut.alerts = Array.isArray(dash.alerts) ? dash.alerts.slice(0, 3) : []
+    }
+  }
+  if (intents.has('retail_customers') && ci) {
+    retailOut.customerIntelligence = buildCustomerIntelligenceForPrompt(ci, userMessage, true)
+  }
+  if (intents.has('retail_b2b') && retail) {
+    retailOut.b2bPayments30d = retail.b2bPayments30d
+  }
+  if (intents.has('retail_reps') && retail) {
+    retailOut.repTargets = (() => {
+      const rt = retail.repTargets as Record<string, unknown> | undefined
+      if (!rt) return undefined
+      return {
+        month: rt.month,
+        teamSellInAttainmentPct: rt.teamSellInAttainmentPct,
+        teamActualSellInGhs: rt.teamActualSellInGhs,
+        teamTargetSellInGhs: rt.teamTargetSellInGhs,
+        topRepsBySellIn: Array.isArray(rt.topRepsBySellIn)
+          ? rt.topRepsBySellIn.slice(0, 5)
+          : rt.topRepsBySellIn,
+      }
+    })()
+    retailOut.leaderboard30d = (() => {
+      const lb = retail.leaderboard30d as Record<string, unknown> | undefined
+      if (!lb) return undefined
+      return {
+        topReps: Array.isArray(lb.topReps) ? lb.topReps.slice(0, 5) : lb.topReps,
+      }
+    })()
+  }
+  if (intents.has('inventory') && retail?.inventory) {
+    retailOut.inventory = retail.inventory
+  }
+  if (Object.keys(retailOut).length > 0) payload.retail = retailOut
+
+  const dtcOut: Record<string, unknown> = {}
+  if (intents.has('dtc') && dtcDash) {
+    dtcOut.kpis = dtcDash.kpis
+    dtcOut.topSkus = Array.isArray(dtcDash.topSkus) ? dtcDash.topSkus.slice(0, 5) : []
+  }
+  if (intents.has('inventory') && dtc?.inventory) {
+    dtcOut.inventory = dtc.inventory
+  }
+  if (intents.has('marketing') && dtc?.marketing) {
+    dtcOut.marketing = dtc.marketing
+  }
+  if (intents.has('products') && dtc?.productPerformance) {
+    dtcOut.productPerformance = (() => {
+      const pp = dtc.productPerformance as Record<string, unknown>
+      return {
+        highlights: pp.highlights,
+        topProducts: Array.isArray(pp.topProducts) ? pp.topProducts.slice(0, 5) : [],
+      }
+    })()
+  }
+  if (Object.keys(dtcOut).length > 0) payload.dtc = dtcOut
+
+  if (intents.has('tasks')) {
+    payload.tasks = context.tasks?.slice(0, 5) ?? null
+    payload.teamTasks = context.teamTasks?.slice(0, 5) ?? null
+  }
+
+  return payload
 }

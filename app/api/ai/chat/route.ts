@@ -5,8 +5,15 @@ import {
 } from '@/lib/ai-response'
 import {
   buildAiDashboardContext,
+  estimateAiPromptContextTokens,
   formatAiDashboardContextForPrompt,
 } from '@/lib/ai-dashboard-context'
+import {
+  AI_PROMPT_MAX_ASSISTANT_CHARS,
+  AI_PROMPT_MAX_HISTORY_MESSAGES,
+  estimateTokens,
+} from '@/lib/ai-context-intent'
+import { AI_SYSTEM_PROMPT } from '@/lib/ai-system-prompt'
 import { GroqConfigError, groqChatCompletion, type GroqChatMessage } from '@/lib/groq'
 import { getMongo } from '@/lib/mongodb'
 import { headers } from 'next/headers'
@@ -36,44 +43,94 @@ async function requireSession() {
   })
 }
 
-const SYSTEM_PROMPT = `You are GELOS AI, the built-in operations assistant for the GELOS staff platform.
-
-You help staff understand DTC sell-out, retail field activity, B2B payments, inventory health, finance, and assigned tasks.
-
-CRITICAL OUTPUT FORMAT:
-Return ONE single JSON object only (never repeat or duplicate the JSON). No markdown fences. No prose outside JSON.
-
-Schema:
-{
-  "title": "Short headline",
-  "summary": "One crisp executive sentence",
-  "blocks": [...]
+function isGroqTokenBudgetError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : ''
+  return (
+    msg.includes('rate limit') ||
+    msg.includes('request too large') ||
+    msg.includes('tokens per minute') ||
+    msg.includes('tpm')
+  )
 }
 
-Block types:
-- stats: { "type": "stats", "items": [{ "label": "Active outlets", "value": "28", "hint": "7d range", "trend": "neutral", "trendText": "Stable" }] }
-  IMPORTANT: every stats "value" must be a STRING (e.g. "28", "GHS 27,235.00", not raw numbers).
-- progress: { "type": "progress", "label": "Target attainment", "value": 0.5, "max": 100, "format": "percent", "detail": "GHS 27,235 of GHS 12,000,000 MTD" }
-  For percentages use format "percent" with value 0-100 (0.5 means 0.5%, 72 means 72%).
-- bar_chart / donut: numeric values in items[].value
-- alert, bullets, heading, text as before
+function trimChatHistory(
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+) {
+  return messages.slice(-AI_PROMPT_MAX_HISTORY_MESSAGES).map((m) => {
+    if (m.role === 'assistant' && m.content.length > AI_PROMPT_MAX_ASSISTANT_CHARS) {
+      return {
+        ...m,
+        content: `${m.content.slice(0, AI_PROMPT_MAX_ASSISTANT_CHARS)}…`,
+      }
+    }
+    return m
+  })
+}
 
-Content rules:
-- Use ONLY numbers from LIVE DASHBOARD CONTEXT. Never invent metrics.
-- Currency: GHS with commas (GHS 27,235.00).
-- Lead with 3-5 stat cards, then progress for targets, alert for risks, bullets for actions.
-- Data sources in context:
-  - finance: P&L, revenue mix, COGS %, margins, payment split
-  - dtc.dashboard / dtc.marketing / dtc.productPerformance: DTC sell-out, campaigns, top SKUs
-  - retail.dashboard / retail.repTargets / retail.leaderboard30d: field KPIs, MTD targets, top reps
-  - retail.customerIntelligence: per-outlet balances (countBalanceAboveGhs, topBalances, outletsForQuestion when relevant)
-  - retail.b2bPayments30d / retail.b2bPaymentsAllTime: invoice collections and overdue
-  - retail.productPerformance: retail/B2B product rollups
-  - tasks / teamTasks: assigned rep work (teamTasks for managers)
-- For retail customer balance questions use retail.customerIntelligence.countBalanceAboveGhs for the count and retail.customerIntelligence.outletsForQuestion or topBalances for outlet names. Include a bullets block listing outlets (name + balance GHS) when the user asks who/which outlets or to list them.
-- For rep ranking use retail.leaderboard30d or retail.repTargets.topRepsBySellIn.
-- For marketing ROAS use dtc.marketing.
-- Keep copy short. Max 8 blocks.`
+function buildGroqMessages(
+  dashboardContext: Awaited<ReturnType<typeof buildAiDashboardContext>>,
+  history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  lastUserMessage: string | undefined,
+  opts?: { minimal?: boolean },
+): GroqChatMessage[] {
+  const contextBlock = formatAiDashboardContextForPrompt(
+    dashboardContext,
+    lastUserMessage,
+    opts,
+  )
+  return [
+    {
+      role: 'system',
+      content: `${AI_SYSTEM_PROMPT}\n\n--- LIVE DASHBOARD CONTEXT (${dashboardContext.generatedAt}) ---\n${contextBlock}`,
+    },
+    ...history.map((m) => ({ role: m.role, content: m.content })),
+  ]
+}
+
+function estimateGroqRequestTokens(messages: GroqChatMessage[]): number {
+  return messages.reduce((sum, m) => sum + estimateTokens(m.content), 0)
+}
+
+async function requestGroqReply(
+  dashboardContext: Awaited<ReturnType<typeof buildAiDashboardContext>>,
+  history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  lastUserMessage: string | undefined,
+): Promise<string> {
+  let messages = buildGroqMessages(dashboardContext, history, lastUserMessage)
+  const contextTokens = estimateAiPromptContextTokens(dashboardContext, lastUserMessage)
+  const requestTokens = estimateGroqRequestTokens(messages)
+  console.info('[ai/chat] token estimate', {
+    contextTokens,
+    requestTokens,
+    historyMessages: history.length,
+  })
+
+  try {
+    return await groqChatCompletion({
+      messages,
+      responseFormat: 'json_object',
+      maxTokens: 1536,
+    })
+  } catch (err) {
+    if (!isGroqTokenBudgetError(err)) throw err
+
+    console.warn('[ai/chat] token budget exceeded, retrying with minimal context', {
+      contextTokens,
+      requestTokens,
+      error: err instanceof Error ? err.message : err,
+    })
+
+    messages = buildGroqMessages(dashboardContext, history, lastUserMessage, { minimal: true })
+    const retryTokens = estimateGroqRequestTokens(messages)
+    console.info('[ai/chat] minimal retry token estimate', { retryTokens })
+
+    return await groqChatCompletion({
+      messages,
+      responseFormat: 'json_object',
+      maxTokens: 1024,
+    })
+  }
+}
 
 export async function POST(request: Request) {
   const session = await requireSession()
@@ -99,23 +156,10 @@ export async function POST(request: Request) {
   try {
     const { db } = getMongo()
     const dashboardContext = await buildAiDashboardContext(db, session as any, body.pathname ?? null)
-    const history = body.messages.slice(-6)
+    const history = trimChatHistory(body.messages)
     const lastUserMessage = history.filter((m) => m.role === 'user').pop()?.content
-    const contextBlock = formatAiDashboardContextForPrompt(dashboardContext, lastUserMessage)
 
-    const groqMessages: GroqChatMessage[] = [
-      {
-        role: 'system',
-        content: `${SYSTEM_PROMPT}\n\n--- LIVE DASHBOARD CONTEXT (generated ${dashboardContext.generatedAt}) ---\n${contextBlock}`,
-      },
-      ...history.map((m) => ({ role: m.role, content: m.content })),
-    ]
-
-    const reply = await groqChatCompletion({
-      messages: groqMessages,
-      responseFormat: 'json_object',
-      maxTokens: 4096,
-    })
+    const reply = await requestGroqReply(dashboardContext, history, lastUserMessage)
 
     const payload: AiAssistantPayload = buildAiAssistantPayload(
       reply,

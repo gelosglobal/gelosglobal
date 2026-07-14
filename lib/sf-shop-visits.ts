@@ -60,7 +60,7 @@ export async function listShopVisits(
   if (filter?.status) q.status = filter.status
   const rows = await visitsCollection(db)
     .find(q)
-    .sort({ updatedAt: -1 })
+    .sort({ createdAt: -1, _id: -1 })
     .limit(3000)
     .toArray()
   return rows.map((r) => r as SfVisitDoc)
