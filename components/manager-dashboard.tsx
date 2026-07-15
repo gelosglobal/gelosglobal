@@ -104,6 +104,8 @@ type FinancePayload = {
   periodStart?: string
   periodEnd?: string
   dtcRevenue: number
+  dtcIntelCollectedGhs?: number
+  dtcCollectedGhs?: number
   b2bCollected: number
   b2bPortalOrderRevenue?: number
   b2bInvoiceRevenue?: number
@@ -318,12 +320,24 @@ export function ManagerDashboard({
   /** Net invoiced in the selected date range (B2B Payments). */
   const [b2bPaymentsOutstandingGhs, setB2bPaymentsOutstandingGhs] = useState<number | null>(null)
   const [b2bPaymentsInvoicedGhs, setB2bPaymentsInvoicedGhs] = useState<number | null>(null)
+  /** CI ledger (in range) + Orders Engine (in range). Respects the Master date filter. */
+  const dtcCollectedGhs =
+    finance === null
+      ? null
+      : Math.max(
+          0,
+          typeof finance.dtcCollectedGhs === 'number'
+            ? finance.dtcCollectedGhs
+            : (finance.dtcIntelCollectedGhs ?? 0) + finance.dtcRevenue,
+        )
   const b2bCollectedForTotalRevenue =
     (finance?.b2bInvoicePaidGhs ?? 0) +
     (finance?.b2bCashCollections ?? 0) +
     (finance?.b2bPortalOrderRevenue ?? 0)
   const totalRevenueDtcPlusB2bGhs =
-    finance === null ? null : Math.max(0, finance.dtcRevenue) + Math.max(0, b2bCollectedForTotalRevenue)
+    finance === null || dtcCollectedGhs === null
+      ? null
+      : dtcCollectedGhs + Math.max(0, b2bCollectedForTotalRevenue)
   const [orders, setOrders] = useState<OrderRow[]>([])
   const [tasks, setTasks] = useState<RepTaskRow[]>([])
 
@@ -402,8 +416,13 @@ export function ManagerDashboard({
         sfQs.set('end', endIso)
         finQs.set('start', startIso)
         finQs.set('end', endIso)
-        b2bQs.set('start', startIso)
-        b2bQs.set('end', endIso)
+        // All-time B2B should not clip on "now" (future invoiceAt rows still count).
+        if (rangePreset === 'all') {
+          b2bQs.set('periodDays', '0')
+        } else {
+          b2bQs.set('start', startIso)
+          b2bQs.set('end', endIso)
+        }
 
         const start = new Date(startIso)
         const end = new Date(endIso)
@@ -511,14 +530,14 @@ export function ManagerDashboard({
     } finally {
       setLoading(false)
     }
-  }, [rangeEnd, rangeStart])
+  }, [rangeEnd, rangePreset, rangeStart])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  const splitDtc = finance?.dtcRevenue ?? 0
-  const splitB2b = b2bPaymentsInvoicedGhs ?? 0
+  const splitDtc = dtcCollectedGhs ?? 0
+  const splitB2b = Math.max(0, b2bCollectedForTotalRevenue)
   const totalRev = Math.max(0, splitDtc) + Math.max(0, splitB2b)
   const dtcPct =
     totalRev > 0
@@ -530,21 +549,25 @@ export function ManagerDashboard({
       : 0
 
   const revenueBarData = [
-    { channel: 'DTC', percentage: dtcPct, fill: '#7c3aed' },
-    { channel: 'B2B invoiced', percentage: b2bPct, fill: '#2563eb' },
+    { channel: 'DTC collected', percentage: dtcPct, fill: '#7c3aed' },
+    { channel: 'B2B collected', percentage: b2bPct, fill: '#2563eb' },
   ]
 
   const priorB2bCollected =
     (priorFinance?.b2bInvoicePaidGhs ?? 0) +
     (priorFinance?.b2bCashCollections ?? 0) +
     (priorFinance?.b2bPortalOrderRevenue ?? 0)
-  const priorTotalRevenue =
+  const priorDtcCollected =
     priorFinance === null
-      ? null
-      : Math.max(0, priorFinance.dtcRevenue) + Math.max(0, priorB2bCollected)
+      ? 0
+      : typeof priorFinance.dtcCollectedGhs === 'number'
+        ? priorFinance.dtcCollectedGhs
+        : (priorFinance.dtcIntelCollectedGhs ?? 0) + priorFinance.dtcRevenue
+  const priorTotalRevenue =
+    priorFinance === null ? null : Math.max(0, priorDtcCollected) + Math.max(0, priorB2bCollected)
 
   const growthMetrics = useMemo(() => {
-    if (!finance) return null
+    if (!finance || dtcCollectedGhs === null) return null
     const currentTotal = totalRevenueDtcPlusB2bGhs ?? 0
     return {
       totalRevenue: {
@@ -552,8 +575,8 @@ export function ManagerDashboard({
         growth: growthPct(currentTotal, priorTotalRevenue ?? 0),
       },
       dtcRevenue: {
-        current: finance.dtcRevenue,
-        growth: growthPct(finance.dtcRevenue, priorFinance?.dtcRevenue ?? 0),
+        current: dtcCollectedGhs,
+        growth: growthPct(dtcCollectedGhs, priorDtcCollected),
       },
       b2bCollected: {
         current: b2bCollectedForTotalRevenue,
@@ -574,9 +597,11 @@ export function ManagerDashboard({
     priorSf,
     priorTotalRevenue,
     priorB2bCollected,
+    priorDtcCollected,
     sf,
     totalRevenueDtcPlusB2bGhs,
     b2bCollectedForTotalRevenue,
+    dtcCollectedGhs,
   ])
 
   const plMetrics = useMemo(() => {
@@ -782,28 +807,28 @@ export function ManagerDashboard({
         <DashboardSection title="Overview">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
           <MasterKpiCard
-            icon={Wallet}
-            iconWrapClass="bg-blue-600/10"
-            iconClass="text-blue-600"
-            label="Total invoice"
-            value={b2bPaymentsInvoicedGhs === null ? '—' : formatGhs(b2bPaymentsInvoicedGhs)}
-            subtitle="B2B · Net invoiced in selected range"
+            icon={LayoutGrid}
+            iconWrapClass="bg-amber-600/10"
+            iconClass="text-amber-700"
+            label="Total revenue"
+            value={totalRevenueDtcPlusB2bGhs === null ? '—' : formatGhs(totalRevenueDtcPlusB2bGhs)}
+            subtitle={
+              dtcCollectedGhs === null
+                ? 'DTC collected + B2B collected · selected range'
+                : `DTC ${formatGhs(dtcCollectedGhs)} + B2B ${formatGhs(b2bCollectedForTotalRevenue)}`
+            }
           />
           <MasterKpiCard
             icon={ShoppingBag}
             iconWrapClass="bg-purple-600/10"
             iconClass="text-purple-600"
-            label="DTC revenue"
-            value={finance ? formatGhs(finance.dtcRevenue) : '—'}
-            subtitle="DTC orders in selected range"
-          />
-          <MasterKpiCard
-            icon={LayoutGrid}
-            iconWrapClass="bg-amber-600/10"
-            iconClass="text-amber-700"
-            label="Total revenue (DTC + B2B)"
-            value={totalRevenueDtcPlusB2bGhs === null ? '—' : formatGhs(totalRevenueDtcPlusB2bGhs)}
-            subtitle="DTC orders + B2B paid, cash & portal in range"
+            label="DTC collected"
+            value={dtcCollectedGhs === null ? '—' : formatGhs(dtcCollectedGhs)}
+            subtitle={
+              finance
+                ? `CI ${formatGhs(finance.dtcIntelCollectedGhs ?? 0)} + OE ${formatGhs(finance.dtcRevenue)} · selected range`
+                : 'CI ledger + Orders Engine · selected range'
+            }
           />
           <MasterKpiCard
             icon={Banknote}
@@ -812,6 +837,18 @@ export function ManagerDashboard({
             label="B2B collected"
             value={finance ? formatGhs(b2bCollectedForTotalRevenue) : '—'}
             subtitle="Invoice payments + cash + portal orders in range"
+          />
+          <MasterKpiCard
+            icon={Wallet}
+            iconWrapClass="bg-blue-600/10"
+            iconClass="text-blue-600"
+            label="Total invoice"
+            value={b2bPaymentsInvoicedGhs === null ? '—' : formatGhs(b2bPaymentsInvoicedGhs)}
+            subtitle={
+              rangePreset === 'all'
+                ? 'B2B ledger · same source as B2B Payments · all time'
+                : 'B2B ledger · same source as B2B Payments · selected range'
+            }
           />
           <MasterKpiCard
             icon={CreditCard}
@@ -854,7 +891,7 @@ export function ManagerDashboard({
               <div className="space-y-4">
                 {[
                   { label: 'Total revenue', ...growthMetrics.totalRevenue },
-                  { label: 'DTC revenue', ...growthMetrics.dtcRevenue },
+                  { label: 'DTC collected', ...growthMetrics.dtcRevenue },
                   { label: 'B2B collected', ...growthMetrics.b2bCollected },
                   { label: 'Net profit', ...growthMetrics.netProfit },
                   { label: 'SF visits', ...growthMetrics.sfVisits },
@@ -976,7 +1013,7 @@ export function ManagerDashboard({
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
               <PieChart className="h-4 w-4 text-muted-foreground" />
             </span>
-            Revenue split — DTC vs B2B invoiced (selected range)
+            Revenue split — DTC collected vs B2B collected (selected range)
           </h3>
           <ResponsiveContainer width="100%" height={96}>
             <BarChart
@@ -985,7 +1022,7 @@ export function ManagerDashboard({
               margin={{ top: 0, right: 40, left: 0, bottom: 0 }}
             >
               <XAxis type="number" hide domain={[0, 100]} />
-              <YAxis type="category" dataKey="channel" width={112} tick={{ fontSize: 12 }} />
+              <YAxis type="category" dataKey="channel" width={120} tick={{ fontSize: 12 }} />
               <Bar dataKey="percentage" radius={[0, 4, 4, 0]}>
                 {revenueBarData.map((entry) => (
                   <Cell key={entry.channel} fill={entry.fill} />
@@ -1004,11 +1041,11 @@ export function ManagerDashboard({
           <div className="mt-4 flex justify-between text-xs text-muted-foreground">
             <div className="flex items-center gap-2">
               <div className="h-3 w-3 rounded-sm bg-purple-600" />
-              <span>DTC {dtcPct}%</span>
+              <span>DTC collected {dtcPct}%</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="h-3 w-3 rounded-sm bg-blue-600" />
-              <span>B2B invoiced {b2bPct}%</span>
+              <span>B2B collected {b2bPct}%</span>
             </div>
           </div>
           </Card>

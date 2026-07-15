@@ -4,9 +4,9 @@ import { subDays } from 'date-fns'
 import { spendByChannelFromCampaigns } from '@/lib/dtc-marketing-campaigns'
 import {
   DTC_ORDERS_COLLECTION,
-  type DtcOrderDoc,
   type PaymentMethod,
 } from '@/lib/dtc-orders'
+import { DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION } from '@/lib/dtc-customer-intelligence-ledger'
 import { SF_B2B_INVOICES_COLLECTION } from '@/lib/sf-b2b-invoices'
 
 export const FINANCE_LAYER_CONFIG_COLLECTION = 'finance_layer_config'
@@ -335,7 +335,15 @@ export type FinanceLayerSnapshot = {
   periodDays: number
   periodStart: string
   periodEnd: string
+  /** Orders Engine (`dtc_orders`) in range, excluding B2B portal channel. */
   dtcRevenue: number
+  /**
+   * Customer Intelligence ledger collections in range (excludes Orders Engine mirror rows
+   * so they are not double-counted with `dtcRevenue`).
+   */
+  dtcIntelCollectedGhs: number
+  /** `dtcIntelCollectedGhs + dtcRevenue` — Master's DTC collected / Total revenue DTC leg. */
+  dtcCollectedGhs: number
   b2bPortalOrderRevenue: number
   b2bInvoiceRevenue: number
   b2bInvoicePaidGhs: number
@@ -350,6 +358,159 @@ export type FinanceLayerSnapshot = {
   netProfit: number
   b2bOutstandingGhs: number
   paymentSplit: PaymentSplitRow[]
+}
+
+/**
+ * Sum Customer Intelligence ledger collections whose effective order date falls in range.
+ * Excludes Orders Engine mirrors (remarks prefix OR orderNumber that exists on `dtc_orders`)
+ * so those amounts are counted once via Orders Engine revenue.
+ */
+export async function sumDtcCustomerIntelCollectedInRange(
+  db: Db,
+  since: Date,
+  until: Date,
+): Promise<number> {
+  const oeOrderNumbers = await db
+    .collection(DTC_ORDERS_COLLECTION)
+    .distinct('orderNumber', {
+      orderNumber: { $type: 'string', $ne: '' },
+    })
+  const oeSet = new Set(
+    (oeOrderNumbers as unknown[])
+      .map((n) => String(n ?? '').trim())
+      .filter(Boolean),
+  )
+
+  const rows = await db
+    .collection(DTC_CUSTOMER_INTELLIGENCE_LEDGER_COLLECTION)
+    .aggregate<{
+      orderNumber?: string
+      remarks?: string
+      totalCollectedGhs?: number
+      effectiveAt: Date
+    }>([
+      {
+        $addFields: {
+          effectiveAt: {
+            $ifNull: [
+              {
+                $convert: { input: '$orderedAt', to: 'date', onError: null, onNull: null },
+              },
+              {
+                $ifNull: [
+                  {
+                    $convert: { input: '$createdAt', to: 'date', onError: null, onNull: null },
+                  },
+                  {
+                    $convert: { input: '$updatedAt', to: 'date', onError: null, onNull: null },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        $match: {
+          effectiveAt: { $gte: since, $lte: until },
+        },
+      },
+      {
+        $project: {
+          orderNumber: 1,
+          remarks: 1,
+          totalCollectedGhs: 1,
+          effectiveAt: 1,
+        },
+      },
+    ])
+    .toArray()
+
+  let total = 0
+  for (const r of rows) {
+    const remarks = String(r.remarks ?? '')
+    if (/^Orders Engine\s*·/i.test(remarks)) continue
+    const on = String(r.orderNumber ?? '').trim()
+    if (on && oeSet.has(on)) continue
+    total += Number(r.totalCollectedGhs) || 0
+  }
+  return total
+}
+
+/** Orders Engine revenue in range with the same amount rules as the DTC dashboard OE half. */
+export async function sumDtcOrdersEngineRevenueInRange(
+  db: Db,
+  since: Date,
+  until: Date,
+): Promise<{ dtcRevenue: number; b2bPortalOrderRevenue: number }> {
+  const rows = await db
+    .collection(DTC_ORDERS_COLLECTION)
+    .aggregate<{
+      channel?: string
+      revenueGhs: number
+    }>([
+      {
+        $addFields: {
+          orderedAtDate: {
+            $convert: { input: '$orderedAt', to: 'date', onError: null, onNull: null },
+          },
+        },
+      },
+      {
+        $match: {
+          orderedAtDate: { $gte: since, $lte: until },
+        },
+      },
+      {
+        $project: {
+          channel: 1,
+          totalAmount: {
+            $convert: { input: '$totalAmount', to: 'double', onError: 0, onNull: 0 },
+          },
+          items: { $ifNull: ['$items', []] },
+        },
+      },
+      {
+        $addFields: {
+          revenueFromItems: {
+            $sum: {
+              $map: {
+                input: '$items',
+                as: 'it',
+                in: {
+                  $multiply: [
+                    {
+                      $convert: { input: '$$it.qty', to: 'double', onError: 0, onNull: 0 },
+                    },
+                    {
+                      $convert: { input: '$$it.unitPrice', to: 'double', onError: 0, onNull: 0 },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          channel: 1,
+          revenueGhs: {
+            $cond: [{ $gt: ['$totalAmount', 0] }, '$totalAmount', '$revenueFromItems'],
+          },
+        },
+      },
+    ])
+    .toArray()
+
+  let dtcRevenue = 0
+  let b2bPortalOrderRevenue = 0
+  for (const r of rows) {
+    const amt = Number(r.revenueGhs) || 0
+    if (r.channel === 'B2B portal') b2bPortalOrderRevenue += amt
+    else dtcRevenue += amt
+  }
+  return { dtcRevenue, b2bPortalOrderRevenue }
 }
 
 export async function computeFinanceLayerSnapshot(
@@ -372,49 +533,113 @@ export async function computeFinanceLayerSnapshotForRange(
 
   const config = await getOrCreateFinanceConfig(db)
 
-  const orders = (await db
-    .collection(DTC_ORDERS_COLLECTION)
-    .find({ orderedAt: { $gte: since, $lte: until } })
-    .project({
-      channel: 1,
-      totalAmount: 1,
-      paymentMethod: 1,
-    })
-    .limit(20000)
-    .toArray()) as Pick<DtcOrderDoc, 'channel' | 'totalAmount' | 'paymentMethod'>[]
+  const [orderRevenues, dtcIntelCollectedGhs, paymentRows] = await Promise.all([
+    sumDtcOrdersEngineRevenueInRange(db, since, until),
+    sumDtcCustomerIntelCollectedInRange(db, since, until),
+    db
+      .collection(DTC_ORDERS_COLLECTION)
+      .aggregate<{
+        paymentMethod?: string
+        revenueGhs: number
+        orders: number
+      }>([
+        {
+          $addFields: {
+            orderedAtDate: {
+              $convert: { input: '$orderedAt', to: 'date', onError: null, onNull: null },
+            },
+          },
+        },
+        { $match: { orderedAtDate: { $gte: since, $lte: until } } },
+        {
+          $project: {
+            paymentMethod: 1,
+            totalAmount: {
+              $convert: { input: '$totalAmount', to: 'double', onError: 0, onNull: 0 },
+            },
+            items: { $ifNull: ['$items', []] },
+          },
+        },
+        {
+          $addFields: {
+            revenueFromItems: {
+              $sum: {
+                $map: {
+                  input: '$items',
+                  as: 'it',
+                  in: {
+                    $multiply: [
+                      {
+                        $convert: { input: '$$it.qty', to: 'double', onError: 0, onNull: 0 },
+                      },
+                      {
+                        $convert: {
+                          input: '$$it.unitPrice',
+                          to: 'double',
+                          onError: 0,
+                          onNull: 0,
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+        {
+          $project: {
+            paymentMethod: 1,
+            revenueGhs: {
+              $cond: [{ $gt: ['$totalAmount', 0] }, '$totalAmount', '$revenueFromItems'],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: '$paymentMethod',
+            revenueGhs: { $sum: '$revenueGhs' },
+            orders: { $sum: 1 },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            paymentMethod: '$_id',
+            revenueGhs: 1,
+            orders: 1,
+          },
+        },
+      ])
+      .toArray(),
+  ])
 
-  let dtcRevenue = 0
-  let b2bPortalOrderRevenue = 0
-  const paymentAgg = new Map<
-    PaymentMethod,
-    { orders: number; revenue: number }
-  >()
+  const dtcRevenue = orderRevenues.dtcRevenue
+  const b2bPortalOrderRevenue = orderRevenues.b2bPortalOrderRevenue
+
+  const paymentAgg = new Map<PaymentMethod, { orders: number; revenue: number }>()
   for (const m of PAYMENT_METHODS_ORDER) {
     paymentAgg.set(m, { orders: 0, revenue: 0 })
   }
-
-  for (const o of orders) {
-    const pm = o.paymentMethod as PaymentMethod
+  for (const row of paymentRows) {
+    const pm = row.paymentMethod as PaymentMethod
     if (!paymentAgg.has(pm)) {
       paymentAgg.set(pm, { orders: 0, revenue: 0 })
     }
-    const row = paymentAgg.get(pm)!
-    row.orders += 1
-    row.revenue += o.totalAmount
-
-    if (o.channel === 'B2B portal') {
-      b2bPortalOrderRevenue += o.totalAmount
-    } else {
-      dtcRevenue += o.totalAmount
-    }
+    const bucket = paymentAgg.get(pm)!
+    bucket.orders += Number(row.orders) || 0
+    bucket.revenue += Number(row.revenueGhs) || 0
   }
 
   const b2bInvoiceRevenue = await sumSfB2bInvoiceRevenue(db, since, until)
   const b2bInvoicePaidGhs = await sumSfB2bInvoicePaidInRange(db, since, until)
   const b2bCashCollections = await sumB2BCashCollections(db, since, until)
+  const dtcCollectedGhs = Math.max(0, dtcIntelCollectedGhs) + Math.max(0, dtcRevenue)
   const b2bCollected =
-    b2bPortalOrderRevenue + b2bInvoicePaidGhs + b2bCashCollections
-  const totalRevenue = dtcRevenue + b2bCollected
+    Math.max(0, b2bPortalOrderRevenue) +
+    Math.max(0, b2bInvoicePaidGhs) +
+    Math.max(0, b2bCashCollections)
+  const totalRevenue = dtcCollectedGhs + b2bCollected
 
   const spendMap = await spendByChannelFromCampaigns(db, since, until)
   let marketingSpendGhs = 0
@@ -453,6 +678,8 @@ export async function computeFinanceLayerSnapshotForRange(
       periodStart: since.toISOString(),
       periodEnd: until.toISOString(),
       dtcRevenue,
+      dtcIntelCollectedGhs,
+      dtcCollectedGhs,
       b2bPortalOrderRevenue,
       b2bInvoiceRevenue,
       b2bInvoicePaidGhs,

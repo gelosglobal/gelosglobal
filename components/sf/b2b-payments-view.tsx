@@ -1095,8 +1095,12 @@ export function B2bPaymentsView() {
               </Card>
             </div>
             <p className="text-xs text-muted-foreground">
-              Invoice ledger: {kpis.totalInvoices}{' '}
-              {kpis.totalInvoices === 1 ? 'invoice' : 'invoices'} tracked (all time).
+              Showing {kpis.totalInvoices.toLocaleString()}{' '}
+              {kpis.totalInvoices === 1 ? 'invoice' : 'invoices'}
+              {periodDays <= 0 ? ' (all time)' : ` in the last ${periodDays} days`}.
+              {periodDays > 0
+                ? ' Switch the period to All time to match lifetime invoiced totals.'
+                : null}
             </p>
           </div>
         ) : null}
