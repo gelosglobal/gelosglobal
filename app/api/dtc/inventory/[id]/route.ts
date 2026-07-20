@@ -1,5 +1,7 @@
+import { canDeleteDtcInventory } from '@/lib/access'
 import { auth, ensureAuthMongo } from '@/lib/auth'
 import {
+  deleteDtcInventoryItem,
   serializeInventoryItem,
   updateDtcInventoryItem,
 } from '@/lib/dtc-inventory'
@@ -76,4 +78,30 @@ export async function PATCH(
   }
 
   return NextResponse.json({ item: serializeInventoryItem(result.doc) })
+}
+
+export async function DELETE(
+  _request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const session = await requireSession()
+  if (!session) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  if (!canDeleteDtcInventory(session as any)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
+  const { id } = await context.params
+  if (!ObjectId.isValid(id)) {
+    return NextResponse.json({ error: 'Invalid id' }, { status: 400 })
+  }
+
+  const { db } = getMongo()
+  const ok = await deleteDtcInventoryItem(db, new ObjectId(id))
+  if (!ok) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
+
+  return NextResponse.json({ ok: true })
 }

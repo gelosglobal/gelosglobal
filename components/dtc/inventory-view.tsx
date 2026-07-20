@@ -12,11 +12,22 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  Trash2,
   Truck,
   Warehouse,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { DtcPageHeader } from '@/components/dtc/dtc-page-header'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -117,7 +128,7 @@ const WAREHOUSE_PRESETS = [
 
 const DTC_EDIT_WH_CUSTOM = '__dtc_inv_wh_custom__'
 
-export function DtcInventoryView() {
+export function DtcInventoryView({ canDelete = false }: { canDelete?: boolean }) {
   const [items, setItems] = useState<InventoryRow[]>([])
   const [stats, setStats] = useState<StatsPayload | null>(null)
   const [loading, setLoading] = useState(true)
@@ -162,6 +173,8 @@ export function DtcInventoryView() {
     inTransitValue: '',
     dailyDemand: '',
   })
+  const [deleteRow, setDeleteRow] = useState<InventoryRow | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -353,6 +366,36 @@ export function DtcInventoryView() {
       toast.error(err instanceof Error ? err.message : 'Could not update')
     } finally {
       setEditing(false)
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteRow) return
+    setDeleting(true)
+    try {
+      const res = await fetch(`/api/dtc/inventory/${deleteRow.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      if (res.status === 403) {
+        toast.error('Only master admins can delete products.')
+        return
+      }
+      if (!res.ok) {
+        const err = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(err.error ?? 'Delete failed')
+      }
+      toast.success(`Deleted ${deleteRow.sku}`)
+      setDeleteRow(null)
+      void load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not delete')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -989,16 +1032,30 @@ export function DtcInventoryView() {
                       )}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => openEdit(row)}
-                        aria-label={`Edit ${row.sku}`}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
+                      <div className="inline-flex items-center justify-end gap-0.5">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => openEdit(row)}
+                          aria-label={`Edit ${row.sku}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        {canDelete ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={() => setDeleteRow(row)}
+                            aria-label={`Delete ${row.sku}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        ) : null}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -1202,6 +1259,44 @@ export function DtcInventoryView() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={deleteRow != null}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setDeleteRow(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this product?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteRow
+                ? `Permanently remove ${deleteRow.sku} (${deleteRow.name}) from DTC inventory. This cannot be undone.`
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmDelete()
+              }}
+            >
+              {deleting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting
+                </>
+              ) : (
+                'Delete'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

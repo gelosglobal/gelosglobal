@@ -184,6 +184,11 @@ export async function updateDtcInventoryItem(
   return { ok: true, doc: res as DtcInventoryDoc }
 }
 
+export async function deleteDtcInventoryItem(db: Db, id: ObjectId): Promise<boolean> {
+  const res = await inventoryCollection(db).deleteOne({ _id: id })
+  return res.deletedCount === 1
+}
+
 export function computeInventoryStats(rows: DtcInventoryDoc[]) {
   let belowSafety = 0
   let inTransitTotal = 0

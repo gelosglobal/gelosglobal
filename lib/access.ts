@@ -60,6 +60,11 @@ export function canMutateSfInventory(session: Session | null): boolean {
   return access.sections.has('dtc') || access.sections.has('master')
 }
 
+/** Only master admins may permanently delete DTC inventory SKUs. */
+export function canDeleteDtcInventory(session: Session | null): boolean {
+  return getUserAccess(session).sections.has('master')
+}
+
 export function canAccessPath(access: UserAccess, pathname: string): boolean {
   if (pathname === '/') return access.sections.has('master')
   if (pathname.startsWith('/dtc')) return access.sections.has('dtc')
