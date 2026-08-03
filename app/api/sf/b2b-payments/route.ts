@@ -2,6 +2,7 @@ import { auth, ensureAuthMongo } from '@/lib/auth'
 import { getMongo } from '@/lib/mongodb'
 import {
   computeInvoiceKpis,
+  computeInvoicePeriodKpis,
   createSfB2bInvoice,
   listSfB2bInvoices,
   serializeSfB2bInvoice,
@@ -13,7 +14,7 @@ import {
   isSfB2bInvoiceInventoryError,
   withSfInventoryDecrementsForNewInvoice,
 } from '@/lib/sf-b2b-invoice-inventory'
-import { sfB2bInvoiceEffectiveDate } from '@/lib/dtc-finance'
+import { sfB2bInvoiceMatchesDateRange } from '@/lib/dtc-finance'
 import { subDays } from 'date-fns'
 import { headers } from 'next/headers'
 import { NextResponse } from 'next/server'
@@ -58,7 +59,7 @@ function parsePeriodDays(url: URL): number {
   if (!Number.isFinite(n)) return 30
   const rounded = Math.round(n)
   if (rounded <= 0) return 0
-  return Math.min(365, Math.max(7, rounded))
+  return Math.min(365, Math.max(1, rounded))
 }
 
 async function requireSession() {
@@ -90,21 +91,21 @@ export async function GET(request: Request) {
     rangeStart.getTime() <= rangeEnd.getTime()
 
   const rowsAll = await listSfB2bInvoices(db)
-  const rows = hasCustomRange
-    ? rowsAll.filter((r) => {
-        const d = sfB2bInvoiceEffectiveDate(r)
-        if (!d || Number.isNaN(d.getTime())) return false
-        return d >= rangeStart! && d <= rangeEnd!
-      })
+  const rangeBounds = hasCustomRange
+    ? { start: rangeStart!, end: rangeEnd! }
     : periodDays <= 0
-      ? rowsAll
-      : rowsAll.filter((r) => {
-          const d = sfB2bInvoiceEffectiveDate(r)
-          if (!d || Number.isNaN(d.getTime())) return false
-          const since = subDays(now, periodDays)
-          return d >= since && d <= now
-        })
-  const kpis = computeInvoiceKpis(rows, now)
+      ? null
+      : { start: subDays(now, periodDays), end: now }
+
+  const rows = rangeBounds
+    ? rowsAll.filter((r) =>
+        sfB2bInvoiceMatchesDateRange(r, rangeBounds.start, rangeBounds.end),
+      )
+    : rowsAll
+
+  const kpis = rangeBounds
+    ? computeInvoicePeriodKpis(rows, { ...rangeBounds, now })
+    : computeInvoiceKpis(rows, now)
 
   return NextResponse.json(
     {

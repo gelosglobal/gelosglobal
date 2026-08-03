@@ -152,7 +152,58 @@ export function sfB2bInvoiceEffectiveDate(
     'invoiceAt' | 'dueAt' | 'createdAt'
   >,
 ): Date {
-  return doc.invoiceAt ?? doc.dueAt ?? doc.createdAt
+  const raw = doc.invoiceAt ?? doc.dueAt ?? doc.createdAt
+  if (!raw) return new Date(NaN)
+  if (raw instanceof Date) return raw
+  const d = new Date(raw)
+  return d
+}
+
+function asDate(raw: Date | string | undefined | null): Date | null {
+  if (!raw) return null
+  const d = raw instanceof Date ? raw : new Date(raw)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function inInclusiveRange(d: Date, start: Date, end: Date): boolean {
+  const t = d.getTime()
+  return t >= start.getTime() && t <= end.getTime()
+}
+
+/**
+ * B2B Payments period match: invoice dated in range, or any installment
+ * received in range (so “Today” catches payments on older invoices).
+ */
+export function sfB2bInvoiceMatchesDateRange(
+  doc: Pick<
+    import('@/lib/sf-b2b-invoices').SfB2bInvoiceDoc,
+    'invoiceAt' | 'dueAt' | 'createdAt' | 'paidAt' | 'paidGhs' | 'payments'
+  >,
+  start: Date,
+  end: Date,
+): boolean {
+  const invoiceDate = sfB2bInvoiceEffectiveDate(doc)
+  if (invoiceDate && !Number.isNaN(invoiceDate.getTime()) && inInclusiveRange(invoiceDate, start, end)) {
+    return true
+  }
+
+  const payments = Array.isArray(doc.payments) ? doc.payments : []
+  if (payments.length > 0) {
+    for (const p of payments) {
+      const paidAt = asDate(p.paidAt)
+      if (paidAt && inInclusiveRange(paidAt, start, end)) return true
+    }
+    return false
+  }
+
+  if ((Number(doc.paidGhs) || 0) > 0) {
+    const paidAt = asDate(doc.paidAt) ?? invoiceDate
+    if (paidAt && !Number.isNaN(paidAt.getTime()) && inInclusiveRange(paidAt, start, end)) {
+      return true
+    }
+  }
+
+  return false
 }
 
 /** When payment was recorded (for collections in a period). */
@@ -218,20 +269,39 @@ export async function sumSfB2bInvoicePaidInRange(
     .project({
       paidGhs: 1,
       paidAt: 1,
+      payments: 1,
       updatedAt: 1,
       invoiceAt: 1,
       createdAt: 1,
+      paymentMethod: 1,
     })
     .toArray()) as Pick<
     import('@/lib/sf-b2b-invoices').SfB2bInvoiceDoc,
-    'paidGhs' | 'paidAt' | 'updatedAt' | 'invoiceAt' | 'createdAt'
+    'paidGhs' | 'paidAt' | 'payments' | 'updatedAt' | 'invoiceAt' | 'createdAt' | 'paymentMethod'
   >[]
 
   let total = 0
   for (const row of rows) {
-    const d = sfB2bInvoicePaymentDate(row)
-    if (!d || d < since || d > until) continue
-    total += Number(row.paidGhs) || 0
+    const events =
+      Array.isArray(row.payments) && row.payments.length > 0
+        ? row.payments
+        : (Number(row.paidGhs) || 0) > 0
+          ? [
+              {
+                amountGhs: Number(row.paidGhs) || 0,
+                paidAt: sfB2bInvoicePaymentDate(row) ?? row.createdAt,
+              },
+            ]
+          : []
+
+    for (const e of events) {
+      const amount = Number(e.amountGhs) || 0
+      if (amount <= 0) continue
+      const raw = e.paidAt
+      const d = raw instanceof Date ? raw : raw ? new Date(raw) : null
+      if (!d || Number.isNaN(d.getTime()) || d < since || d > until) continue
+      total += amount
+    }
   }
   return total
 }

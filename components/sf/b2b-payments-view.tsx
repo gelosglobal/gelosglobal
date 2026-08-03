@@ -2,8 +2,9 @@
 
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { format } from 'date-fns'
+import { format, startOfDay, endOfDay, subDays } from 'date-fns'
 import {
+  Banknote,
   Download,
   Eye,
   ExternalLink,
@@ -88,6 +89,15 @@ type OutletOption = {
   region: string | null
 }
 
+type PaymentEvent = {
+  id: string
+  amountGhs: number
+  paidAt: string
+  paymentMethod: 'momo' | 'cash' | 'bank_transfer' | 'cheque' | null
+  note: string | null
+  createdAt: string
+}
+
 type CollectionRow = {
   id: string
   outletName: string
@@ -99,6 +109,7 @@ type CollectionRow = {
   paidAt: string | null
   balanceGhs: number
   paymentMethod: 'momo' | 'cash' | 'bank_transfer' | 'cheque' | null
+  payments: PaymentEvent[]
   items: {
     name: string
     sku?: string
@@ -124,6 +135,28 @@ type B2bPaymentsKpis = {
 }
 
 const PERIOD_OPTIONS = [0, 7, 14, 30, 60, 90] as const
+
+type RangePreset = 'all' | 'today' | '7' | '14' | '30' | '60' | '90' | 'custom'
+
+function toDateInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/** Inclusive local-day bounds → ISO for the API. */
+function localDateInputToRangeIso(startYmd: string, endYmd: string): { start: string; end: string } | null {
+  const startParts = startYmd.trim().split('-').map(Number)
+  const endParts = endYmd.trim().split('-').map(Number)
+  if (startParts.length !== 3 || endParts.length !== 3) return null
+  const [sy, sm, sd] = startParts
+  const [ey, em, ed] = endParts
+  if (!sy || !sm || !sd || !ey || !em || !ed) return null
+  const start = startOfDay(new Date(sy, sm - 1, sd))
+  const end = endOfDay(new Date(ey, em - 1, ed))
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null
+  if (start.getTime() > end.getTime()) return null
+  return { start: start.toISOString(), end: end.toISOString() }
+}
 
 function dateToIsoNoon(value: string): string | undefined {
   const v = value.trim()
@@ -158,11 +191,33 @@ function emptyForm() {
   }
 }
 
+function todayLocalYmd() {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+function emptyPaymentForm() {
+  return {
+    amountGhs: '',
+    paidDate: todayLocalYmd(),
+    paymentMethod: 'momo' as 'momo' | 'cash' | 'bank_transfer' | 'cheque',
+    note: '',
+  }
+}
+
 export function B2bPaymentsView() {
   const [loading, setLoading] = useState(true)
   const [collections, setCollections] = useState<CollectionRow[]>([])
   const [kpis, setKpis] = useState<B2bPaymentsKpis | null>(null)
-  const [periodDays, setPeriodDays] = useState<number>(30)
+  const [rangePreset, setRangePreset] = useState<RangePreset>('30')
+  const [customOpen, setCustomOpen] = useState(false)
+  const [rangeStart, setRangeStart] = useState(() => toDateInputValue(subDays(new Date(), 30)))
+  const [rangeEnd, setRangeEnd] = useState(() => toDateInputValue(new Date()))
+  const [customDraft, setCustomDraft] = useState(() => ({
+    start: toDateInputValue(subDays(new Date(), 30)),
+    end: toDateInputValue(new Date()),
+  }))
   const [query, setQuery] = useState('')
   const [importing, setImporting] = useState(false)
 
@@ -184,11 +239,74 @@ export function B2bPaymentsView() {
   const [itemsForModal, setItemsForModal] = useState<CollectionRow['items']>([])
   const [inventoryPickerRows, setInventoryPickerRows] = useState<DtcInventoryPickerRow[]>([])
 
+  const [paymentOpen, setPaymentOpen] = useState(false)
+  const [paymentSaving, setPaymentSaving] = useState(false)
+  const [paymentInvoice, setPaymentInvoice] = useState<CollectionRow | null>(null)
+  const [paymentForm, setPaymentForm] = useState(emptyPaymentForm)
+  const [removingPaymentId, setRemovingPaymentId] = useState<string | null>(null)
+
+  function applyPreset(preset: Exclude<RangePreset, 'custom'>) {
+    const end = new Date()
+    let start: Date
+    if (preset === 'all') {
+      // Unused for query (periodDays=0), keep draft sane
+      start = new Date(0)
+    } else if (preset === 'today') {
+      start = startOfDay(end)
+    } else {
+      const days = Number(preset)
+      start = startOfDay(subDays(end, days))
+    }
+    const s = toDateInputValue(start)
+    const e = toDateInputValue(end)
+    setRangeStart(s)
+    setRangeEnd(e)
+    setCustomDraft({ start: s, end: e })
+  }
+
+  function openCustom() {
+    setCustomDraft({ start: rangeStart, end: rangeEnd })
+    setCustomOpen(true)
+  }
+
+  function saveCustom() {
+    const bounds = localDateInputToRangeIso(customDraft.start, customDraft.end)
+    if (!bounds) {
+      toast.error('Pick a valid start and end date')
+      return
+    }
+    setRangeStart(customDraft.start)
+    setRangeEnd(customDraft.end)
+    setRangePreset('custom')
+    setCustomOpen(false)
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const q = `?periodDays=${encodeURIComponent(String(periodDays))}`
-      const res = await fetch(`/api/sf/b2b-payments${q}`, {
+      const q = new URLSearchParams()
+      if (rangePreset === 'all') {
+        q.set('periodDays', '0')
+      } else {
+        const bounds = localDateInputToRangeIso(rangeStart, rangeEnd)
+        if (bounds) {
+          q.set('start', bounds.start)
+          q.set('end', bounds.end)
+        } else if (rangePreset !== 'today' && rangePreset !== 'custom') {
+          q.set('periodDays', rangePreset)
+        } else {
+          // Today/custom with bad dates — still constrain to today rather than silently falling back to 30d
+          const today = toDateInputValue(new Date())
+          const fallback = localDateInputToRangeIso(today, today)
+          if (fallback) {
+            q.set('start', fallback.start)
+            q.set('end', fallback.end)
+          } else {
+            q.set('periodDays', '1')
+          }
+        }
+      }
+      const res = await fetch(`/api/sf/b2b-payments?${q.toString()}`, {
         credentials: 'include',
         cache: 'no-store',
       })
@@ -201,14 +319,19 @@ export function B2bPaymentsView() {
         invoices: CollectionRow[]
         kpis: B2bPaymentsKpis
       }
-      setCollections(data.invoices)
+      setCollections(
+        (data.invoices ?? []).map((inv) => ({
+          ...inv,
+          payments: Array.isArray(inv.payments) ? inv.payments : [],
+        })),
+      )
       setKpis(data.kpis)
     } catch {
       toast.error('Could not load B2B payments')
     } finally {
       setLoading(false)
     }
-  }, [periodDays])
+  }, [rangePreset, rangeStart, rangeEnd])
 
   useEffect(() => {
     void load()
@@ -559,6 +682,102 @@ export function B2bPaymentsView() {
     }
   }
 
+  function openPayments(c: CollectionRow) {
+    setPaymentInvoice(c)
+    setPaymentForm({
+      ...emptyPaymentForm(),
+      amountGhs: c.balanceGhs > 0 ? String(c.balanceGhs) : '',
+      paymentMethod: (c.paymentMethod ?? 'momo') as 'momo' | 'cash' | 'bank_transfer' | 'cheque',
+    })
+    setPaymentOpen(true)
+  }
+
+  function applyInvoiceUpdate(invoice: CollectionRow) {
+    const normalized = {
+      ...invoice,
+      payments: Array.isArray(invoice.payments) ? invoice.payments : [],
+    }
+    setCollections((rows) => rows.map((r) => (r.id === normalized.id ? normalized : r)))
+    setPaymentInvoice(normalized)
+  }
+
+  async function submitPayment(e: React.FormEvent) {
+    e.preventDefault()
+    if (!paymentInvoice) return
+    const amountGhs = Number(paymentForm.amountGhs)
+    if (!Number.isFinite(amountGhs) || amountGhs <= 0) {
+      toast.error('Enter a payment amount greater than 0')
+      return
+    }
+    const paidAt = paymentForm.paidDate.trim()
+      ? dateToIsoNoon(paymentForm.paidDate)
+      : new Date().toISOString()
+    setPaymentSaving(true)
+    try {
+      const res = await fetch(`/api/sf/b2b-payments/${paymentInvoice.id}/payments`, {
+        method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amountGhs,
+          paidAt,
+          paymentMethod: paymentForm.paymentMethod,
+          note: paymentForm.note.trim() || undefined,
+        }),
+      })
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string
+        invoice?: CollectionRow
+      }
+      if (!res.ok) throw new Error(data.error ?? 'Could not record payment')
+      if (data.invoice) applyInvoiceUpdate(data.invoice)
+      toast.success('Payment recorded')
+      setPaymentForm(emptyPaymentForm())
+      void load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not record payment')
+    } finally {
+      setPaymentSaving(false)
+    }
+  }
+
+  async function removePayment(paymentId: string) {
+    if (!paymentInvoice) return
+    if (!window.confirm('Remove this payment from the invoice history?')) return
+    setRemovingPaymentId(paymentId)
+    try {
+      const res = await fetch(
+        `/api/sf/b2b-payments/${paymentInvoice.id}/payments/${paymentId}`,
+        {
+          method: 'DELETE',
+          credentials: 'include',
+          cache: 'no-store',
+        },
+      )
+      if (res.status === 401) {
+        toast.error('Session expired. Sign in again.')
+        return
+      }
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string
+        invoice?: CollectionRow
+      }
+      if (!res.ok) throw new Error(data.error ?? 'Could not remove payment')
+      if (data.invoice) applyInvoiceUpdate(data.invoice)
+      toast.success('Payment removed')
+      void load()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not remove payment')
+    } finally {
+      setRemovingPaymentId(null)
+    }
+  }
+
   function exportCsv() {
     if (collections.length === 0) {
       toast.message('Nothing to export')
@@ -724,18 +943,29 @@ export function B2bPaymentsView() {
                 KPI period
               </Label>
               <Select
-                value={String(periodDays)}
-                onValueChange={(v) => setPeriodDays(Number(v))}
+                value={rangePreset}
+                onValueChange={(v) => {
+                  const p = v as RangePreset
+                  if (p === 'custom') {
+                    openCustom()
+                    return
+                  }
+                  setRangePreset(p)
+                  applyPreset(p)
+                }}
               >
-                <SelectTrigger id="b2b-period" className="h-9 w-[148px]">
+                <SelectTrigger id="b2b-period" className="h-9 w-[160px]">
                   <SelectValue placeholder="Period" />
                 </SelectTrigger>
                 <SelectContent>
-                  {PERIOD_OPTIONS.map((d) => (
+                  <SelectItem value="all">All time</SelectItem>
+                  <SelectItem value="today">Today</SelectItem>
+                  {PERIOD_OPTIONS.filter((d) => d > 0).map((d) => (
                     <SelectItem key={d} value={String(d)}>
-                      {d === 0 ? 'All time' : `Last ${d} days`}
+                      Last {d} days
                     </SelectItem>
                   ))}
+                  <SelectItem value="custom">Custom…</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1058,7 +1288,9 @@ export function B2bPaymentsView() {
                   {formatGhs(kpis.invoicedGhs)}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Total invoice amount
+                  {rangePreset === 'all'
+                    ? 'Total invoice amount'
+                    : 'Invoices dated in this period'}
                 </p>
               </Card>
               <Card className="p-4">
@@ -1067,7 +1299,9 @@ export function B2bPaymentsView() {
                   {formatGhs(kpis.paidGhs)}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Sum of paid across invoices
+                  {rangePreset === 'all'
+                    ? 'Sum of paid across invoices'
+                    : 'Payments received in this period'}
                 </p>
               </Card>
               <Card className="p-4">
@@ -1075,7 +1309,11 @@ export function B2bPaymentsView() {
                 <p className="mt-1 text-xl font-bold tabular-nums sm:text-2xl">
                   {formatGhs(kpis.outstandingGhs)}
                 </p>
-                <p className="text-xs text-muted-foreground">Balance across invoices</p>
+                <p className="text-xs text-muted-foreground">
+                  {rangePreset === 'all'
+                    ? 'Balance across invoices'
+                    : 'Open balance on listed invoices'}
+                </p>
               </Card>
               <Card className="p-4">
                 <p className="text-xs font-medium uppercase text-muted-foreground">
@@ -1090,15 +1328,24 @@ export function B2bPaymentsView() {
                     : '—'}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Paid ÷ invoiced
+                  {rangePreset === 'all'
+                    ? 'Paid ÷ invoiced'
+                    : 'Paid in period ÷ invoiced in period'}
                 </p>
               </Card>
             </div>
             <p className="text-xs text-muted-foreground">
               Showing {kpis.totalInvoices.toLocaleString()}{' '}
               {kpis.totalInvoices === 1 ? 'invoice' : 'invoices'}
-              {periodDays <= 0 ? ' (all time)' : ` in the last ${periodDays} days`}.
-              {periodDays > 0
+              {rangePreset === 'all'
+                ? ' (all time)'
+                : rangePreset === 'today'
+                  ? ' with invoice or payment activity today'
+                  : rangePreset === 'custom'
+                    ? ' with invoice or payment activity in the selected range'
+                    : ` with invoice or payment activity in the last ${rangePreset} days`}
+              .
+              {rangePreset !== 'all'
                 ? ' Switch the period to All time to match lifetime invoiced totals.'
                 : null}
             </p>
@@ -1131,13 +1378,24 @@ export function B2bPaymentsView() {
           ) : collections.length === 0 ? (
             <Empty className="border-0 py-16">
               <EmptyHeader>
-                <EmptyTitle>No invoices yet</EmptyTitle>
+                <EmptyTitle>
+                  {rangePreset === 'all' ? 'No invoices yet' : 'No activity in this period'}
+                </EmptyTitle>
                 <EmptyDescription>
-                  Add invoices here to track receivables. Rows are stored in MongoDB{' '}
-                  <code className="rounded bg-muted px-1 py-0.5 text-xs">
-                    sf_b2b_invoices
-                  </code>
-                  .
+                  {rangePreset === 'all' ? (
+                    <>
+                      Add invoices here to track receivables. Rows are stored in MongoDB{' '}
+                      <code className="rounded bg-muted px-1 py-0.5 text-xs">
+                        sf_b2b_invoices
+                      </code>
+                      .
+                    </>
+                  ) : (
+                    <>
+                      No invoices dated in this range, and no payments received in this range.
+                      Try All time or a wider period.
+                    </>
+                  )}
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -1159,7 +1417,7 @@ export function B2bPaymentsView() {
                     <TableHead className="hidden lg:table-cell">Rep</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="hidden md:table-cell text-right">Items</TableHead>
-                    <TableHead className="w-[88px] text-right" />
+                    <TableHead className="w-[120px] text-right" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1178,7 +1436,18 @@ export function B2bPaymentsView() {
                       </TableCell>
                       <TableCell className="text-right tabular-nums">{formatGhs(c.paidGhs)}</TableCell>
                       <TableCell className="hidden lg:table-cell text-muted-foreground">
-                        {c.paidAt ? format(new Date(c.paidAt), 'd MMM yyyy') : '—'}
+                        {c.paidAt ? (
+                          <div className="leading-tight">
+                            <div>{format(new Date(c.paidAt), 'd MMM yyyy')}</div>
+                            {(c.payments?.length ?? 0) > 1 ? (
+                              <div className="text-[11px] text-muted-foreground/80">
+                                {c.payments.length} payments
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          '—'
+                        )}
                       </TableCell>
                       <TableCell className="text-right font-semibold tabular-nums">
                         {formatGhs(c.balanceGhs)}
@@ -1222,6 +1491,17 @@ export function B2bPaymentsView() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-0.5">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => openPayments(c)}
+                            aria-label="Record payment"
+                            title="Record payment / view history"
+                          >
+                            <Banknote className="h-4 w-4" />
+                          </Button>
                           <Button
                             type="button"
                             variant="ghost"
@@ -1398,6 +1678,9 @@ export function B2bPaymentsView() {
                     }
                     placeholder="0.00"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    For partials by month, use the banknote icon. Editing this total replaces installment history when multiple payments exist.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="edit-b2b-paid-date">Paid date</Label>
@@ -1571,6 +1854,231 @@ export function B2bPaymentsView() {
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setItemsOpen(false)}>
               Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={paymentOpen}
+        onOpenChange={(open) => {
+          setPaymentOpen(open)
+          if (!open) {
+            setPaymentInvoice(null)
+            setPaymentForm(emptyPaymentForm())
+          }
+        }}
+      >
+        <DialogContent className="max-h-[min(90vh,40rem)] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Payments</DialogTitle>
+            <DialogDescription>
+              {paymentInvoice
+                ? `${paymentInvoice.outletName} · ${paymentInvoice.invoiceNumber} · balance ${formatGhs(paymentInvoice.balanceGhs)}`
+                : 'Record installment receipts against this invoice.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm">
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Invoice amount</span>
+                <span className="tabular-nums">
+                  {paymentInvoice ? formatGhs(paymentInvoice.amountGhs) : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3">
+                <span className="text-muted-foreground">Paid to date</span>
+                <span className="tabular-nums font-medium">
+                  {paymentInvoice ? formatGhs(paymentInvoice.paidGhs) : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3 border-t border-border/50 pt-1 mt-1">
+                <span className="text-muted-foreground">Balance</span>
+                <span className="tabular-nums font-semibold">
+                  {paymentInvoice ? formatGhs(paymentInvoice.balanceGhs) : '—'}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Payment history</p>
+              {(paymentInvoice?.payments?.length ?? 0) === 0 ? (
+                <p className="text-sm text-muted-foreground">No payments recorded yet.</p>
+              ) : (
+                <div className="overflow-hidden rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead className="hidden sm:table-cell">Method</TableHead>
+                        <TableHead className="w-10" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(paymentInvoice?.payments ?? []).map((p) => (
+                        <TableRow key={p.id}>
+                          <TableCell className="text-sm">
+                            <div>{format(new Date(p.paidAt), 'd MMM yyyy')}</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {format(new Date(p.paidAt), 'MMM yyyy')}
+                            </div>
+                            {p.note ? (
+                              <div className="text-xs text-muted-foreground">{p.note}</div>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">
+                            {formatGhs(p.amountGhs)}
+                          </TableCell>
+                          <TableCell className="hidden sm:table-cell text-xs text-muted-foreground">
+                            {p.paymentMethod ? p.paymentMethod.replace(/_/g, ' ') : '—'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-destructive hover:text-destructive"
+                              disabled={removingPaymentId === p.id}
+                              onClick={() => void removePayment(p.id)}
+                              aria-label="Remove payment"
+                            >
+                              {removingPaymentId === p.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={submitPayment} className="space-y-3 border-t border-border pt-4">
+              <p className="text-sm font-medium">Record payment</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="b2b-pay-amt">Amount (GHS)</Label>
+                  <Input
+                    id="b2b-pay-amt"
+                    inputMode="decimal"
+                    value={paymentForm.amountGhs}
+                    onChange={(e) =>
+                      setPaymentForm((f) => ({ ...f, amountGhs: e.target.value }))
+                    }
+                    placeholder="0.00"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="b2b-pay-date">Received date</Label>
+                  <Input
+                    id="b2b-pay-date"
+                    type="date"
+                    value={paymentForm.paidDate}
+                    onChange={(e) =>
+                      setPaymentForm((f) => ({ ...f, paidDate: e.target.value }))
+                    }
+                    required
+                  />
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Method</Label>
+                  <Select
+                    value={paymentForm.paymentMethod}
+                    onValueChange={(v) =>
+                      setPaymentForm((f) => ({
+                        ...f,
+                        paymentMethod: v as typeof f.paymentMethod,
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="momo">MoMo</SelectItem>
+                      <SelectItem value="cash">Cash</SelectItem>
+                      <SelectItem value="bank_transfer">Bank transfer</SelectItem>
+                      <SelectItem value="cheque">Cheque</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="b2b-pay-note">Note</Label>
+                  <Input
+                    id="b2b-pay-note"
+                    value={paymentForm.note}
+                    onChange={(e) =>
+                      setPaymentForm((f) => ({ ...f, note: e.target.value }))
+                    }
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+              <DialogFooter className="gap-2 sm:gap-0">
+                <Button type="button" variant="outline" onClick={() => setPaymentOpen(false)}>
+                  Close
+                </Button>
+                <Button type="submit" disabled={paymentSaving}>
+                  {paymentSaving ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving…
+                    </>
+                  ) : (
+                    'Add payment'
+                  )}
+                </Button>
+              </DialogFooter>
+            </form>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={customOpen} onOpenChange={setCustomOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Custom range</DialogTitle>
+            <DialogDescription>Filter by invoice date (inclusive).</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="b2b-custom-start">From</Label>
+              <Input
+                id="b2b-custom-start"
+                type="date"
+                value={customDraft.start}
+                onChange={(e) => setCustomDraft((d) => ({ ...d, start: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="b2b-custom-end">To</Label>
+              <Input
+                id="b2b-custom-end"
+                type="date"
+                value={customDraft.end}
+                onChange={(e) => setCustomDraft((d) => ({ ...d, end: e.target.value }))}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCustomOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="button" onClick={saveCustom}>
+              Apply
             </Button>
           </DialogFooter>
         </DialogContent>
