@@ -22,7 +22,7 @@ const EMAIL_SECTION_RULES: Record<string, AppSection[]> = {
   'innocent@gelosglobal.com': ['retail'],
 
   // DTC-only users
-  'precious@gelosglobal.com': ['dtc'],
+  'sandra@gelosglobal.com': ['dtc'],
 
   // Master (admin) users — master implies full access (see below)
   'cassie@gelosglobal.com': ['master'],
