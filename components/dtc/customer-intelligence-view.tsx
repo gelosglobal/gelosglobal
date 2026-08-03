@@ -446,6 +446,7 @@ export function CustomerIntelligenceView({
     deliveryStatus: DELIVERY_STATUS_NONE,
     remarks: '',
     additionalRemarks: '',
+    discountGhs: '',
     items: [emptyDraftItem()],
   })
 
@@ -510,6 +511,15 @@ export function CustomerIntelligenceView({
       return sum + q * u
     }, 0)
 
+    const discountRaw =
+      newOrderForm.discountGhs.trim() === '' ? 0 : Number(newOrderForm.discountGhs)
+    if (!Number.isFinite(discountRaw) || discountRaw < 0) {
+      toast.error('Enter a valid discount amount')
+      return
+    }
+    const discountGhs = Math.max(0, Math.min(computedSubtotal, discountRaw))
+    const computedTotal = Math.max(0, computedSubtotal - discountGhs)
+
     const dateYmd = newOrderForm.date.trim()
     const orderedAt =
       dateYmd && /^\d{4}-\d{2}-\d{2}$/.test(dateYmd)
@@ -531,6 +541,7 @@ export function CustomerIntelligenceView({
           orderedAt,
           paymentMethod: mapCiPaymentLabelToDtcOrderPaymentMethod(newOrderForm.paymentMethod),
           items: itemsPayload,
+          ...(discountGhs > 0 ? { discountGhs } : {}),
           status: 'processing',
         }),
       })
@@ -548,11 +559,11 @@ export function CustomerIntelligenceView({
       if (ledgerId) {
         const amountToCollectGhs =
           newOrderForm.amountToCollectGhs.trim() === ''
-            ? computedSubtotal
+            ? computedTotal
             : Number(newOrderForm.amountToCollectGhs)
         const patchBody: Record<string, unknown> = {
           itemsOrdered: computedItemsOrdered || undefined,
-          amountToCollectGhs: Number.isFinite(amountToCollectGhs) ? amountToCollectGhs : computedSubtotal,
+          amountToCollectGhs: Number.isFinite(amountToCollectGhs) ? amountToCollectGhs : computedTotal,
           cashCollectedGhs:
             newOrderForm.cashCollectedGhs.trim() === '' ? 0 : Number(newOrderForm.cashCollectedGhs),
           momoCollectedGhs:
@@ -617,6 +628,7 @@ export function CustomerIntelligenceView({
         deliveryStatus: DELIVERY_STATUS_NONE,
         remarks: '',
         additionalRemarks: '',
+        discountGhs: '',
         items: [emptyDraftItem()],
       })
       await load()
@@ -1645,6 +1657,61 @@ export function CustomerIntelligenceView({
                             />
                           ))}
                         </div>
+                        {(() => {
+                          const subtotal = newOrderForm.items.reduce((sum, it) => {
+                            const q = Number.parseInt(it.qty, 10)
+                            const u = Number.parseFloat(it.unitPrice)
+                            if (!Number.isFinite(q) || q <= 0) return sum
+                            if (!Number.isFinite(u) || u < 0) return sum
+                            return sum + q * u
+                          }, 0)
+                          const discountRaw =
+                            newOrderForm.discountGhs.trim() === ''
+                              ? 0
+                              : Number(newOrderForm.discountGhs)
+                          const discount =
+                            Number.isFinite(discountRaw) && discountRaw > 0
+                              ? Math.max(0, Math.min(subtotal, discountRaw))
+                              : 0
+                          const total = Math.max(0, subtotal - discount)
+                          return (
+                            <div className="grid gap-3 rounded-lg border border-border/60 bg-muted/30 p-3 sm:grid-cols-2">
+                              <div className="space-y-2">
+                                <Label htmlFor="oe-add-discount">Discount (GHC)</Label>
+                                <Input
+                                  id="oe-add-discount"
+                                  type="number"
+                                  min={0}
+                                  step="0.01"
+                                  value={newOrderForm.discountGhs}
+                                  onChange={(e) =>
+                                    setNewOrderForm((f) => ({
+                                      ...f,
+                                      discountGhs: e.target.value,
+                                    }))
+                                  }
+                                  placeholder="0.00"
+                                />
+                              </div>
+                              <div className="flex flex-col justify-end gap-1 text-sm">
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="text-muted-foreground">Subtotal</span>
+                                  <span className="tabular-nums">{formatGhs(subtotal)}</span>
+                                </div>
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="text-muted-foreground">Discount</span>
+                                  <span className="tabular-nums text-rose-600 dark:text-rose-400">
+                                    {discount > 0 ? `−${formatGhs(discount)}` : formatGhs(0)}
+                                  </span>
+                                </div>
+                                <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-1 font-medium">
+                                  <span>Order total</span>
+                                  <span className="tabular-nums">{formatGhs(total)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })()}
                       </div>
                     </div>
                   </div>
