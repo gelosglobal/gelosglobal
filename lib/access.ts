@@ -19,10 +19,9 @@ const EMAIL_SECTION_RULES: Record<string, AppSection[]> = {
   // Retail-only users
   'baaba@gelosglobal.com': ['retail'],
   'desmond@gelosglobal.com': ['retail'],
-  'innocent@gelosglobal.com': ['retail'],
 
   // DTC-only users
-  'sandra@gelosglobal.com': ['dtc'],
+  'meg@gelosglobal.com': ['dtc'],
 
   // Master (admin) users — master implies full access (see below)
   'cassie@gelosglobal.com': ['master'],
