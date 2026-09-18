@@ -1,6 +1,6 @@
 import type { Db, WithoutId } from 'mongodb'
 import { ObjectId } from 'mongodb'
-import { startOfMonth, addMonths } from 'date-fns'
+import { addMonths, endOfDay, startOfDay, startOfMonth } from 'date-fns'
 
 export const SELL_IN_EXPENSES_COLLECTION = 'sell_in_expenses'
 
@@ -180,6 +180,21 @@ export async function listSellInExpensesForMonth(
   const { start, end } = monthKeyToRange(month)
   const rows = await col(db)
     .find({ occurredAt: { $gte: start, $lt: end } })
+    .sort({ occurredAt: -1, createdAt: -1 })
+    .limit(3000)
+    .toArray()
+  return rows.map((r) => r as SellInExpenseDoc)
+}
+
+/** Inclusive calendar-day range filter on `occurredAt`. */
+export async function listSellInExpensesForRange(
+  db: Db,
+  range: { start: Date; end: Date },
+): Promise<SellInExpenseDoc[]> {
+  const start = startOfDay(range.start)
+  const end = endOfDay(range.end)
+  const rows = await col(db)
+    .find({ occurredAt: { $gte: start, $lte: end } })
     .sort({ occurredAt: -1, createdAt: -1 })
     .limit(3000)
     .toArray()

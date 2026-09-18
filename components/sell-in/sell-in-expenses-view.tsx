@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { format, parse } from 'date-fns'
+import { format, parse, startOfMonth, endOfMonth } from 'date-fns'
 import type { LucideIcon } from 'lucide-react'
 import {
   CalendarDays,
@@ -145,6 +145,25 @@ function formatMonthLabel(month: string) {
   } catch {
     return month
   }
+}
+
+function formatRangeLabel(from: string, to: string) {
+  try {
+    const a = parse(from, 'yyyy-MM-dd', new Date())
+    const b = parse(to, 'yyyy-MM-dd', new Date())
+    if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return 'custom range'
+    if (from === to) return format(a, 'd MMM yyyy')
+    if (a.getFullYear() === b.getFullYear()) {
+      return `${format(a, 'd MMM')} – ${format(b, 'd MMM yyyy')}`
+    }
+    return `${format(a, 'd MMM yyyy')} – ${format(b, 'd MMM yyyy')}`
+  } catch {
+    return 'custom range'
+  }
+}
+
+function toDateInputValue(d: Date) {
+  return format(d, 'yyyy-MM-dd')
 }
 
 function emptyForm() {
@@ -463,6 +482,7 @@ function AccountSpendCard({
   spent,
   budget,
   entryCount,
+  periodLabel = 'this month',
   onOpen,
   swipeFriendly = false,
 }: {
@@ -470,6 +490,7 @@ function AccountSpendCard({
   spent: number
   budget: number
   entryCount: number
+  periodLabel?: string
   onOpen: () => void
   /** Prefer swipe over click when used inside a carousel */
   swipeFriendly?: boolean
@@ -526,7 +547,7 @@ function AccountSpendCard({
             {accountBadge(account.name, account.id)}
             <p className="mt-2 text-2xl font-bold tabular-nums">{formatGhs(spent)}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {entryCount} {entryCount === 1 ? 'entry' : 'entries'} this month
+              {entryCount} {entryCount === 1 ? 'entry' : 'entries'} · {periodLabel}
             </p>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-2">
@@ -558,7 +579,10 @@ function accountNameFor(
 }
 
 export function SellInExpensesView() {
+  const [dateMode, setDateMode] = useState<'month' | 'custom'>('month')
   const [month, setMonth] = useState(() => monthKeyForDate(new Date()))
+  const [rangeFrom, setRangeFrom] = useState(() => toDateInputValue(startOfMonth(new Date())))
+  const [rangeTo, setRangeTo] = useState(() => toDateInputValue(endOfMonth(new Date())))
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState<ExpenseRow[]>([])
   const [query, setQuery] = useState('')
@@ -592,19 +616,41 @@ export function SellInExpensesView() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch(`/api/sell-in/expenses?month=${encodeURIComponent(month)}`, {
+      let qs: URLSearchParams
+      if (dateMode === 'custom') {
+        const from = parse(rangeFrom, 'yyyy-MM-dd', new Date())
+        const to = parse(rangeTo, 'yyyy-MM-dd', new Date())
+        if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+          throw new Error('Invalid custom range')
+        }
+        if (from.getTime() > to.getTime()) {
+          throw new Error('Start must be before end')
+        }
+        qs = new URLSearchParams({
+          start: `${rangeFrom}T00:00:00.000`,
+          end: `${rangeTo}T23:59:59.999`,
+        })
+      } else {
+        qs = new URLSearchParams({ month })
+      }
+
+      const res = await fetch(`/api/sell-in/expenses?${qs.toString()}`, {
         credentials: 'include',
       })
       if (!res.ok) throw new Error('Failed to load')
       const data = (await res.json()) as { rows: ExpenseRow[] }
       setRows(Array.isArray(data.rows) ? data.rows : [])
-    } catch {
-      toast.error('Could not load expenses')
+    } catch (err) {
+      toast.error(
+        err instanceof Error && err.message === 'Start must be before end'
+          ? 'Start date must be before end date'
+          : 'Could not load expenses',
+      )
       setRows([])
     } finally {
       setLoading(false)
     }
-  }, [month])
+  }, [dateMode, month, rangeFrom, rangeTo])
 
   useEffect(() => {
     void load()
@@ -759,8 +805,30 @@ export function SellInExpensesView() {
   }, [detailRows])
 
   const monthLabel = formatMonthLabel(month)
+  const rangeLabel =
+    dateMode === 'custom' ? formatRangeLabel(rangeFrom, rangeTo) : monthLabel
   const totalBudget = accounts.reduce((sum, a) => sum + (budgets[a.id] ?? 0), 0)
   const totalSpentAll = rows.reduce((sum, r) => sum + (Number(r.amountGhs) || 0), 0)
+
+  function switchDateMode(mode: 'month' | 'custom') {
+    if (mode === dateMode) return
+    if (mode === 'custom') {
+      try {
+        const ref = parse(`${month}-01`, 'yyyy-MM-dd', new Date())
+        setRangeFrom(toDateInputValue(startOfMonth(ref)))
+        setRangeTo(toDateInputValue(endOfMonth(ref)))
+      } catch {
+        const now = new Date()
+        setRangeFrom(toDateInputValue(startOfMonth(now)))
+        setRangeTo(toDateInputValue(endOfMonth(now)))
+      }
+    } else {
+      // Keep budget month aligned with the custom range end when returning to month mode.
+      const end = parse(rangeTo, 'yyyy-MM-dd', new Date())
+      if (!Number.isNaN(end.getTime())) setMonth(monthKeyForDate(end))
+    }
+    setDateMode(mode)
+  }
 
   function openCreateForAccount(accountId: string) {
     setForm((f) => ({ ...f, accountId }))
@@ -964,18 +1032,50 @@ export function SellInExpensesView() {
         meta={
           <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
             <CalendarDays className="h-3.5 w-3.5" />
-            Viewing {monthLabel}
+            Viewing {rangeLabel}
           </p>
         }
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Input
-              type="month"
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              className="h-9 w-[10.5rem]"
-              aria-label="Expense month"
-            />
+            <Select
+              value={dateMode}
+              onValueChange={(v) => switchDateMode(v as 'month' | 'custom')}
+            >
+              <SelectTrigger className="h-9 w-[8.5rem]" aria-label="Date mode">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="month">By month</SelectItem>
+                <SelectItem value="custom">Custom date</SelectItem>
+              </SelectContent>
+            </Select>
+            {dateMode === 'month' ? (
+              <Input
+                type="month"
+                value={month}
+                onChange={(e) => setMonth(e.target.value)}
+                className="h-9 w-[10.5rem]"
+                aria-label="Expense month"
+              />
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  type="date"
+                  value={rangeFrom}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                  className="h-9 w-[9.75rem]"
+                  aria-label="From date"
+                />
+                <span className="text-xs text-muted-foreground">to</span>
+                <Input
+                  type="date"
+                  value={rangeTo}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                  className="h-9 w-[9.75rem]"
+                  aria-label="To date"
+                />
+              </div>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -1004,7 +1104,7 @@ export function SellInExpensesView() {
                   <DialogHeader>
                     <DialogTitle>Add expense</DialogTitle>
                     <DialogDescription>
-                      Log a sell-in related cost against an account for {monthLabel}.
+                      Log a sell-in related cost against an account.
                     </DialogDescription>
                   </DialogHeader>
                   <ExpenseFormFields
@@ -1044,13 +1144,13 @@ export function SellInExpensesView() {
             subtitle={
               filtersActive
                 ? `${totals.entries} matching ${totals.entries === 1 ? 'entry' : 'entries'}`
-                : `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} in ${monthLabel}`
+                : `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} in ${rangeLabel}`
             }
             icon={Wallet}
             iconWrapClass="bg-muted"
             iconClass="text-foreground"
             footer={
-              totalBudget > 0 && !filtersActive ? (
+              dateMode === 'month' && totalBudget > 0 && !filtersActive ? (
                 <>
                   <BudgetBar spent={totalSpentAll} budget={totalBudget} />
                   <p className="mt-1.5 text-xs text-muted-foreground">
@@ -1128,8 +1228,9 @@ export function SellInExpensesView() {
                       <AccountSpendCard
                         account={a}
                         spent={byAccount[a.id] ?? 0}
-                        budget={budgets[a.id] ?? 0}
+                        budget={dateMode === 'month' ? budgets[a.id] ?? 0 : 0}
                         entryCount={entryCount}
+                        periodLabel={rangeLabel}
                         swipeFriendly
                         onOpen={() => setDetailAccountId(a.id)}
                       />
@@ -1267,7 +1368,7 @@ export function SellInExpensesView() {
               <p className="text-xs text-muted-foreground">
                 {loading
                   ? 'Loading…'
-                  : `${filtered.length} of ${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} · ${monthLabel}`}
+                  : `${filtered.length} of ${rows.length} ${rows.length === 1 ? 'entry' : 'entries'} · ${rangeLabel}`}
               </p>
             </div>
             <Receipt className="hidden h-4 w-4 text-muted-foreground sm:block" aria-hidden />
@@ -1284,7 +1385,7 @@ export function SellInExpensesView() {
                 <EmptyMedia variant="icon">
                   <Receipt className="h-6 w-6" />
                 </EmptyMedia>
-                <EmptyTitle>No expenses for {monthLabel}</EmptyTitle>
+                <EmptyTitle>No expenses for {rangeLabel}</EmptyTitle>
                 <EmptyDescription>
                   {accounts.length === 0
                     ? 'Create an account first, then log shipping, customs, or logistics costs.'
@@ -1595,7 +1696,7 @@ export function SellInExpensesView() {
           <DialogHeader>
             <DialogTitle>All accounts</DialogTitle>
             <DialogDescription>
-              {accounts.length} accounts for {monthLabel}. Tap any card for details.
+              {accounts.length} accounts for {rangeLabel}. Tap any card for details.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 py-2 sm:grid-cols-2">
@@ -1606,8 +1707,9 @@ export function SellInExpensesView() {
                   key={a.id}
                   account={a}
                   spent={byAccount[a.id] ?? 0}
-                  budget={budgets[a.id] ?? 0}
+                  budget={dateMode === 'month' ? budgets[a.id] ?? 0 : 0}
                   entryCount={entryCount}
+                  periodLabel={rangeLabel}
                   onOpen={() => {
                     setAllAccountsOpen(false)
                     setDetailAccountId(a.id)
@@ -1667,7 +1769,7 @@ export function SellInExpensesView() {
                     </div>
                     <SheetTitle className="sr-only">{detailAccount.name}</SheetTitle>
                     <SheetDescription>
-                      Account details for {monthLabel}
+                      Account details for {rangeLabel}
                     </SheetDescription>
                   </SheetHeader>
 
@@ -1763,7 +1865,7 @@ export function SellInExpensesView() {
                       {detailRows.length === 0 ? (
                         <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center">
                           <p className="text-sm text-muted-foreground">
-                            No expenses on this account for {monthLabel}.
+                            No expenses on this account for {rangeLabel}.
                           </p>
                         </div>
                       ) : (

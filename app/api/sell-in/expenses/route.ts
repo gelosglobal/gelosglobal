@@ -3,6 +3,7 @@ import { getMongo } from '@/lib/mongodb'
 import {
   createSellInExpense,
   listSellInExpensesForMonth,
+  listSellInExpensesForRange,
   serializeSellInExpense,
 } from '@/lib/sell-in-expenses'
 import { listSellInExpenseAccounts } from '@/lib/sell-in-expense-accounts'
@@ -50,11 +51,28 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url)
   const monthRaw = searchParams.get('month')
-  const now = new Date()
-  const fallbackMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-  const month = monthRaw && /^\d{4}-\d{2}$/.test(monthRaw) ? monthRaw : fallbackMonth
+  const startRaw = searchParams.get('start')
+  const endRaw = searchParams.get('end')
+  const start = startRaw ? new Date(startRaw) : null
+  const end = endRaw ? new Date(endRaw) : null
+  const hasCustomRange =
+    start &&
+    end &&
+    !Number.isNaN(start.getTime()) &&
+    !Number.isNaN(end.getTime()) &&
+    start.getTime() <= end.getTime()
+
   const { db } = getMongo()
-  const rows = await listSellInExpensesForMonth(db, month)
+  const rows = hasCustomRange
+    ? await listSellInExpensesForRange(db, { start: start!, end: end! })
+    : await listSellInExpensesForMonth(
+        db,
+        (() => {
+          const now = new Date()
+          const fallbackMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+          return monthRaw && /^\d{4}-\d{2}$/.test(monthRaw) ? monthRaw : fallbackMonth
+        })(),
+      )
   return NextResponse.json({ rows: rows.map(serializeSellInExpense) })
 }
 
