@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { AlertCircle, ArrowRight, Loader2 } from 'lucide-react'
 import { signIn } from '@/lib/auth-client'
+import { safeMcpNext } from '@/lib/mcp/paths'
 import { authInputClassName, authLabelClassName } from '@/components/auth/auth-field-styles'
 import { AuthFormCard } from '@/components/auth/auth-form-card'
 import { AuthShell } from '@/components/auth/auth-shell'
@@ -34,7 +35,8 @@ export function SignInForm() {
         setError(result.error.message ?? 'Sign in failed')
         return
       }
-      router.push('/')
+      const next = safeMcpNext(new URLSearchParams(window.location.search).get('next'))
+      router.push(next ?? '/')
       router.refresh()
     } finally {
       setLoading(false)
