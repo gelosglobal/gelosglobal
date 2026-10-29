@@ -19,16 +19,41 @@ export function publicBaseFromRequest(request: Request): string {
   return url.origin
 }
 
-export function isBrowserSameOrigin(request: Request): boolean {
-  const origin = request.headers.get('origin')
-  if (!origin) return false
-  const allowed = new Set<string>([publicBaseFromRequest(request)])
-  try {
-    allowed.add(new URL(request.url).origin)
-  } catch {
-    /* request url is still checked via publicBaseFromRequest */
+function requestHosts(request: Request): Set<string> {
+  const hosts = new Set<string>()
+  const add = (raw: string | null | undefined) => {
+    if (!raw) return
+    for (const part of raw.split(',')) {
+      const host = part.trim().toLowerCase()
+      if (host) hosts.add(host)
+    }
   }
-  return allowed.has(origin)
+  add(request.headers.get('x-forwarded-host'))
+  add(request.headers.get('host'))
+  try {
+    hosts.add(new URL(request.url).host.toLowerCase())
+  } catch {
+    /* ignore a malformed request URL */
+  }
+  return hosts
+}
+
+/**
+ * Reject a consent POST that a different site submitted.
+ * ChatGPT's login window often omits Origin, or sends Origin: null. A missing
+ * Origin is allowed; the GELOS session cookie still has to be present.
+ */
+export function isCrossSiteAuthorizePost(request: Request): boolean {
+  const site = request.headers.get('sec-fetch-site')
+  if (site === 'cross-site') return true
+
+  const origin = request.headers.get('origin')
+  if (!origin || origin === 'null') return false
+  try {
+    return !requestHosts(request).has(new URL(origin).host.toLowerCase())
+  } catch {
+    return true
+  }
 }
 
 export function withCors(response: Response): Response {

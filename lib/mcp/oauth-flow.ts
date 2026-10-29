@@ -2,7 +2,7 @@ import { accessForUser, userFromRequestSession } from '@/lib/mcp/identity'
 import {
   MCP_SCOPE,
   htmlResponse,
-  isBrowserSameOrigin,
+  isCrossSiteAuthorizePost,
   oauthError,
   publicBaseFromRequest,
   resourceMatches,
@@ -138,7 +138,7 @@ export async function handleAuthorizeGet(request: Request): Promise<Response> {
 }
 
 export async function handleAuthorizePost(request: Request): Promise<Response> {
-  if (!isBrowserSameOrigin(request)) {
+  if (isCrossSiteAuthorizePost(request)) {
     return htmlResponse(oauthErrorPage('Confirm the connection from the GELOS page.'), 403)
   }
   const form = await request.formData()
