@@ -136,8 +136,6 @@ export async function handleAuthorizeGet(request: Request): Promise<Response> {
       fields: hiddenFields(input),
       formAction: `${base}/api/mcp/oauth/authorize`,
     }),
-    200,
-    base,
   )
 }
 

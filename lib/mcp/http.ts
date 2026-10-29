@@ -113,21 +113,15 @@ export function oauthError(status: number, error: string, description: string): 
   )
 }
 
-export function htmlResponse(html: string, status = 200, origin?: string): Response {
-  const formTargets = new Set<string>([
-    "'self'",
-    'https://staffs.gelosglobal.com',
-    'http://localhost:3000',
-    'http://127.0.0.1:3000',
-  ])
-  if (origin) formTargets.add(origin)
+export function htmlResponse(html: string, status = 200): Response {
   return new Response(html, {
     status,
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store',
-      // 'self' alone is blocked by Chrome when the authorize URL has a query string.
-      'Content-Security-Policy': `default-src 'none'; style-src 'unsafe-inline'; form-action ${[...formTargets].join(' ')}; base-uri 'none'; frame-ancestors 'none'`,
+      // Chrome blocks form-action host sources when the authorize URL has a query string.
+      'Content-Security-Policy':
+        "default-src 'none'; style-src 'unsafe-inline'; form-action *; base-uri 'none'; frame-ancestors 'none'",
       'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'no-referrer',
     },
