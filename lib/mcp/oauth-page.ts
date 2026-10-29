@@ -54,6 +54,7 @@ export function oauthConsentPage(input: {
   email: string
   sections: AppSection[]
   fields: Record<string, string>
+  formAction: string
 }): string {
   const hidden = Object.entries(input.fields)
     .map(
@@ -70,7 +71,7 @@ export function oauthConsentPage(input: {
     <p><strong>${escapeHtml(input.email)}</strong> is about to give ${escapeHtml(input.clientName)} read-only access to GELOS. Nothing can be created, edited, or deleted.</p>
     <ul>${sections}</ul>
     <p>After you allow it, you’ll return to ${escapeHtml(input.redirectHost)}.</p>
-    <form method="post" action="/api/mcp/oauth/authorize">
+    <form method="post" action="${escapeHtml(input.formAction)}">
       ${hidden}
       <div class="row">
         <button class="deny" type="submit" name="decision" value="deny">Cancel</button>

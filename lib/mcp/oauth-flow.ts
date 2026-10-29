@@ -126,6 +126,7 @@ export async function handleAuthorizeGet(request: Request): Promise<Response> {
 
   const access = accessForUser(user)
   const sections = SECTION_ORDER.filter((section) => access.sections.has(section))
+  const base = publicBaseFromRequest(request)
   return htmlResponse(
     oauthConsentPage({
       clientName: resolved.client.clientName || 'This app',
@@ -133,7 +134,10 @@ export async function handleAuthorizeGet(request: Request): Promise<Response> {
       email: user.email,
       sections,
       fields: hiddenFields(input),
+      formAction: `${base}/api/mcp/oauth/authorize`,
     }),
+    200,
+    base,
   )
 }
 
