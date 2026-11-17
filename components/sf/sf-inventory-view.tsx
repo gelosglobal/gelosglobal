@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import type { LucideIcon } from 'lucide-react'
 import {
   AlertTriangle,
+  Banknote,
   Download,
   Loader2,
   Package,
@@ -88,6 +89,19 @@ type StatsPayload = {
   critical: number
 }
 
+function lineSellingValue(row: InventoryRow): number | null {
+  if (typeof row.priceGhs !== 'number' || !Number.isFinite(row.priceGhs)) return null
+  return row.onHand * row.priceGhs
+}
+
+function formatInventoryGhs(amount: number): string {
+  const n = Number.isFinite(amount) ? amount : 0
+  return `GHS ${n.toLocaleString('en-GH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
 function healthBadge(h: StockHealth) {
   if (h === 'ok') {
     return <Badge className="bg-emerald-600 hover:bg-emerald-600">Healthy</Badge>
@@ -105,6 +119,7 @@ function SfInventoryKpiCard({
   icon: Icon,
   iconWrapClass,
   iconClass,
+  valueClassName,
 }: {
   label: string
   value: ReactNode
@@ -112,13 +127,14 @@ function SfInventoryKpiCard({
   icon: LucideIcon
   iconWrapClass: string
   iconClass: string
+  valueClassName?: string
 }) {
   return (
     <Card className="dashboard-card p-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
-          <p className="mt-2 text-2xl font-bold tabular-nums text-foreground">{value}</p>
+          <p className={cn('mt-2 text-2xl font-bold tabular-nums text-foreground', valueClassName)}>{value}</p>
           <p className="mt-1 text-xs text-muted-foreground">{subtitle}</p>
         </div>
         <div className={cn('shrink-0 rounded-2xl p-3', iconWrapClass)}>
@@ -271,6 +287,9 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
     let totalOnHand = 0
     let daysCoverSum = 0
     let daysCoverCount = 0
+    let sellingValueGhs = 0
+    let costValueGhs = 0
+    let costedSkus = 0
 
     for (const row of items) {
       if (row.health === 'ok') ok += 1
@@ -281,13 +300,30 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
         daysCoverSum += row.daysCover
         daysCoverCount += 1
       }
+      if (typeof row.priceGhs === 'number' && Number.isFinite(row.priceGhs)) {
+        sellingValueGhs += row.onHand * row.priceGhs
+      }
+      if (typeof row.costGhs === 'number' && Number.isFinite(row.costGhs)) {
+        costValueGhs += row.onHand * row.costGhs
+        costedSkus += 1
+      }
     }
 
     const tracked = items.length
     const healthyPct = tracked > 0 ? (ok / tracked) * 100 : null
     const avgDaysCover = daysCoverCount > 0 ? daysCoverSum / daysCoverCount : null
 
-    return { ok, low, critical, totalOnHand, healthyPct, avgDaysCover }
+    return {
+      ok,
+      low,
+      critical,
+      totalOnHand,
+      healthyPct,
+      avgDaysCover,
+      sellingValueGhs,
+      costValueGhs,
+      costedSkus,
+    }
   }, [items])
 
   const hasActiveFilters =
@@ -566,6 +602,7 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
       'name',
       'costGhs',
       'priceGhs',
+      'stockValueGhs',
       'onHand',
       'safetyStock',
       'dailyDemand',
@@ -583,6 +620,7 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
           `"${r.name.replace(/"/g, '""')}"`,
           r.costGhs ?? '',
           r.priceGhs ?? '',
+          lineSellingValue(r) ?? '',
           r.onHand,
           r.safetyStock,
           r.dailyDemand,
@@ -806,7 +844,12 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
           </Card>
         ) : null}
 
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div
+          className={cn(
+            'grid gap-4 sm:grid-cols-2',
+            headerKind === 'dtc' ? 'xl:grid-cols-4' : 'xl:grid-cols-5',
+          )}
+        >
           <SfInventoryKpiCard
             label="SKUs tracked"
             value={loading ? '—' : (stats?.skusTracked ?? 0).toLocaleString()}
@@ -819,6 +862,25 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
             iconWrapClass="bg-primary/10"
             iconClass="text-primary"
           />
+          {headerKind === 'sf' ? (
+            <SfInventoryKpiCard
+              label="Stock value"
+              valueClassName="text-xl leading-tight"
+              value={loading ? '—' : formatInventoryGhs(inventoryInsights.sellingValueGhs)}
+              subtitle={
+                loading
+                  ? 'On hand × selling price'
+                  : inventoryInsights.costedSkus === 0
+                    ? `${inventoryInsights.totalOnHand.toLocaleString()} units · no cost set`
+                    : inventoryInsights.costedSkus < items.length
+                      ? `${inventoryInsights.totalOnHand.toLocaleString()} units · cost ${formatInventoryGhs(inventoryInsights.costValueGhs)} on ${inventoryInsights.costedSkus} SKUs`
+                      : `${inventoryInsights.totalOnHand.toLocaleString()} units · cost ${formatInventoryGhs(inventoryInsights.costValueGhs)}`
+              }
+              icon={Banknote}
+              iconWrapClass="bg-emerald-500/10"
+              iconClass="text-emerald-600 dark:text-emerald-400"
+            />
+          ) : null}
           <SfInventoryKpiCard
             label="Below safety"
             value={loading ? '—' : (stats?.belowSafety ?? 0).toLocaleString()}
@@ -1049,6 +1111,9 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
                   <TableHead>Product</TableHead>
                   <TableHead className="hidden md:table-cell text-right">Cost</TableHead>
                   <TableHead className="hidden md:table-cell text-right">Price</TableHead>
+                  {headerKind === 'sf' ? (
+                    <TableHead className="hidden md:table-cell text-right">Value</TableHead>
+                  ) : null}
                   <TableHead>Stock</TableHead>
                   <TableHead className="text-right">Reorder</TableHead>
                   <TableHead className="hidden text-right sm:table-cell">Days cover</TableHead>
@@ -1070,6 +1135,11 @@ export function SfInventoryView(props: SfInventoryViewProps = {}) {
                     <TableCell className="hidden md:table-cell text-right tabular-nums text-muted-foreground">
                       {row.priceGhs == null ? '—' : formatGhs(row.priceGhs)}
                     </TableCell>
+                    {headerKind === 'sf' ? (
+                      <TableCell className="hidden md:table-cell text-right tabular-nums font-medium">
+                        {lineSellingValue(row) == null ? '—' : formatGhs(lineSellingValue(row))}
+                      </TableCell>
+                    ) : null}
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <div className="min-w-0 flex-1">
